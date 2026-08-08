@@ -15,6 +15,14 @@ on:
 # build gets to them in a fraction of the time. The release profile is still
 # exercised end to end by release.yml before anything is published.
 #
+# Two tiers, on purpose. `test` and `format` are required to merge; `lint` is
+# not. The toolchain here floats to whatever Rust is newest, so every six weeks
+# clippy can gain a lint that fails on code nobody touched — and a required
+# clippy would mean an unrelated bug fix cannot ship until an unrelated warning
+# is cleared. A failing lint still shows up red on the pull request, which is
+# the part that matters; it just does not hold the door shut. A failing test
+# does, because that means the app is broken.
+#
 # Action majors follow release.yml, and for the same reason: they are the ones
 # whose `runs.using` is actually Node 24, which is not always the version whose
 # release notes first mention it. dtolnay/rust-toolchain is a composite action
@@ -49,7 +57,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-          components: clippy
 
       # Not only unit tests: on both platforms the suite renders a real sentence
       # through the system voice and checks the audio is not silent, which is
@@ -60,12 +67,33 @@ jobs:
       - name: Test
         run: cargo test --target ${{ matrix.target }}
 
-      # Clippy runs on both platforms rather than one, because the parts most
-      # likely to rot are exactly the ones a single platform cannot see:
-      # `src/tts/system.rs`, `src/keychain.rs` and `src/ollama.rs` each have a
-      # module per platform behind `cfg`, and whichever one is not being built
-      # is not being linted either. Warnings are errors so they cannot pile up;
-      # the tree is clean on both as of this workflow being added.
+  # Advisory: red on the pull request, but not required to merge. See the note
+  # at the top of this file for why.
+  lint:
+    name: Lint (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      # Both platforms rather than one, because the parts most likely to rot are
+      # exactly the ones a single platform cannot see: `src/tts/system.rs`,
+      # `src/keychain.rs` and `src/ollama.rs` each have a module per platform
+      # behind `cfg`, and whichever one is not being built is not being linted
+      # either. Both of the Windows-only mistakes this workflow has caught so
+      # far were invisible to a macOS lint.
       - name: Clippy
         run: cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
 
