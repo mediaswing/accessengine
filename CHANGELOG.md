@@ -3,6 +3,30 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.2.2] - 2026-08-08
+
+### Fixed
+
+- **Photos were read out as a single syllable.** Any image much larger than
+  about 1500 pixels — which is every photo a phone takes — came back described
+  as one letter, followed by wherever it was taken. The image filled the vision
+  model's entire context window, leaving it room for exactly one word of answer,
+  and that word was what got spoken. The model is now given enough room to
+  answer in, and a photo that still runs out of room says so plainly instead of
+  reading out a fragment. Nothing needs reinstalling or re-downloading; the same
+  photo now reads properly.
+
+### Added
+
+- **Spreadsheets are read as tables.** Open a `.csv` or `.tsv` and it is read
+  the way a table has to be heard to make sense: how big it is — "table with 12
+  rows and 4 columns" — and then every value under the heading it sits below,
+  "date of birth: 10 December 1815", rather than a bare list of values nobody
+  can keep count of. Underscores in headings become spaces, so a column called
+  `date_of_birth` is spoken as words. Values containing commas, quotes or line
+  breaks are read as the single values they are, and files separated by
+  semicolons or tabs are recognised as well as commas.
+
 ## [1.2.0] - 2026-08-08
 
 ### Added
