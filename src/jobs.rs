@@ -38,8 +38,8 @@ pub enum Job {
     ReadDocument(PathBuf),
     /// Read an image, arranging Ollama first if it needs arranging.
     ReadImage { path: PathBuf, config: Box<Config> },
-    /// Claims Homebrew's install prefix, prompting for a password only if
-    /// that needs elevating, then runs Homebrew's own installer.
+    /// Runs Homebrew's own installer, answering the password it asks for with
+    /// a macOS dialog.
     InstallHomebrew,
     /// `brew install ollama`.
     InstallOllama,

@@ -2152,7 +2152,7 @@ impl SpeechApp {
                             ui.add_space(8.0);
                             ui.label(
                                 RichText::new(format!(
-                                    "This may ask for your Mac's password, then runs: {}",
+                                    "This asks for your Mac's password, then runs: {}",
                                     crate::homebrew::INSTALL_COMMAND
                                 ))
                                 .monospace(),
