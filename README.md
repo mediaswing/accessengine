@@ -184,6 +184,38 @@ happens the app retries once with a plain question rather than reporting
 failure, and says so in the log — which is what makes a 1.7B model like
 `moondream` usable here as well as the larger ones.
 
+## Security
+
+The app runs other programs and opens files it did not write, so both are
+treated as untrusted.
+
+- **No shell, ever.** Nothing is passed through `sh` or `cmd`, so there is no
+  layer that could reinterpret a character in a filename or a document. Every
+  program is launched with its arguments as a list.
+- **Programs are named by absolute path** — `/usr/bin/say`, `/usr/bin/security`,
+  `System32\WindowsPowerShell\v1.0\powershell.exe`. A bare name would let
+  `PATH`, or the directory the app was unzipped into, decide which binary runs;
+  one of those binaries is handed the API key.
+- **Documents never go on a command line.** macOS pipes the text to `say` over
+  stdin; Windows stages it in a file the PowerShell script deletes as soon as it
+  has read it. Anything that *is* interpolated into a generated script — paths,
+  voice names — is escaped for a PowerShell single-quoted string, and that
+  escaping is unit-tested on every platform.
+- **The API key goes over stdin in both directions**, so it never appears in the
+  process list, and never in the config file. macOS keeps it in the login
+  keychain; Windows encrypts it with DPAPI, readable only by the same account on
+  the same machine.
+- **Input is bounded.** Images are capped at 64 MB, plain text at 64 MB, and a
+  `.docx` body at 128 MB *after decompression* — a zip bomb is a few hundred
+  kilobytes on disk, and an app that dies on one is an app that fails the person
+  relying on it to read their post.
+- **Scratch files are created exclusively** and, on macOS, readable only by their
+  owner, so a name guessed in advance is an error rather than a write through
+  someone else's symlink.
+- **Nothing is uploaded except to ElevenLabs**, and only when you have chosen it.
+  Images are read by a model on your own machine. TLS certificate verification is
+  never disabled.
+
 ## How it is put together
 
 The binary is called `accessengine`; the app the user sees is called Speech
@@ -200,6 +232,7 @@ Output Engine.
 | `src/audio.rs` | PCM, WAV/MP3 encoding, playback and the transport |
 | `src/ollama.rs` | Detecting, installing and calling Ollama |
 | `src/keychain.rs` | API key storage |
+| `src/sysexec.rs` | Locating system programs, and staging files for them |
 | `src/config.rs` | Everything else, as JSON |
 
 The UI thread never blocks. Anything slow — a network call, a model download, an

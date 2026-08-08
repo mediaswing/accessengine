@@ -19,6 +19,7 @@ mod extract;
 mod jobs;
 mod keychain;
 mod ollama;
+mod sysexec;
 mod theme;
 mod tts;
 

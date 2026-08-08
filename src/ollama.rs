@@ -32,7 +32,7 @@ pub enum Status {
 pub fn binary_path() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     let (locator, fallbacks) = (
-        "where",
+        crate::sysexec::system32("where.exe"),
         vec![
             std::env::var("LOCALAPPDATA")
                 .map(|dir| format!("{dir}\\Programs\\Ollama\\ollama.exe"))
@@ -44,7 +44,7 @@ pub fn binary_path() -> Option<std::path::PathBuf> {
     );
     #[cfg(not(target_os = "windows"))]
     let (locator, fallbacks) = (
-        "/usr/bin/which",
+        std::path::PathBuf::from("/usr/bin/which"),
         vec![
             "/opt/homebrew/bin/ollama".to_string(),
             "/usr/local/bin/ollama".to_string(),
@@ -52,7 +52,7 @@ pub fn binary_path() -> Option<std::path::PathBuf> {
         ],
     );
 
-    if let Ok(out) = Command::new(locator).arg("ollama").output()
+    if let Ok(out) = Command::new(&locator).arg("ollama").output()
         && out.status.success()
     {
         // `where` can report several matches, one per line; take the first.
@@ -325,7 +325,7 @@ fn package_manager() -> Option<Installer> {
         // winget ships with Windows 11 and recent Windows 10, but not with
         // every install, so its presence is checked rather than assumed. The
         // agreement flags are what stop it stopping for a prompt nobody can see.
-        let found = Command::new("where")
+        let found = Command::new(crate::sysexec::system32("where.exe"))
             .arg("winget")
             .output()
             .ok()

@@ -1,9 +1,27 @@
 //! Plain-text reading, tolerant of the encodings text files turn up in.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 
+/// The most text the app will take in one file. A file is read whole into
+/// memory — decoding UTF-16 and normalising blank runs both need it — so
+/// without a ceiling a mistyped path to a disk image is an allocation failure
+/// rather than a message. Far past any document a person would sit and listen
+/// to: this is roughly two hundred novels.
+const MAX_TEXT_BYTES: u64 = 64 * 1024 * 1024;
+
 pub fn extract(path: &Path) -> Result<String> {
+    let size = std::fs::metadata(path)
+        .with_context(|| format!("could not read {}", path.display()))?
+        .len();
+    if size > MAX_TEXT_BYTES {
+        bail!(
+            "{} is {:.0} MB, which is more text than this app will read at once",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            size as f64 / (1024.0 * 1024.0)
+        );
+    }
+
     let bytes =
         std::fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
     Ok(super::tidy(&decode(&bytes)))

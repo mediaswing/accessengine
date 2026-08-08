@@ -6,11 +6,16 @@
 //! actually hear: the contents of `<w:t>` runs, with paragraph and line breaks
 //! turned into newlines and `<w:tab/>` into a tab.
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use std::io::{BufReader, Read};
 use std::path::Path;
+
+/// The most decompressed XML the body is allowed to be. Comfortably past any
+/// real document — a 500-page book is a few megabytes of `word/document.xml` —
+/// and far short of what a zip bomb wants to hand over.
+const MAX_BODY_BYTES: u64 = 128 * 1024 * 1024;
 
 pub fn extract(path: &Path) -> Result<String> {
     let file =
@@ -27,8 +32,23 @@ pub fn extract(path: &Path) -> Result<String> {
     archive
         .by_name(&part)
         .with_context(|| format!("could not read {part} from the document"))?
+        // Bounded by what comes *out* of the decompressor, not by the size of
+        // the file on disk. A .docx is a zip, and a few hundred kilobytes of it
+        // can expand to gigabytes of XML — enough to take the app down with an
+        // allocation failure, which for someone who depends on this to read
+        // their post is a worse outcome than a refusal.
+        .take(MAX_BODY_BYTES + 1)
         .read_to_string(&mut xml)
         .context("the document body was not valid UTF-8")?;
+
+    if xml.len() as u64 > MAX_BODY_BYTES {
+        bail!(
+            "the text inside {} expands to more than {} MB, which is more than this app will \
+             read — it may be a damaged or deliberately malformed file",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            MAX_BODY_BYTES / (1024 * 1024)
+        );
+    }
 
     Ok(super::tidy(&parse_body(&xml)?))
 }
@@ -160,6 +180,37 @@ mod tests {
             text,
             "Quarterly Report\nRevenue rose 12% year over year & margins held."
         );
+    }
+
+    /// A .docx is a zip, so the body can be enormously larger than the file.
+    /// This builds a real one — a few hundred kilobytes on disk that inflates
+    /// past the cap — and checks it is refused rather than allocated.
+    #[test]
+    fn refuses_a_body_that_expands_far_beyond_its_file_size() {
+        use std::io::Write as _;
+
+        let path = std::env::temp_dir().join("soe-docx-bomb.docx");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options: zip::write::FileOptions<()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("word/document.xml", options).unwrap();
+        // Highly compressible: a run of one byte deflates to almost nothing.
+        let block = vec![b' '; 1024 * 1024];
+        for _ in 0..(super::MAX_BODY_BYTES / block.len() as u64 + 2) {
+            zip.write_all(&block).unwrap();
+        }
+        zip.finish().unwrap();
+
+        let on_disk = std::fs::metadata(&path).unwrap().len();
+        let error = extract(&path).unwrap_err().to_string();
+        std::fs::remove_file(&path).ok();
+
+        assert!(
+            on_disk < super::MAX_BODY_BYTES / 10,
+            "the fixture should be far smaller than what it expands to"
+        );
+        assert!(error.contains("expands to more than"), "got: {error}");
     }
 
     #[test]
