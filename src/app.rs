@@ -19,6 +19,7 @@ use crate::jobs::{self, Cancel, Job, Update};
 use crate::keychain::{self, KeySource};
 use crate::theme::{CONTROL_HEIGHT, FORM_WIDTH};
 use crate::tts::{self, Voice};
+use crate::update;
 use egui::{Key, Modifiers, RichText};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -251,6 +252,13 @@ pub struct SpeechApp {
 
     tx: Sender<Update>,
     rx: Receiver<Update>,
+
+    /// A release newer than this one, once the background check at startup
+    /// finds one. Outside the `Job`/`busy` system entirely: it is a quiet,
+    /// one-shot look on launch, not something that should occupy the busy
+    /// slot and block the Apply button while it runs.
+    update_available: Option<update::Available>,
+    update_rx: Receiver<Option<update::Available>>,
 }
 
 impl SpeechApp {
@@ -258,6 +266,7 @@ impl SpeechApp {
         crate::theme::apply(&cc.egui_ctx);
 
         let (tx, rx) = channel();
+        let (update_tx, update_rx) = channel();
         let (api_key, key_source) = keychain::load();
         let config = Config::load();
 
@@ -292,6 +301,8 @@ impl SpeechApp {
             config_dirty: false,
             tx,
             rx,
+            update_available: None,
+            update_rx,
         };
         app.load_system_voices();
 
@@ -300,6 +311,19 @@ impl SpeechApp {
         if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
             let ctx = cc.egui_ctx.clone();
             app.open_file(&ctx, path);
+        }
+
+        // A quiet, one-time look at startup — not on a timer, and not
+        // re-checked for the rest of the session. Errors (offline, GitHub
+        // unreachable) are dropped rather than shown: this is a nicety, not
+        // something worth interrupting anyone over.
+        {
+            let ctx = cc.egui_ctx.clone();
+            std::thread::spawn(move || {
+                let available = update::check().ok().flatten();
+                let _ = update_tx.send(available);
+                ctx.request_repaint();
+            });
         }
         app
     }
@@ -799,6 +823,10 @@ impl SpeechApp {
     // -------------------------------------------------------------- updates
 
     fn drain_updates(&mut self, ctx: &egui::Context) {
+        if let Ok(available) = self.update_rx.try_recv() {
+            self.update_available = available;
+        }
+
         while let Ok(update) = self.rx.try_recv() {
             match update {
                 Update::Status(message) => {
@@ -2254,6 +2282,13 @@ impl eframe::App for SpeechApp {
         egui::Panel::top(egui::Id::new("header")).show(ui, |ui| {
             ui.add_space(8.0);
             ui.heading("Speech Output Engine");
+            if let Some(available) = &self.update_available {
+                ui.add_space(2.0);
+                ui.hyperlink_to(
+                    format!("Version {} is available", available.version),
+                    &available.url,
+                );
+            }
             ui.add_space(8.0);
         });
 

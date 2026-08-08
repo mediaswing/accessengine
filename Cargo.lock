@@ -35,6 +35,7 @@ dependencies = [
  "rfd",
  "rodio",
  "rustls",
+ "semver",
  "serde",
  "serde_json",
  "zip",

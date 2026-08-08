@@ -24,6 +24,7 @@ mod ollama;
 mod sysexec;
 mod theme;
 mod tts;
+mod update;
 
 /// The name shown to the user, which is not the name of the binary.
 const APP_TITLE: &str = "Speech Output Engine";
