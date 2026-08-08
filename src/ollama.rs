@@ -252,7 +252,7 @@ pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<S
         .json()
         .context("the Ollama server returned an unexpected response")?;
     if let Some(error) = body.error {
-        bail!("Ollama could not read the image: {error}");
+        bail!("{}", explain_failure(model, &error));
     }
     if !status.is_success() {
         bail!("Ollama returned HTTP {status} while reading the image");
@@ -262,6 +262,32 @@ pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<S
     // sometimes go quiet on an elaborate prompt, and the caller retries with a
     // simpler one before giving up.
     Ok(body.response.trim().to_string())
+}
+
+/// Turns an Ollama error into something a user can act on.
+///
+/// The one worth catching is a model that downloaded perfectly and then cannot
+/// be loaded, because Ollama dropped the runner it was built for. Reported raw
+/// it reads as a crash — `llama-server process has terminated: exit status 1` —
+/// when in fact the fix is one dropdown away, so it is spelled out instead.
+fn explain_failure(model: &str, error: &str) -> String {
+    if error.contains("unknown model architecture") {
+        return format!(
+            "“{model}” cannot be run by the version of Ollama on this computer. It was \
+             built for a model runner that Ollama has since removed, so no amount of \
+             re-downloading will help. Choose a different vision model in Settings — the \
+             suggested ones all work with current Ollama. To reclaim the disk space it \
+             is using, run: ollama rm {model}"
+        );
+    }
+    if error.contains("requires more system memory") || error.contains("available memory") {
+        return format!(
+            "“{model}” needs more memory than this computer has free. Choose a smaller \
+             vision model in Settings, or close some other applications and try again. \
+             Ollama said: {error}"
+        );
+    }
+    format!("Ollama could not read the image: {error}")
 }
 
 /// What the app would run to install Ollama, or `None` if this machine has no
@@ -388,7 +414,27 @@ pub fn install(mut on_line: impl FnMut(String)) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::has_model;
+    use super::{explain_failure, has_model};
+
+    #[test]
+    fn a_dropped_architecture_is_explained_rather_than_repeated() {
+        // Verbatim from Ollama 0.32 asked to load llama3.2-vision.
+        let raw = "llama-server process has terminated: exit status 1: error loading model: \
+                   unknown model architecture: 'mllama'";
+        let message = explain_failure("llama3.2-vision", raw);
+
+        assert!(message.contains("llama3.2-vision"));
+        assert!(message.contains("Settings"), "no way out is offered");
+        assert!(message.contains("ollama rm llama3.2-vision"));
+        // The raw text is a dead end for a user, so it should not be the message.
+        assert!(!message.contains("exit status 1"));
+    }
+
+    #[test]
+    fn an_unrecognised_error_is_passed_through_intact() {
+        let message = explain_failure("qwen2.5vl:3b", "the image could not be decoded");
+        assert!(message.contains("the image could not be decoded"));
+    }
 
     #[test]
     fn bare_names_match_the_latest_tag() {

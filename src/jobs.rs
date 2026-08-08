@@ -283,6 +283,30 @@ fn pull_model(model: String, tx: &Sender<Update>, cancel: &Cancel) -> Result<()>
     Ok(())
 }
 
+/// Turns ElevenLabs' per-part progress into a bar and a status line.
+///
+/// A document over the API's per-request limit is sent as several requests and
+/// the audio joined back together. That is invisible in the finished file, but
+/// it is very visible in how long the job takes, so the status says which part
+/// it is waiting on rather than sitting on "Synthesising speech…" for minutes.
+/// `scale` is how much of the bar the synthesis owns, leaving the rest for
+/// whatever the caller does afterwards.
+fn report_parts(tx: &Sender<Update>, done: usize, total: usize, scale: f32) {
+    if total > 1 {
+        // `done` counts finished parts, so the one being waited on is the next.
+        let current = (done + 1).min(total);
+        let _ = tx.send(Update::Status(format!(
+            "Synthesising speech — part {current} of {total}…"
+        )));
+    }
+    let fraction = if total == 0 {
+        0.0
+    } else {
+        done as f32 / total as f32
+    };
+    let _ = tx.send(Update::Progress(fraction * scale));
+}
+
 fn synthesize(engine: Engine, text: String, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
     match engine {
         Engine::ElevenLabs {
@@ -297,9 +321,7 @@ fn synthesize(engine: Engine, text: String, tx: &Sender<Update>, cancel: &Cancel
                 &model_id,
                 &text,
                 cancel,
-                move |fraction| {
-                    let _ = progress.send(Update::Progress(fraction));
-                },
+                move |done, total| report_parts(&progress, done, total, 1.0),
             )?;
             let _ = tx.send(Update::Mp3Ready(Arc::new(mp3)));
             Ok(())
@@ -337,10 +359,8 @@ fn save(
                         &model_id,
                         &text,
                         cancel,
-                        move |fraction| {
-                            // Leave the last slice of the bar for the file write.
-                            let _ = progress.send(Update::Progress(fraction * 0.9));
-                        },
+                        // Leave the last slice of the bar for the file write.
+                        move |done, total| report_parts(&progress, done, total, 0.9),
                     )?)
                 }
             };
