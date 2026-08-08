@@ -10,8 +10,9 @@ Windows, so it works with no account and no setup; add an ElevenLabs API key and
 you get their voices instead. Images work too: hand it a photo or a screenshot
 and a vision model running on your own machine reads the text out of it.
 
-The window is two panes. The list on the left — **Read a File**, **Dictionary**,
-**Settings**, **Shortcuts** — chooses what the right-hand pane shows.
+The window is two panes. The list on the left — **Read a File**, **Audio
+Player**, **Dictionary**, **Settings**, **Shortcuts** — chooses what the
+right-hand pane shows.
 
 ## Accessibility
 
@@ -44,6 +45,10 @@ This is the point of the app rather than a feature of it.
 - **Two speech engines.** The voices built into your operating system, or
   ElevenLabs. Choosing ElevenLabs asks for an API key there and then.
 - **Reads aloud, or saves to WAV or MP3.** One dropdown, not two buttons.
+- **Plays audio files back.** The **Audio Player** pane takes any WAV or MP3 —
+  one this app saved, or an audiobook chapter from anywhere else — with play,
+  pause, stop and a ten-second rewind for the sentence you missed. Drop a file
+  anywhere on the window and it lands there.
 - **A dictionary of word replacements** — see below.
 - **Reads images** (`.jpg`, `.png`, and `.heic`/`.heif` on macOS) through a
   local [Ollama](https://ollama.com) vision model. Nothing is uploaded anywhere.
@@ -73,10 +78,12 @@ the voice.
 
 | Keys | What it does |
 | --- | --- |
-| <kbd>⌘O</kbd> | Choose a file |
+| <kbd>⌘O</kbd> | Choose a file — a document, or an audio file in the player |
 | <kbd>⌘Return</kbd> | Apply — run the chosen action |
-| <kbd>⌘.</kbd> or <kbd>Esc</kbd> | Stop reading, or cancel what is running |
-| <kbd>⌘1</kbd> … <kbd>⌘4</kbd> | Go to Read, Dictionary, Settings or Shortcuts |
+| <kbd>⌘.</kbd> or <kbd>Esc</kbd> | Stop reading or playing, or cancel what is running |
+| <kbd>⌘1</kbd> … <kbd>⌘5</kbd> | Go to Read, Audio Player, Dictionary, Settings or Shortcuts |
+| <kbd>⌘P</kbd> | Audio Player: play, or pause if already playing |
+| <kbd>⌘R</kbd> | Audio Player: skip back ten seconds |
 | <kbd>↑</kbd> <kbd>↓</kbd> | Move along the list of panes, once it has focus |
 | <kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> | Move between controls |
 | <kbd>Space</kbd> or <kbd>Return</kbd> | Operate the focused control |
@@ -136,10 +143,15 @@ takes priority over the stored key and nothing is written to disk:
 export ELEVENLABS_API_KEY=sk_…
 ```
 
-Long documents are split into several requests at sentence boundaries, and each
-request carries the neighbouring text as context so the voice doesn't reset its
-intonation at the seams. Audio is cached per (text, voice, model), so listening
-to something and then saving it doesn't pay for the same synthesis twice.
+There is no length limit. ElevenLabs caps a single request at 10,000 characters,
+so anything longer is split into requests of at most 4,500 — at sentence
+boundaries, never mid-word — and the returned audio is joined back into one
+continuous recording. This applies equally to reading aloud and to saving, so a
+book-length document plays and saves as one file; while it runs, the status line
+says which part it is on. Each request carries the neighbouring text as context
+so the voice doesn't reset its intonation at the seams. Audio is cached per
+(text, voice, model), so listening to something and then saving it doesn't pay
+for the same synthesis twice.
 
 ## Reading images
 
@@ -154,9 +166,18 @@ whatever is missing:
    progress.
 3. Then it starts the server if needed and reads the image.
 
-The default model is `llama3.2-vision`; you can change it, and the prompt it
-uses, under **Settings**. The default prompt asks for a verbatim transcription
-of any text in the image, falling back to a short description if there isn't any.
+The default model is `qwen2.5vl:3b` — about 3 GB, and good at reading text.
+**Settings** offers a handful of alternatives with their download sizes, and
+will take the name of any other Ollama vision model you type in. The prompt is
+editable there too; the default asks for a verbatim transcription of any text in
+the image, falling back to a short description if there isn't any.
+
+Ollama occasionally retires the runner an older model was built for, at which
+point that model stops loading no matter how many times it is downloaded —
+`llama3.2-vision`, which earlier versions of this app defaulted to, went that
+way. Settings will not let you keep a model in that state: the saved name is
+swapped for a working one on upgrade, and the error you get names the model and
+points at the dropdown rather than repeating Ollama's own wording.
 
 Small models sometimes answer an elaborate prompt with nothing at all. If that
 happens the app retries once with a plain question rather than reporting
@@ -170,13 +191,13 @@ Output Engine.
 
 | File | What lives there |
 | --- | --- |
-| `src/app.rs` | The two panes, all UI state, and the keyboard |
+| `src/app.rs` | Every pane, all UI state, and the keyboard |
 | `src/theme.rs` | Fonts, the contrast-checked palette, and the form metrics |
 | `src/dictionary.rs` | Word replacement |
 | `src/jobs.rs` | Background work and the messages it sends back |
 | `src/extract/` | `.txt`, `.docx` and image → text |
 | `src/tts/` | The ElevenLabs and system-voice engines, and text chunking |
-| `src/audio.rs` | PCM, WAV/MP3 encoding, playback |
+| `src/audio.rs` | PCM, WAV/MP3 encoding, playback and the transport |
 | `src/ollama.rs` | Detecting, installing and calling Ollama |
 | `src/keychain.rs` | API key storage |
 | `src/config.rs` | Everything else, as JSON |

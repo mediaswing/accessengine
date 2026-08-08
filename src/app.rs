@@ -12,7 +12,7 @@
 //! The UI thread never blocks. Anything slow becomes a [`Job`]; results arrive
 //! as [`Update`]s that [`SpeechApp::drain_updates`] applies once per frame.
 
-use crate::audio::{AudioFormat, Playback};
+use crate::audio::{self, AudioFormat, Playback};
 use crate::config::{Action, Config, DEFAULT_VISION_PROMPT, EnginePreference};
 use crate::extract::{DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, TEXT_EXTENSIONS};
 use crate::jobs::{self, Cancel, Job, Update};
@@ -86,14 +86,16 @@ enum Prompt {
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum Pane {
     Read,
+    Player,
     Dictionary,
     Settings,
     Shortcuts,
 }
 
 impl Pane {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Read,
+        Self::Player,
         Self::Dictionary,
         Self::Settings,
         Self::Shortcuts,
@@ -102,6 +104,7 @@ impl Pane {
     fn label(self) -> &'static str {
         match self {
             Self::Read => "📄  Read a File",
+            Self::Player => "🔊  Audio Player",
             Self::Dictionary => "📖  Dictionary",
             Self::Settings => "⚙  Settings",
             Self::Shortcuts => "？  Shortcuts",
@@ -111,6 +114,7 @@ impl Pane {
     fn hint(self) -> &'static str {
         match self {
             Self::Read => "Choose a file, a voice, and what to do with it",
+            Self::Player => "Play back a spoken-word audio file",
             Self::Dictionary => "Words to swap before the document is spoken",
             Self::Settings => "The ElevenLabs model, and how images are read",
             Self::Shortcuts => "Every keyboard shortcut in the app",
@@ -121,9 +125,10 @@ impl Pane {
     fn shortcut(self) -> &'static str {
         match self {
             Self::Read => "{C}1",
-            Self::Dictionary => "{C}2",
-            Self::Settings => "{C}3",
-            Self::Shortcuts => "{C}4",
+            Self::Player => "{C}2",
+            Self::Dictionary => "{C}3",
+            Self::Settings => "{C}4",
+            Self::Shortcuts => "{C}5",
         }
     }
 }
@@ -136,6 +141,8 @@ enum Field {
     Voice,
     Action,
     Apply,
+    AudioFile,
+    Play,
 }
 
 /// Voice list loading state, kept per engine.
@@ -149,13 +156,18 @@ struct VoiceList {
 /// Every keyboard shortcut, in the order the help dialog lists them. Defined
 /// once so the dialog, the tooltips and the README cannot drift apart.
 pub const SHORTCUTS: &[(&str, &str)] = &[
-    ("{C}O", "Choose a file"),
+    ("{C}O", "Choose a file — a document, or an audio file in the player"),
     ("{C}Return", "Apply — run the chosen action"),
-    ("{C}. or Esc", "Stop reading, or cancel what is running"),
     (
-        "{C}1 … {C}4",
-        "Go to Read, Dictionary, Settings or Shortcuts",
+        "{C}. or Esc",
+        "Stop reading or playing, or cancel what is running",
     ),
+    (
+        "{C}1 … {C}5",
+        "Go to Read, Audio Player, Dictionary, Settings or Shortcuts",
+    ),
+    ("{C}P", "Audio Player: play, or pause if already playing"),
+    ("{C}R", "Audio Player: skip back ten seconds"),
     ("↑ ↓", "Move along the list of panes, once it has focus"),
     ("Tab / Shift+Tab", "Move between controls"),
     ("Space or Return", "Operate the focused control"),
@@ -194,8 +206,20 @@ pub struct SpeechApp {
     elevenlabs_voices: VoiceList,
 
     busy: Option<Busy>,
+    /// Whatever is making sound right now. One field rather than one per pane,
+    /// so two things can never talk over each other and a single Stop always
+    /// stops the right one.
     playback: Option<Playback>,
+    /// True when `playback` is a file opened in the Audio Player rather than a
+    /// document being read aloud. The two want different words in the status
+    /// line and different buttons enabled.
+    playing_audio_file: bool,
     cached: Option<CachedRender>,
+
+    /// The file loaded into the Audio Player, which is deliberately separate
+    /// from the document in the Read pane: auditioning a saved recording
+    /// should not throw away the document you just extracted.
+    audio_file: Option<PathBuf>,
 
     status: Option<(String, Tone)>,
     log: Vec<String>,
@@ -246,7 +270,9 @@ impl SpeechApp {
             elevenlabs_voices: VoiceList::default(),
             busy: None,
             playback: None,
+            playing_audio_file: false,
             cached: None,
+            audio_file: None,
             status: None,
             log: Vec::new(),
             show_log: false,
@@ -403,6 +429,15 @@ impl SpeechApp {
         self.start(ctx, Job::LoadElevenLabsVoices(key));
     }
 
+    /// ⌘O, which opens whichever kind of file the pane on screen is about.
+    fn choose_file_for_pane(&mut self, ctx: &egui::Context) {
+        if self.pane == Pane::Player {
+            self.choose_audio_file();
+        } else {
+            self.choose_file(ctx);
+        }
+    }
+
     fn choose_file(&mut self, ctx: &egui::Context) {
         if self.busy.is_some() {
             return;
@@ -508,6 +543,7 @@ impl SpeechApp {
             jobs::Engine::System { voice, rate } => match tts::system::speak(&text, &voice, rate) {
                 Ok(child) => {
                     self.playback = Some(Playback::Process(child));
+                    self.playing_audio_file = false;
                     self.set_status(reading, Tone::Info);
                 }
                 Err(error) => self.set_status(format!("{error:#}"), Tone::Error),
@@ -534,6 +570,7 @@ impl SpeechApp {
         match Playback::play_mp3(mp3.as_ref().clone()) {
             Ok(playback) => {
                 self.playback = Some(playback);
+                self.playing_audio_file = false;
                 self.set_status("Reading aloud…", Tone::Info);
             }
             Err(error) => self.set_status(format!("{error:#}"), Tone::Error),
@@ -544,13 +581,150 @@ impl SpeechApp {
         if let Some(mut playback) = self.playback.take() {
             playback.stop();
         }
+        self.playing_audio_file = false;
+    }
+
+    // -------------------------------------------------------- the audio player
+
+    /// True when the sound currently playing is the player's file, which is
+    /// what all four transport buttons key off.
+    fn player_is_active(&self) -> bool {
+        self.playing_audio_file && self.playback.is_some()
+    }
+
+    fn player_is_paused(&self) -> bool {
+        self.player_is_active() && self.playback.as_ref().is_some_and(Playback::is_paused)
+    }
+
+    fn choose_audio_file(&mut self) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Choose an audio file to play")
+            .add_filter("Audio files", audio::PLAYABLE_EXTENSIONS);
+        if let Some(dir) = self
+            .config
+            .last_audio_dir
+            .as_ref()
+            .filter(|dir| dir.is_dir())
+            .or(self.config.last_save_dir.as_ref())
+            .filter(|dir| dir.is_dir())
+        {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(path) = dialog.pick_file() {
+            self.load_audio_file(path);
+        }
+    }
+
+    /// Loads a file into the player, ready to play but not yet playing —
+    /// shared by the chooser and by a file dropped on the window.
+    fn load_audio_file(&mut self, path: PathBuf) {
+        // A new file replaces whatever was playing, rather than joining it.
+        self.stop_playback();
+        self.config.last_audio_dir = path.parent().map(Path::to_path_buf);
+        self.config_dirty = true;
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        self.set_status(format!("Loaded {name}. Press Play."), Tone::Success);
+        self.audio_file = Some(path);
+        self.focus = Some(Field::Play);
+    }
+
+    /// Play, or resume from where Pause left off.
+    fn player_play(&mut self) {
+        if self.player_is_paused() {
+            if let Some(playback) = &mut self.playback {
+                playback.resume();
+            }
+            self.set_status("Playing.", Tone::Info);
+            return;
+        }
+        if self.player_is_active() {
+            return;
+        }
+        let Some(path) = self.audio_file.clone() else {
+            self.set_status("Choose an audio file first.", Tone::Error);
+            self.focus = Some(Field::AudioFile);
+            return;
+        };
+
+        // Reading a document aloud and playing a file are both "sound out of
+        // this app", so starting one ends the other.
+        self.stop_playback();
+        match Playback::play_file(&path) {
+            Ok(playback) => {
+                self.playback = Some(playback);
+                self.playing_audio_file = true;
+                self.set_status(
+                    format!(
+                        "Playing {}.",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ),
+                    Tone::Info,
+                );
+            }
+            Err(error) => self.set_status(format!("{error:#}"), Tone::Error),
+        }
+    }
+
+    fn player_pause(&mut self) {
+        if !self.player_is_active() || self.player_is_paused() {
+            return;
+        }
+        if let Some(playback) = &mut self.playback {
+            playback.pause();
+            let at = audio::spoken_time(playback.position());
+            self.set_status(format!("Paused at {at}."), Tone::Info);
+        }
+    }
+
+    fn player_stop(&mut self) {
+        if !self.player_is_active() {
+            return;
+        }
+        self.stop_playback();
+        self.set_status("Stopped.", Tone::Info);
+    }
+
+    /// Back ten seconds, without disturbing whether it was playing or paused.
+    fn player_skip_back(&mut self) {
+        if !self.player_is_active() {
+            return;
+        }
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
+        match playback.skip_back() {
+            Ok(()) => {
+                let at = audio::spoken_time(playback.position());
+                let state = if playback.is_paused() {
+                    "Paused"
+                } else {
+                    "Playing"
+                };
+                self.set_status(format!("{state} from {at}."), Tone::Info);
+            }
+            Err(error) => self.set_status(format!("{error:#}"), Tone::Error),
+        }
+    }
+
+    /// ⌘Space: one key for the thing the player is most often asked to do.
+    fn player_toggle(&mut self) {
+        if self.player_is_active() && !self.player_is_paused() {
+            self.player_pause();
+        } else {
+            self.player_play();
+        }
     }
 
     /// Escape and ⌘. mean "whatever is happening, stop".
     fn stop_everything(&mut self) {
         if self.is_playing() {
+            let what = if self.playing_audio_file {
+                "Stopped."
+            } else {
+                "Stopped reading."
+            };
             self.stop_playback();
-            self.set_status("Stopped reading.", Tone::Info);
+            self.set_status(what, Tone::Info);
             return;
         }
         if let Some(busy) = &self.busy
@@ -710,9 +884,16 @@ impl SpeechApp {
         if let Some(playback) = &mut self.playback
             && playback.is_finished()
         {
+            let was_a_file = self.playing_audio_file;
             self.playback = None;
+            self.playing_audio_file = false;
             if matches!(self.status, Some((_, Tone::Info))) {
-                self.set_status("Finished reading.", Tone::Success);
+                let done = if was_a_file {
+                    "Finished playing."
+                } else {
+                    "Finished reading."
+                };
+                self.set_status(done, Tone::Success);
             }
         }
     }
@@ -726,9 +907,18 @@ impl SpeechApp {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
-        if let Some(path) = dropped.into_iter().next() {
-            self.open_file(ctx, path);
+        let Some(path) = dropped.into_iter().next() else {
+            return;
+        };
+        // An audio file is not something the reader can open, so it goes to the
+        // player — whichever pane it was dropped on — and the player is brought
+        // into view so the drop visibly landed somewhere.
+        if is_playable(&path) {
+            self.pane = Pane::Player;
+            self.load_audio_file(path);
+            return;
         }
+        self.open_file(ctx, path);
     }
 
     /// Reads and consumes the global shortcuts. Consuming rather than observing
@@ -745,6 +935,7 @@ impl SpeechApp {
         let something_to_stop = self.is_playing() || self.busy.is_some();
         let (mut open, mut apply, mut stop) = (false, false, false);
         let (mut key, mut log) = (false, false);
+        let (mut toggle, mut back) = (false, false);
         let mut go = None;
         ctx.input_mut(|i| {
             open = i.consume_key(Modifiers::COMMAND, Key::O);
@@ -753,10 +944,16 @@ impl SpeechApp {
                 || (something_to_stop && i.consume_key(Modifiers::NONE, Key::Escape));
             key = i.consume_key(Modifiers::COMMAND, Key::K);
             log = i.consume_key(Modifiers::COMMAND, Key::L);
+            // The transport. Deliberately not ⌘Space or ⌘←: the first never
+            // reaches an app on macOS because Spotlight takes it, and the
+            // second is "beginning of line" in every text field on the
+            // platform — including the dictionary's, two panes away.
+            toggle = i.consume_key(Modifiers::COMMAND, Key::P);
+            back = i.consume_key(Modifiers::COMMAND, Key::R);
 
             // One number per pane, in the order they are listed, plus the two
             // conventional ways in: F1 for help and ⌘, for settings.
-            for (number, pane) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4]
+            for (number, pane) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5]
                 .into_iter()
                 .zip(Pane::ALL)
             {
@@ -776,13 +973,25 @@ impl SpeechApp {
         });
 
         if open {
-            self.choose_file(ctx);
+            self.choose_file_for_pane(ctx);
         }
         if apply {
             self.apply(ctx);
         }
         if stop {
             self.stop_everything();
+        }
+        // Both work from any pane, and bring the player into view — but without
+        // moving the keyboard, which mid-playback would land it somewhere the
+        // user did not ask to be.
+        if toggle || back {
+            self.pane = Pane::Player;
+        }
+        if toggle {
+            self.player_toggle();
+        }
+        if back {
+            self.player_skip_back();
         }
         if key {
             self.open_api_key_dialog();
@@ -1134,8 +1343,9 @@ impl SpeechApp {
         ui.add_space(6.0);
 
         // While speech is playing the same button stops it: one full-width
-        // control in one place, whatever state the app is in.
-        if self.is_playing() {
+        // control in one place, whatever state the app is in. A file playing in
+        // the Audio Player is not this pane's business, and has its own Stop.
+        if self.is_playing() && !self.playing_audio_file {
             let stop = ui.add(
                 egui::Button::new(RichText::new("⏹  Stop Reading").size(17.0))
                     .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT + 6.0)),
@@ -1534,6 +1744,195 @@ impl SpeechApp {
         }
     }
 
+    /// The Audio Player: choose a file, then play, pause, stop or skip back.
+    ///
+    /// The four transport buttons are always present and always in the same
+    /// place, greyed out rather than hidden when they don't apply — a control
+    /// that appears and disappears moves everything below it, which is exactly
+    /// what a screen magnifier and a screen reader's reading order cannot
+    /// afford.
+    fn player_pane(&mut self, ui: &mut egui::Ui) {
+        const HALF: f32 = (FORM_WIDTH - 10.0) / 2.0;
+
+        ui.heading("Audio Player");
+        ui.add_space(6.0);
+        ui.add(
+            egui::Label::new(
+                "Plays a spoken-word WAV or MP3 — one saved by this app, or any other. \
+                 Nothing is uploaded and the file on disk is never changed.",
+            )
+            .wrap(),
+        );
+        ui.add_space(10.0);
+
+        // Declared out here so the buttons can be acted on after the borrow of
+        // `self` inside the layout closure has ended.
+        let (mut play, mut pause, mut stop, mut back) = (false, false, false, false);
+
+        ui.vertical(|ui| {
+            ui.set_max_width(FORM_WIDTH);
+
+            let caption = Self::caption(ui, "Audio file");
+            let choose = ui.add(
+                egui::Button::new("📂  Choose Audio File…")
+                    .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
+            );
+            let choose = choose.on_hover_text(format!(
+                "{}  ·  A WAV or MP3 file. You can also drop one on this window.",
+                shortcut_text("{C}O")
+            ));
+            let _ = caption.labelled_by(choose.id);
+            self.take_focus(Field::AudioFile, &choose);
+            if choose.clicked() {
+                self.choose_audio_file();
+            }
+
+            let chosen = match &self.audio_file {
+                Some(path) => format!(
+                    "Chosen: {}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                None => "No audio file chosen yet.".to_string(),
+            };
+            let line = ui.add(egui::Label::new(RichText::new(chosen)).wrap());
+            if let Some(path) = &self.audio_file {
+                line.on_hover_text(path.display().to_string());
+            }
+
+            ui.add_space(8.0);
+
+            let has_file = self.audio_file.is_some();
+            let active = self.player_is_active();
+            let paused = self.player_is_paused();
+
+            // Play resumes a paused file, so it is enabled whenever there is
+            // something to start or something to continue.
+            ui.horizontal(|ui| {
+                let button = ui
+                    .add_enabled(
+                        has_file && (!active || paused),
+                        egui::Button::new(RichText::new("▶  Play").size(16.0))
+                            .min_size(egui::vec2(HALF, CONTROL_HEIGHT + 6.0)),
+                    )
+                    .on_hover_text(format!(
+                        "{}  ·  {}",
+                        shortcut_text("{C}P"),
+                        if paused {
+                            "Carry on from where it was paused"
+                        } else {
+                            "Play the chosen file from the beginning"
+                        }
+                    ));
+                // Choosing a file sends the keyboard here, so the next thing
+                // after picking is the one thing you came to do.
+                self.take_focus(Field::Play, &button);
+                play = button.clicked();
+
+                pause = ui
+                    .add_enabled(
+                        active && !paused,
+                        egui::Button::new(RichText::new("⏸  Pause").size(16.0))
+                            .min_size(egui::vec2(HALF, CONTROL_HEIGHT + 6.0)),
+                    )
+                    .on_hover_text(format!(
+                        "{}  ·  Hold the file where it is; Play carries on from there",
+                        shortcut_text("{C}P")
+                    ))
+                    .clicked();
+            });
+            ui.horizontal(|ui| {
+                stop = ui
+                    .add_enabled(
+                        active,
+                        egui::Button::new(RichText::new("⏹  Stop").size(16.0))
+                            .min_size(egui::vec2(HALF, CONTROL_HEIGHT + 6.0)),
+                    )
+                    .on_hover_text(format!(
+                        "{}  ·  Stop and return to the beginning",
+                        shortcut_text("{C}. or Esc")
+                    ))
+                    .clicked();
+                back = ui
+                    .add_enabled(
+                        active,
+                        egui::Button::new(RichText::new("⏪  Back 10 Seconds").size(16.0))
+                            .min_size(egui::vec2(HALF, CONTROL_HEIGHT + 6.0)),
+                    )
+                    .on_hover_text(format!(
+                        "{}  ·  Rewind ten seconds, or to the start if there is less than that",
+                        shortcut_text("{C}R")
+                    ))
+                    .clicked();
+            });
+
+            ui.add_space(10.0);
+            self.player_position(ui);
+        });
+
+        if play {
+            self.player_play();
+        }
+        if pause {
+            self.player_pause();
+        }
+        if stop {
+            self.player_stop();
+        }
+        if back {
+            self.player_skip_back();
+        }
+    }
+
+    /// Where the file has got to, in words and — where the length is known —
+    /// as a bar. The words come first because they are the part that works
+    /// without sight, and they say the same thing the bar shows.
+    fn player_position(&mut self, ui: &mut egui::Ui) {
+        let Some(playback) = &self.playback else {
+            let muted = crate::theme::palette(ui.visuals()).muted;
+            let text = if self.audio_file.is_some() {
+                "Not playing. Press Play to start."
+            } else {
+                "Not playing."
+            };
+            ui.label(RichText::new(text).color(muted));
+            return;
+        };
+        if !self.playing_audio_file {
+            let muted = crate::theme::palette(ui.visuals()).muted;
+            ui.label(
+                RichText::new("A document is being read aloud; playing a file will stop it.")
+                    .color(muted),
+            );
+            return;
+        }
+
+        let position = playback.position();
+        let duration = playback.duration();
+        let state = if playback.is_paused() {
+            "Paused at"
+        } else {
+            "Playing —"
+        };
+        let text = match duration {
+            Some(total) => format!(
+                "{state} {} of {}",
+                audio::spoken_time(position),
+                audio::spoken_time(total)
+            ),
+            None => format!("{state} {}", audio::spoken_time(position)),
+        };
+        ui.label(RichText::new(text).size(15.0));
+
+        if let Some(total) = duration.filter(|d| !d.is_zero()) {
+            let fraction = (position.as_secs_f32() / total.as_secs_f32()).clamp(0.0, 1.0);
+            ui.add(
+                egui::ProgressBar::new(fraction)
+                    .desired_width(FORM_WIDTH)
+                    .desired_height(10.0),
+            );
+        }
+    }
+
     fn shortcuts_pane(&mut self, ui: &mut egui::Ui) {
         ui.heading("Keyboard Shortcuts");
         ui.add_space(6.0);
@@ -1585,12 +1984,68 @@ impl SpeechApp {
         );
         ui.add_space(6.0);
 
+        // A dropdown rather than a text field, because the name has to match a
+        // model Ollama can actually run — and, since Ollama drops support for
+        // older ones, a typo and a retired model look identical from here.
+        // Anything not on the list still works: it just has to be typed into
+        // the field the "Other" entry reveals.
+        let listed = crate::config::VISION_MODELS
+            .iter()
+            .find(|(id, _)| *id == self.config.ollama_model);
         let caption = ui.label("Vision model");
-        let vision = ui.add(
-            egui::TextEdit::singleline(&mut self.config.ollama_model).desired_width(FORM_WIDTH),
-        );
+        let mut chosen = self.config.ollama_model.clone();
+        let vision = egui::ComboBox::from_id_salt("vision_model")
+            .width(FORM_WIDTH)
+            .selected_text(match listed {
+                Some((id, _)) => (*id).to_string(),
+                None => format!("Other: {}", self.config.ollama_model),
+            })
+            .show_ui(ui, |ui| {
+                for (id, description) in crate::config::VISION_MODELS {
+                    ui.selectable_value(&mut chosen, (*id).to_string(), *id)
+                        .on_hover_text(*description);
+                }
+                if ui
+                    .selectable_label(listed.is_none(), "Other — type a model name")
+                    .on_hover_text("Any model in the Ollama library that can read images.")
+                    .clicked()
+                    && listed.is_some()
+                {
+                    chosen = String::new();
+                }
+            })
+            .response;
         let _ = caption.labelled_by(vision.id);
-        edited |= vision.changed();
+        if chosen != self.config.ollama_model {
+            self.config.ollama_model = chosen;
+            edited = true;
+        }
+
+        // The description of whichever model is selected, so the size and the
+        // trade-off are visible without opening the dropdown and hovering.
+        let muted = crate::theme::palette(ui.visuals()).muted;
+        match listed {
+            Some((_, description)) => {
+                ui.add(egui::Label::new(RichText::new(*description).color(muted)).wrap());
+            }
+            None => {
+                let caption = ui.label("Model name");
+                let typed = ui.add(
+                    egui::TextEdit::singleline(&mut self.config.ollama_model)
+                        .hint_text("for example: llava:13b")
+                        .desired_width(FORM_WIDTH),
+                );
+                let _ = caption.labelled_by(typed.id);
+                edited |= typed.changed();
+                if crate::config::is_retired(&self.config.ollama_model) {
+                    ui.colored_label(
+                        crate::theme::palette(ui.visuals()).bad,
+                        "Current versions of Ollama cannot run this model. Choose one of the \
+                         suggested ones instead.",
+                    );
+                }
+            }
+        }
 
         ui.add_space(6.0);
         let caption = ui.label("Prompt sent with the image");
@@ -1733,6 +2188,18 @@ impl SpeechApp {
     }
 }
 
+/// True for a file the Audio Player can open, which is what decides where a
+/// dropped file goes.
+fn is_playable(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            audio::PLAYABLE_EXTENSIONS
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        })
+}
+
 const READY_HINT: &str = "Choose a .txt, .docx or image file, then press Apply. \
                           Press F1 for keyboard shortcuts.";
 
@@ -1804,6 +2271,7 @@ impl eframe::App for SpeechApp {
                             self.apply_button(ui);
                         });
                     }
+                    Pane::Player => self.player_pane(ui),
                     Pane::Dictionary => self.dictionary_pane(ui),
                     Pane::Settings => self.settings_pane(ui),
                     Pane::Shortcuts => self.shortcuts_pane(ui),

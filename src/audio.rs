@@ -7,6 +7,7 @@
 use anyhow::{Context, Result, bail};
 use std::io::Cursor;
 use std::path::Path;
+use std::time::Duration;
 
 /// The file formats the app can save.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -171,15 +172,28 @@ pub fn save(path: &Path, pcm: &Pcm, format: AudioFormat) -> Result<()> {
     }
 }
 
+/// The extensions the Audio Player will open. rodio is built here with only the
+/// MP3 and WAV decoders, so offering more would be offering files it cannot play.
+pub const PLAYABLE_EXTENSIONS: &[&str] = &["mp3", "wav", "wave"];
+
+/// How far [`Playback::skip_back`] rewinds.
+pub const SKIP_BACK: Duration = Duration::from_secs(10);
+
 /// A sound that is currently playing, whichever engine produced it.
 ///
 /// The `say` variant is a child process rather than decoded audio because
-/// macOS speaks it directly; stopping it means killing the process.
+/// macOS speaks it directly; stopping it means killing the process — and it is
+/// why the transport controls below all report "can't" rather than panicking:
+/// a running `say` cannot be paused or rewound, only stopped.
 pub enum Playback {
     Decoded {
         // Held only to keep the output device open for the player's lifetime.
         _device: rodio::MixerDeviceSink,
         player: rodio::Player,
+        /// Total length, when the decoder could work one out. Audio stitched
+        /// from several ElevenLabs responses often cannot report one, so this
+        /// is an `Option` rather than a number to be trusted.
+        duration: Option<Duration>,
     },
     Process(std::process::Child),
 }
@@ -187,20 +201,56 @@ pub enum Playback {
 impl Playback {
     /// Starts playing MP3 bytes on the default output device.
     pub fn play_mp3(bytes: Vec<u8>) -> Result<Self> {
-        let device = rodio::DeviceSinkBuilder::open_default_sink()
+        let byte_len = bytes.len() as u64;
+        let decoder = rodio::Decoder::builder()
+            .with_data(Cursor::new(bytes))
+            // Both are what make seeking work; without a byte length the
+            // decoder can neither seek accurately nor estimate a duration.
+            .with_byte_len(byte_len)
+            .with_seekable(true)
+            .build()
+            .context("could not decode the audio")?;
+        Self::start(decoder)
+    }
+
+    /// Starts playing an audio file from disk.
+    pub fn play_file(path: &Path) -> Result<Self> {
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("could not open {}", path.display()))?;
+        // `TryFrom<File>` reads the length from the file metadata and turns
+        // seeking on, which is exactly what the transport controls need.
+        let decoder = rodio::Decoder::try_from(file).with_context(|| {
+            format!(
+                "{} could not be played — it may not be a WAV or MP3 file",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            )
+        })?;
+        Self::start(decoder)
+    }
+
+    fn start<S>(source: S) -> Result<Self>
+    where
+        S: rodio::Source + Send + 'static,
+    {
+        let duration = source.total_duration();
+        let mut device = rodio::DeviceSinkBuilder::open_default_sink()
             .context("could not open an audio output device")?;
+        // Stopping is something the user asked for, so rodio's warning that
+        // dropping the sink will end playback is noise on every Stop press.
+        device.log_on_drop(false);
         let player = rodio::Player::connect_new(device.mixer());
-        let decoder =
-            rodio::Decoder::new(Cursor::new(bytes)).context("could not decode the audio")?;
-        player.append(decoder);
+        player.append(source);
         Ok(Self::Decoded {
             _device: device,
             player,
+            duration,
         })
     }
 
     pub fn is_finished(&mut self) -> bool {
         match self {
+            // A paused player is not an empty one, so this stays false while
+            // the user is holding the file mid-sentence.
             Self::Decoded { player, .. } => player.empty(),
             Self::Process(child) => matches!(child.try_wait(), Ok(Some(_)) | Err(_)),
         }
@@ -215,11 +265,77 @@ impl Playback {
             }
         }
     }
+
+    pub fn is_paused(&self) -> bool {
+        match self {
+            Self::Decoded { player, .. } => player.is_paused(),
+            Self::Process(_) => false,
+        }
+    }
+
+    pub fn pause(&mut self) {
+        if let Self::Decoded { player, .. } = self {
+            player.pause();
+        }
+    }
+
+    pub fn resume(&mut self) {
+        if let Self::Decoded { player, .. } = self {
+            player.play();
+        }
+    }
+
+    /// Where playback has reached, counting from the start of the file.
+    pub fn position(&self) -> Duration {
+        match self {
+            Self::Decoded { player, .. } => player.get_pos(),
+            Self::Process(_) => Duration::ZERO,
+        }
+    }
+
+    pub fn duration(&self) -> Option<Duration> {
+        match self {
+            Self::Decoded { duration, .. } => *duration,
+            Self::Process(_) => None,
+        }
+    }
+
+    /// Rewinds by [`SKIP_BACK`], stopping at the beginning rather than
+    /// wrapping round or failing when there is less than that to rewind.
+    pub fn skip_back(&mut self) -> Result<()> {
+        let Self::Decoded { player, .. } = self else {
+            bail!("this voice cannot be rewound; stop it and start again");
+        };
+        let target = player.get_pos().saturating_sub(SKIP_BACK);
+        player
+            .try_seek(target)
+            .map_err(|e| anyhow::anyhow!("could not skip back in this file: {e}"))
+    }
 }
 
 impl Drop for Playback {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// A position on the clock, written the way a person would say it.
+///
+/// Deliberately not `03:07` — a screen reader says "oh three colon oh seven"
+/// for that, and this is the one piece of text in the player that a listener
+/// has to take in while the audio is running.
+pub fn spoken_time(time: Duration) -> String {
+    let total = time.as_secs();
+    let (minutes, seconds) = (total / 60, total % 60);
+    match (minutes, seconds) {
+        (0, 1) => "1 second".to_string(),
+        (0, s) => format!("{s} seconds"),
+        (1, 0) => "1 minute".to_string(),
+        (m, 0) => format!("{m} minutes"),
+        (1, 1) => "1 minute 1 second".to_string(),
+        (1, s) => format!("1 minute {s} seconds"),
+        (m, 1) => format!("{m} minutes 1 second"),
+        (m, s) => format!("{m} minutes {s} seconds"),
     }
 }
 
@@ -264,6 +380,143 @@ mod tests {
         assert_eq!(back.channels, 1);
         assert_eq!(back.sample_rate, 22_050);
         assert_eq!(back.samples, pcm.samples);
+    }
+
+    #[test]
+    fn mp3_parts_joined_end_to_end_decode_as_one_continuous_recording() {
+        // A document past ElevenLabs' per-request limit comes back as several
+        // MP3s that the client concatenates. This is the check that the join
+        // is real: a decoder must play straight through all three parts, not
+        // stop at the end of the first.
+        let part = encode_mp3(&tone(1, 44_100, 0.4)).unwrap();
+        let joined: Vec<u8> = part.repeat(3);
+        assert_eq!(joined.len(), part.len() * 3);
+
+        let decoded = decode_mp3(&joined).unwrap();
+        let seconds =
+            decoded.samples.len() as f32 / (decoded.channels as f32 * decoded.sample_rate as f32);
+        assert!(
+            (seconds - 1.2).abs() < 0.25,
+            "three 0.4s parts decoded to {seconds}s, so the join was not followed"
+        );
+
+        // And it has to survive being written out, which is what "save" does.
+        let path = std::env::temp_dir().join("soe-stitch-test.wav");
+        write_wav(&path, &decoded).unwrap();
+        let back = read_wav(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(back.samples.len(), decoded.samples.len());
+    }
+
+    #[test]
+    fn times_are_written_the_way_they_are_read_out() {
+        let say = |secs| spoken_time(Duration::from_secs(secs));
+        assert_eq!(say(0), "0 seconds");
+        assert_eq!(say(1), "1 second");
+        assert_eq!(say(45), "45 seconds");
+        assert_eq!(say(60), "1 minute");
+        assert_eq!(say(61), "1 minute 1 second");
+        assert_eq!(say(125), "2 minutes 5 seconds");
+        assert_eq!(say(180), "3 minutes");
+        assert_eq!(say(121), "2 minutes 1 second");
+    }
+
+    #[test]
+    fn a_saved_file_reports_a_duration_the_player_can_show() {
+        // The transport needs a length to display and to seek within; a file
+        // the decoder cannot measure would leave the player mute about both.
+        for format in AudioFormat::ALL {
+            let pcm = tone(1, 22_050, 1.5);
+            let path =
+                std::env::temp_dir().join(format!("soe-duration-test.{}", format.extension()));
+            save(&path, &pcm, format).unwrap();
+
+            let file = std::fs::File::open(&path).unwrap();
+            let decoder = rodio::Decoder::try_from(file).unwrap();
+            let duration = rodio::Source::total_duration(&decoder);
+            std::fs::remove_file(&path).ok();
+
+            let seconds = duration
+                .unwrap_or_else(|| panic!("{format:?} reported no duration"))
+                .as_secs_f32();
+            assert!(
+                (seconds - 1.5).abs() < 0.15,
+                "{format:?} reported {seconds}s, expected about 1.5s"
+            );
+        }
+    }
+
+    /// The decoder the player builds has to be able to seek, or "Back 10
+    /// Seconds" is a button that only ever reports an error. Checked without
+    /// an output device, because that is the part CI can actually run.
+    #[test]
+    fn a_saved_file_can_be_rewound_which_is_what_skipping_back_needs() {
+        use rodio::Source as _;
+
+        for format in AudioFormat::ALL {
+            let pcm = tone(1, 22_050, 30.0);
+            let path = std::env::temp_dir().join(format!("soe-seek-test.{}", format.extension()));
+            save(&path, &pcm, format).unwrap();
+
+            let file = std::fs::File::open(&path).unwrap();
+            let mut decoder = rodio::Decoder::try_from(file).unwrap();
+            decoder
+                .try_seek(Duration::from_secs(20))
+                .unwrap_or_else(|e| panic!("{format:?} could not be seeked: {e}"));
+
+            let sample_rate = decoder.sample_rate().get() as f32;
+            let channels = decoder.channels().get() as f32;
+            let remaining = decoder.count() as f32 / (sample_rate * channels);
+            std::fs::remove_file(&path).ok();
+
+            assert!(
+                (remaining - 10.0).abs() < 1.0,
+                "{format:?} left {remaining}s after seeking to 20s of 30s"
+            );
+        }
+    }
+
+    /// The whole transport, on a real output device.
+    ///
+    /// Skipped where there is no audio hardware — CI runners have none — since
+    /// the point of this test is the device path, and a machine that cannot
+    /// play sound has nothing to say about whether Pause works.
+    #[test]
+    fn the_transport_pauses_rewinds_and_stops_a_real_file() {
+        let path = std::env::temp_dir().join("soe-transport-test.wav");
+        write_wav(&path, &tone(1, 22_050, 20.0)).unwrap();
+
+        let Ok(mut playback) = Playback::play_file(&path) else {
+            std::fs::remove_file(&path).ok();
+            eprintln!("no audio output device; skipping the transport test");
+            return;
+        };
+        assert!(!playback.is_paused());
+        assert_eq!(playback.duration().map(|d| d.as_secs()), Some(20));
+
+        std::thread::sleep(Duration::from_millis(500));
+        playback.pause();
+        assert!(playback.is_paused());
+
+        // Read after the pause has settled: the controls are polled every few
+        // milliseconds, so the position keeps creeping for an instant.
+        std::thread::sleep(Duration::from_millis(100));
+        let held = playback.position();
+        assert!(held > Duration::ZERO, "the position never advanced");
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(playback.position(), held, "a paused file kept moving");
+
+        // Less than ten seconds in, so this lands at the start rather than
+        // before it — and does not quietly start playing again.
+        playback.skip_back().unwrap();
+        assert_eq!(playback.position(), Duration::ZERO);
+        assert!(playback.is_paused(), "skipping back resumed playback");
+        assert!(!playback.is_finished(), "a paused file counted as finished");
+
+        playback.resume();
+        assert!(!playback.is_paused());
+        playback.stop();
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

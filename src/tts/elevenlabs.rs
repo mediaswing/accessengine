@@ -135,15 +135,22 @@ fn check(response: reqwest::blocking::Response) -> Result<reqwest::blocking::Res
 
 /// Synthesises `text` and returns MP3 bytes.
 ///
-/// `on_progress` is called with the fraction complete after each chunk so a
-/// long document doesn't look frozen. Setting `cancel` stops between chunks.
+/// Text of any length works: it is split into requests of at most
+/// [`MAX_CHARS_PER_REQUEST`] characters — comfortably inside the API's own
+/// 10,000-character ceiling — and the returned MP3 frames are concatenated, so
+/// a 50,000-word document comes back as one continuous recording. There is no
+/// length at which the app has to refuse.
+///
+/// `on_progress` is called with `(parts finished, parts in total)` as each one
+/// lands, so a long document can say which part it is on rather than looking
+/// frozen. Setting `cancel` stops between parts.
 pub fn synthesize(
     api_key: &str,
     voice_id: &str,
     model_id: &str,
     text: &str,
     cancel: &Arc<AtomicBool>,
-    mut on_progress: impl FnMut(f32),
+    mut on_progress: impl FnMut(usize, usize),
 ) -> Result<Vec<u8>> {
     if voice_id.trim().is_empty() {
         bail!("choose an ElevenLabs voice first");
@@ -160,6 +167,9 @@ pub fn synthesize(
         if cancel.load(Ordering::Relaxed) {
             bail!("cancelled");
         }
+        // Reported before the request rather than after, so the status line
+        // names the part currently being waited on.
+        on_progress(index, chunks.len());
 
         let mut body = serde_json::json!({
             "text": chunk,
@@ -187,10 +197,17 @@ pub fn synthesize(
         let bytes = check(response)?
             .bytes()
             .context("the audio from ElevenLabs was cut short")?;
+        if bytes.is_empty() {
+            bail!(
+                "ElevenLabs returned nothing for part {} of {}, so the recording would have a \
+                 hole in it",
+                index + 1,
+                chunks.len()
+            );
+        }
         audio.extend_from_slice(&bytes);
-
-        on_progress((index + 1) as f32 / chunks.len() as f32);
     }
+    on_progress(chunks.len(), chunks.len());
 
     if audio.is_empty() {
         bail!("ElevenLabs returned no audio");

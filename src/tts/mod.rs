@@ -163,6 +163,47 @@ mod tests {
         assert_eq!(strip(&rejoined), strip(text));
     }
 
+    /// The case the app is actually asked about: a document well past
+    /// ElevenLabs' 10,000-character per-request ceiling. It has to come apart
+    /// into requests the API will accept and go back together with every word
+    /// present and in order — there is no length at which speaking has to be
+    /// refused.
+    #[test]
+    fn a_document_past_the_api_limit_splits_and_reassembles_intact() {
+        const API_LIMIT: usize = 10_000;
+
+        let sentences: Vec<String> = (0..900)
+            .map(|n| format!("This is sentence number {n} of a rather long document."))
+            .collect();
+        let text = sentences.join(" ");
+        assert!(
+            text.chars().count() > 3 * API_LIMIT,
+            "the fixture should be several requests long"
+        );
+
+        // 4,500 is what the ElevenLabs client uses; the point is that it is
+        // under the limit and that nothing is lost at the seams.
+        let chunks = chunk_text(&text, 4_500);
+        assert!(chunks.len() > 1);
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 4_500, "chunk too long to send");
+            assert!(chunk.chars().count() <= API_LIMIT);
+        }
+
+        let strip = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(strip(&chunks.join(" ")), strip(&text));
+        // Word order matters as much as word count: a listener would hear it.
+        assert!(chunks[0].starts_with("This is sentence number 0"));
+        assert!(chunks.last().unwrap().ends_with("document."));
+    }
+
+    #[test]
+    fn text_exactly_at_the_limit_is_not_split() {
+        let text = "a".repeat(4_500);
+        assert_eq!(chunk_text(&text, 4_500).len(), 1);
+        assert_eq!(chunk_text(&"a".repeat(4_501), 4_500).len(), 2);
+    }
+
     #[test]
     fn multibyte_text_is_not_split_mid_character() {
         let text = "日本語のテキストです。これは二番目の文です。";
