@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Runs the tests on both platforms the app ships to, on every pull request and
+# on main. Release.yml also tests, but only at tag time — by which point a
+# failure means an aborted release rather than a comment on a diff.
+#
+# Deliberately not a release build: the tests are the point here, and a debug
+# build gets to them in a fraction of the time. The release profile is still
+# exercised end to end by release.yml before anything is published.
+#
+# Action majors follow release.yml, and for the same reason: they are the ones
+# whose `runs.using` is actually Node 24, which is not always the version whose
+# release notes first mention it. dtolnay/rust-toolchain is a composite action
+# with no Node runtime at all.
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
+# A second push to a pull request makes the first run irrelevant, so it is
+# cancelled rather than left to finish. Runs on main are not cancelled: each
+# commit there is a distinct thing to know the state of.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      # Not only unit tests: on both platforms the suite renders a real sentence
+      # through the system voice and checks the audio is not silent, which is
+      # the first thing that would break for a user. The Audio Player's
+      # transport test wants a real output device and skips with a note when
+      # there is none, which is the case on every runner — that path is covered
+      # by hand on a machine that can actually play sound.
+      - name: Test
+        run: cargo test --target ${{ matrix.target }}
+
+      # Clippy runs on both platforms rather than one, because the parts most
+      # likely to rot are exactly the ones a single platform cannot see:
+      # `src/tts/system.rs`, `src/keychain.rs` and `src/ollama.rs` each have a
+      # module per platform behind `cfg`, and whichever one is not being built
+      # is not being linted either. Warnings are errors so they cannot pile up;
+      # the tree is clean on both as of this workflow being added.
+      - name: Clippy
+        run: cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
+
+  format:
+    name: Formatting
+    # rustfmt reads the source and never builds it, so one runner settles it for
+    # every platform.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Formatting
+        run: cargo fmt --check

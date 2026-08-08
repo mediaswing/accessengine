@@ -156,7 +156,10 @@ struct VoiceList {
 /// Every keyboard shortcut, in the order the help dialog lists them. Defined
 /// once so the dialog, the tooltips and the README cannot drift apart.
 pub const SHORTCUTS: &[(&str, &str)] = &[
-    ("{C}O", "Choose a file — a document, or an audio file in the player"),
+    (
+        "{C}O",
+        "Choose a file — a document, or an audio file in the player",
+    ),
     ("{C}Return", "Apply — run the chosen action"),
     (
         "{C}. or Esc",
