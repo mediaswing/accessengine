@@ -54,21 +54,26 @@ fn convert_to_jpeg(path: &Path) -> Result<Vec<u8>> {
         );
     }
 
-    let mut destination = std::env::temp_dir();
-    destination.push(format!(
-        "speech-output-engine-{}-{}.jpg",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or_default()
-    ));
+    // An absolute path, for two reasons. `sips` takes the input as a positional
+    // argument, so a file actually named `-h` — or anything else beginning with
+    // a dash — would be read as an option instead of a filename; a path from
+    // `canonicalize` always starts with `/` and can never be mistaken for one.
+    // It also pins down exactly which file is converted, rather than leaving it
+    // to whatever the working directory happens to be by then.
+    let source = std::fs::canonicalize(path)
+        .with_context(|| format!("could not locate {}", path.display()))?;
+
+    // Claimed rather than merely named: creating it exclusively means the path
+    // is not already a symlink pointing somewhere sips would then write. sips
+    // replaces the file rather than writing into the handle, so this is about
+    // owning the name, not the descriptor. See `crate::sysexec`.
+    let (_claim, destination) = crate::sysexec::create_scratch_file("accessengine-image", "jpg")?;
 
     let output = std::process::Command::new("/usr/bin/sips")
         .arg("--setProperty")
         .arg("format")
         .arg("jpeg")
-        .arg(path)
+        .arg(&source)
         .arg("--out")
         .arg(&destination)
         .output()
@@ -91,8 +96,75 @@ fn convert_to_jpeg(path: &Path) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::needs_conversion;
+    use super::{encode_for_ollama, needs_conversion};
     use std::path::PathBuf;
+
+    /// A 2×2 greyscale PNG, small enough to write inline.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x00, 0x00, 0x00, 0x00, 0x57,
+        0xDD, 0x52, 0xF8, 0x00, 0x00, 0x00, 0x0F, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0x60,
+        0x60, 0x60, 0xF8, 0x0F, 0x00, 0x01, 0x04, 0x01, 0x00, 0x2B, 0xB3, 0x0A, 0x1B, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    /// The real HEIC path, end to end: canonicalise, claim a scratch file, run
+    /// sips, read the JPEG back. Skipped if this machine's sips cannot write
+    /// HEIC, since that would be testing the runner rather than the code.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_heic_photo_is_converted_and_encoded() {
+        use base64::Engine as _;
+
+        let dir = std::env::temp_dir();
+        let png = dir.join("soe-image-test.png");
+        let heic = dir.join("soe-image-test.heic");
+        std::fs::write(&png, TINY_PNG).unwrap();
+
+        let made = std::process::Command::new("/usr/bin/sips")
+            .args(["--setProperty", "format", "heic"])
+            .arg(&png)
+            .arg("--out")
+            .arg(&heic)
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false);
+        std::fs::remove_file(&png).ok();
+        if !made || !heic.exists() {
+            eprintln!("sips cannot write HEIC here; skipping");
+            return;
+        }
+
+        let encoded = encode_for_ollama(&heic).expect("a HEIC photo should convert");
+        std::fs::remove_file(&heic).ok();
+
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&encoded)
+            .expect("the result should be base64");
+        // JPEG's magic number: what reaches Ollama is no longer HEIC.
+        assert_eq!(&bytes[..3], &[0xFF, 0xD8, 0xFF], "not a JPEG");
+    }
+
+    /// A leading dash is a filename, not an option — `sips` takes the input
+    /// positionally, so a path that reaches it unqualified would be parsed as
+    /// a flag. `canonicalize` is what keeps that from being possible.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_filename_that_looks_like_an_option_is_still_treated_as_a_file() {
+        let path = std::env::temp_dir().join("--setProperty.png");
+        std::fs::write(&path, TINY_PNG).unwrap();
+
+        let absolute = std::fs::canonicalize(&path).unwrap();
+        assert!(absolute.is_absolute());
+        assert!(
+            !absolute.to_string_lossy().starts_with('-'),
+            "the path sips receives must not begin with a dash"
+        );
+
+        // PNG needs no conversion, but it must still be read rather than refused.
+        assert!(encode_for_ollama(&path).is_ok());
+        std::fs::remove_file(&path).ok();
+    }
 
     #[test]
     fn only_heif_family_is_converted() {

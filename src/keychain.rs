@@ -23,6 +23,16 @@ use std::io::Write as _;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::{Command, Stdio};
 
+/// The keychain tool, by absolute path rather than by name.
+///
+/// This is the process the key is handed to over stdin, so which binary
+/// actually receives it must not be a question `PATH` gets to answer — a
+/// `security` earlier on the path would be handed the key and the app would
+/// never know. Every other program this app runs on macOS is named the same
+/// way: `/usr/bin/say`, `/usr/bin/sips`, `/usr/bin/which`.
+#[cfg(target_os = "macos")]
+const SECURITY: &str = "/usr/bin/security";
+
 /// The macOS keychain item. Deliberately still the old name: renaming it would
 /// strand the key of anyone who saved one before the app was called accessengine.
 #[cfg(target_os = "macos")]
@@ -70,7 +80,7 @@ pub fn load() -> (Option<String>, KeySource) {
 
 #[cfg(target_os = "macos")]
 fn read() -> Result<Option<String>> {
-    let out = Command::new("security")
+    let out = Command::new(SECURITY)
         .args(["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"])
         .output()
         .context("failed to run `security`")?;
@@ -88,7 +98,7 @@ fn read() -> Result<Option<String>> {
 /// keeps the key out of the process list.
 #[cfg(target_os = "macos")]
 pub fn store(key: &str) -> Result<()> {
-    let mut child = Command::new("security")
+    let mut child = Command::new(SECURITY)
         .args([
             "add-generic-password",
             "-s",
@@ -125,7 +135,7 @@ pub fn store(key: &str) -> Result<()> {
 /// Removes the stored key. Succeeds if there was nothing to remove.
 #[cfg(target_os = "macos")]
 pub fn clear() -> Result<()> {
-    Command::new("security")
+    Command::new(SECURITY)
         .args(["delete-generic-password", "-s", SERVICE, "-a", ACCOUNT])
         .output()
         .context("failed to run `security`")?;
@@ -148,25 +158,15 @@ fn credential_path() -> Result<std::path::PathBuf> {
 
 /// Runs a PowerShell script with no window, handing it `stdin_text` if given
 /// and returning its standard output.
+///
+/// The interpreter is located by absolute path — see [`crate::sysexec`]. That
+/// matters more here than anywhere else in the app: this is the process the API
+/// key is handed to in plaintext, so letting `PATH` or the executable's own
+/// directory decide which binary receives it would be handing the key to
+/// whoever won that search.
 #[cfg(target_os = "windows")]
 fn powershell(script: &str, stdin_text: Option<&str>) -> Result<std::process::Output> {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-    use std::os::windows::process::CommandExt as _;
-
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    let mut child = Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-EncodedCommand",
-        ])
-        .arg(BASE64.encode(utf16))
-        .creation_flags(CREATE_NO_WINDOW)
+    let mut child = crate::sysexec::powershell(script)
         .stdin(if stdin_text.is_some() {
             Stdio::piped()
         } else {
@@ -190,11 +190,8 @@ fn powershell(script: &str, stdin_text: Option<&str>) -> Result<std::process::Ou
         .context("PowerShell did not finish cleanly")
 }
 
-/// Escapes a value for a PowerShell single-quoted string.
 #[cfg(target_os = "windows")]
-fn ps_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
+use crate::sysexec::ps_quote;
 
 #[cfg(target_os = "windows")]
 fn read() -> Result<Option<String>> {

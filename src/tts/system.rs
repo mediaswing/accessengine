@@ -181,13 +181,6 @@ mod platform {
 
 // ------------------------------------------------------------------- Windows
 
-/// Escapes a value for a PowerShell single-quoted string, where the only
-/// special character is the quote itself, doubled.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn ps_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
 /// Converts words per minute to a SAPI rate.
 ///
 /// SAPI's scale is -10 to 10 and multiplicative — roughly 1.15× per step from a
@@ -225,35 +218,11 @@ fn parse_sapi_voices(stdout: &str) -> Vec<Voice> {
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use super::{Voice, parse_sapi_voices, ps_quote, sapi_rate};
+    use super::{Voice, parse_sapi_voices, sapi_rate};
+    use crate::sysexec::{powershell, ps_quote};
     use anyhow::{Context, Result, bail};
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as BASE64;
-    use std::os::windows::process::CommandExt as _;
     use std::path::{Path, PathBuf};
-    use std::process::{Child, Command, Stdio};
-
-    /// Keeps a console window from flashing up behind the GUI every time the
-    /// app speaks. `CREATE_NO_WINDOW`.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-    /// PowerShell takes a UTF-16LE, base64 command with `-EncodedCommand`,
-    /// which sidesteps `cmd`'s quoting rules entirely.
-    fn powershell(script: &str) -> Command {
-        let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        let mut command = Command::new("powershell.exe");
-        command
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-EncodedCommand",
-            ])
-            .arg(BASE64.encode(utf16))
-            .creation_flags(CREATE_NO_WINDOW);
-        command
-    }
+    use std::process::{Child, Stdio};
 
     pub fn list_voices() -> Result<Vec<Voice>> {
         let script = "\
@@ -287,17 +256,17 @@ $synth.Dispose()";
     /// Writes the document somewhere the script can read it as UTF-8. The
     /// script deletes it as soon as it has been read, so nothing is left behind
     /// even when speech is stopped halfway through.
+    ///
+    /// Created exclusively rather than written over: this is the user's whole
+    /// document, briefly on disk, and the path it lands on should be one
+    /// nothing else already claims. See [`crate::sysexec`].
     fn write_text_file(text: &str) -> Result<PathBuf> {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "accessengine-{}-{}.txt",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default()
-        ));
-        std::fs::write(&path, text).context("could not stage the text for the speech engine")?;
+        use std::io::Write as _;
+
+        let (mut file, path) = crate::sysexec::create_scratch_file("accessengine", "txt")
+            .context("could not stage the text for the speech engine")?;
+        file.write_all(text.as_bytes())
+            .context("could not stage the text for the speech engine")?;
         Ok(path)
     }
 
@@ -397,7 +366,7 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_sapi_voices, parse_say_voices, ps_quote, sapi_rate};
+    use super::{parse_sapi_voices, parse_say_voices, sapi_rate};
 
     #[test]
     fn parses_say_names_locales_and_multiword_names() {
@@ -446,17 +415,6 @@ Amélie              fr_CA    # Bonjour! Je m'appelle Amélie.
             assert!(rate >= previous, "rate fell going from {} wpm", wpm - 1);
             previous = rate;
         }
-    }
-
-    #[test]
-    fn ps_quote_doubles_embedded_quotes() {
-        assert_eq!(ps_quote(r"C:\Users\Jo\out.wav"), r"'C:\Users\Jo\out.wav'");
-        // The one character that could end the string early.
-        assert_eq!(ps_quote("it's"), "'it''s'");
-        assert_eq!(
-            ps_quote("'; Remove-Item C:\\ ;'"),
-            "'''; Remove-Item C:\\ ;'''"
-        );
     }
 
     #[test]
