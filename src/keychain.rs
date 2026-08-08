@@ -1,0 +1,278 @@
+//! ElevenLabs API key storage.
+//!
+//! The key is a secret, so it never goes in the JSON config file, and it is
+//! never passed on a command line where another process could read it out of
+//! the process list — it goes over stdin in both directions.
+//!
+//! * **macOS**: the login keychain, reached through the `security` CLI so the
+//!   app doesn't have to link against Security.framework.
+//! * **Windows**: DPAPI, through PowerShell's `ConvertFrom-SecureString`. The
+//!   ciphertext sits in the app's own config directory and can only be read
+//!   back by the same Windows account on the same machine.
+//!
+//! An `ELEVENLABS_API_KEY` environment variable always wins, which keeps CI and
+//! one-off runs simple and stores nothing at all.
+
+use anyhow::{Result, bail};
+// Every platform-specific path needs these; a platform with no backend at all
+// needs none of them.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use anyhow::Context as _;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use std::io::Write as _;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use std::process::{Command, Stdio};
+
+/// The macOS keychain item. Deliberately still the old name: renaming it would
+/// strand the key of anyone who saved one before the app was called accessengine.
+#[cfg(target_os = "macos")]
+const SERVICE: &str = "speech-output-engine";
+#[cfg(target_os = "macos")]
+const ACCOUNT: &str = "elevenlabs";
+pub const ENV_VAR: &str = "ELEVENLABS_API_KEY";
+
+/// How the API key dialog describes where the key will be kept. Platform-
+/// specific because "your login keychain" means nothing on Windows.
+#[cfg(target_os = "macos")]
+pub const STORAGE_DESCRIPTION: &str = "in your login keychain";
+#[cfg(target_os = "windows")]
+pub const STORAGE_DESCRIPTION: &str = "encrypted for your Windows account";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub const STORAGE_DESCRIPTION: &str = "in this computer's secure storage";
+
+/// Where the key currently in use came from, so the UI can say so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeySource {
+    Env,
+    /// Saved by the app, wherever this platform saves secrets.
+    Keychain,
+    None,
+}
+
+/// Reads the key from the environment, then from storage.
+pub fn load() -> (Option<String>, KeySource) {
+    if let Ok(key) = std::env::var(ENV_VAR) {
+        let key = key.trim().to_string();
+        if !key.is_empty() {
+            return (Some(key), KeySource::Env);
+        }
+    }
+    match read() {
+        Ok(Some(key)) => (Some(key), KeySource::Keychain),
+        // A missing key is the normal first-run state, and a storage backend
+        // that is broken shouldn't stop the app opening — the system voices
+        // don't need a key at all.
+        _ => (None, KeySource::None),
+    }
+}
+
+// --------------------------------------------------------------------- macOS
+
+#[cfg(target_os = "macos")]
+fn read() -> Result<Option<String>> {
+    let out = Command::new("security")
+        .args(["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"])
+        .output()
+        .context("failed to run `security`")?;
+    if !out.status.success() {
+        // Exit code 44 is "item not found", which is a normal first-run state.
+        return Ok(None);
+    }
+    let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok(if key.is_empty() { None } else { Some(key) })
+}
+
+/// Stores the key in the login keychain, replacing any previous value.
+///
+/// `-w` with no argument makes `security` read the password from stdin, which
+/// keeps the key out of the process list.
+#[cfg(target_os = "macos")]
+pub fn store(key: &str) -> Result<()> {
+    let mut child = Command::new("security")
+        .args([
+            "add-generic-password",
+            "-s",
+            SERVICE,
+            "-a",
+            ACCOUNT,
+            "-U", // update if it already exists
+            "-w",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to run `security`")?;
+    child
+        .stdin
+        .take()
+        .context("could not pass the key to `security`")?
+        .write_all(format!("{key}\n").as_bytes())
+        .context("could not pass the key to `security`")?;
+
+    let out = child
+        .wait_with_output()
+        .context("`security` did not finish cleanly")?;
+    if !out.status.success() {
+        bail!(
+            "could not save the key to the keychain: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Removes the stored key. Succeeds if there was nothing to remove.
+#[cfg(target_os = "macos")]
+pub fn clear() -> Result<()> {
+    Command::new("security")
+        .args(["delete-generic-password", "-s", SERVICE, "-a", ACCOUNT])
+        .output()
+        .context("failed to run `security`")?;
+    Ok(())
+}
+
+// ------------------------------------------------------------------- Windows
+
+/// The DPAPI ciphertext file. Alongside the config, because it is per-user data
+/// in exactly the same sense — it is just the part that is encrypted.
+#[cfg(target_os = "windows")]
+fn credential_path() -> Result<std::path::PathBuf> {
+    let config = crate::config::Config::path().context("could not locate a config directory")?;
+    let dir = config
+        .parent()
+        .context("could not locate a config directory")?;
+    std::fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
+    Ok(dir.join("elevenlabs.dpapi"))
+}
+
+/// Runs a PowerShell script with no window, handing it `stdin_text` if given
+/// and returning its standard output.
+#[cfg(target_os = "windows")]
+fn powershell(script: &str, stdin_text: Option<&str>) -> Result<std::process::Output> {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use std::os::windows::process::CommandExt as _;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let mut child = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+        ])
+        .arg(BASE64.encode(utf16))
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(if stdin_text.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to run PowerShell")?;
+
+    if let Some(text) = stdin_text {
+        child
+            .stdin
+            .take()
+            .context("could not pass the key to PowerShell")?
+            .write_all(text.as_bytes())
+            .context("could not pass the key to PowerShell")?;
+    }
+    child
+        .wait_with_output()
+        .context("PowerShell did not finish cleanly")
+}
+
+/// Escapes a value for a PowerShell single-quoted string.
+#[cfg(target_os = "windows")]
+fn ps_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+#[cfg(target_os = "windows")]
+fn read() -> Result<Option<String>> {
+    let path = credential_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    // `ConvertTo-SecureString` on a DPAPI blob only succeeds for the account
+    // that wrote it, which is the whole point of storing it this way.
+    let script = format!(
+        "\
+$ErrorActionPreference = 'Stop'
+$blob = (Get-Content -LiteralPath {} -Raw).Trim()
+$secure = ConvertTo-SecureString -String $blob
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+try {{ [Console]::Out.Write([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)) }}
+finally {{ [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }}",
+        ps_quote(&path.to_string_lossy())
+    );
+
+    let out = powershell(&script, None)?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok(if key.is_empty() { None } else { Some(key) })
+}
+
+/// Encrypts the key with DPAPI and writes it, replacing any previous value.
+#[cfg(target_os = "windows")]
+pub fn store(key: &str) -> Result<()> {
+    let path = credential_path()?;
+    let script = format!(
+        "\
+$ErrorActionPreference = 'Stop'
+$plain = [Console]::In.ReadToEnd().Trim()
+$secure = ConvertTo-SecureString -String $plain -AsPlainText -Force
+ConvertFrom-SecureString -SecureString $secure | Set-Content -LiteralPath {} -Encoding ASCII",
+        ps_quote(&path.to_string_lossy())
+    );
+
+    let out = powershell(&script, Some(key))?;
+    if !out.status.success() {
+        bail!(
+            "could not save the key: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Removes the stored key. Succeeds if there was nothing to remove.
+#[cfg(target_os = "windows")]
+pub fn clear() -> Result<()> {
+    let path = credential_path()?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("could not remove {}", path.display())),
+    }
+}
+
+// ------------------------------------------------------- everywhere else
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn read() -> Result<Option<String>> {
+    Ok(None)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn store(_key: &str) -> Result<()> {
+    bail!(
+        "this system has no supported secure storage, so the key can only be given \
+         in the {ENV_VAR} environment variable"
+    )
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn clear() -> Result<()> {
+    Ok(())
+}

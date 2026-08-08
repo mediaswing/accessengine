@@ -1,0 +1,36 @@
+[package]
+name = "accessengine"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "An accessible desktop reader: opens a document or image and reads it aloud, or saves the speech as an audio file. Runs on macOS and Windows."
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+directories = "6.0.0"
+eframe = "0.36.1"
+egui = "0.36.1"
+hound = "3.5.1"
+mp3lame-encoder = { version = "0.2.4", features = ["std"] }
+quick-xml = "0.41.0"
+# `rustls-no-provider` rather than `rustls`: the default provider is aws-lc,
+# whose build wants CMake and an assembler on Windows. ring ships pre-generated
+# objects for the Windows targets, so `cargo build` there needs nothing but the
+# MSVC toolchain. The provider is installed once at startup — see main.rs.
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls-no-provider", "http2", "charset", "system-proxy"] }
+# Not used directly for TLS. reqwest is built without a crypto provider, so one
+# has to be chosen and installed before the first HTTPS request; this is the
+# same crate and version reqwest already links, so it compiles no extra code.
+rustls = { version = "0.23.43", default-features = false, features = ["ring"] }
+rfd = "0.17.2"
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "mp3", "wav"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[profile.release]
+lto = "thin"
+strip = true
