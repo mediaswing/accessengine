@@ -502,9 +502,18 @@ Amélie              fr_CA    # Bonjour! Je m'appelle Amélie.
 
     /// The live-playback path: the process should start and stay running until
     /// it is killed, which is what the Stop button relies on.
+    ///
+    /// Skipped on a Windows CI runner, which has no audio endpoint at all —
+    /// SAPI throws on `SetOutputToDefaultAudioDevice` there, so the process
+    /// would exit immediately and this would be testing the runner rather than
+    /// the code. The file-rendering test above needs no device and still runs
+    /// everywhere, so the Windows synthesis path is not left unexercised.
     #[test]
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn speaking_spawns_a_killable_process() {
+        if cfg!(target_os = "windows") && std::env::var_os("CI").is_some() {
+            return;
+        }
         let mut child = super::speak("Testing.", "", 250).expect("speech should start");
         assert!(
             child.try_wait().unwrap().is_none(),

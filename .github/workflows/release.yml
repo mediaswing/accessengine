@@ -1,0 +1,400 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# Builds a macOS .app and a Windows zip, submits both to VirusTotal, and — for a
+# tag — publishes them as a release. `workflow_dispatch` runs everything except
+# the publish, which is the way to check a build without shipping anything.
+#
+# Unlike gcm, this project has C dependencies: LAME (MP3 encoding) and ring
+# (TLS). Neither needs anything the runners lack — mp3lame-sys compiles LAME
+# with `cc` on Windows rather than autotools, and ring ships pre-generated
+# objects for the MSVC target — so there is no toolchain setup step here. That
+# is also why the TLS backend is ring rather than the default aws-lc, which
+# would want CMake and an assembler on Windows.
+#
+# Every action is pinned to a major that runs on Node 24. The majors differ
+# because the projects renumber independently, and the version that first
+# *actually* moved to Node 24 is not always the one that announced support for
+# it — check `runs.using` in the action's own action.yml before trusting a
+# release note. dtolnay/rust-toolchain is a composite action with no Node
+# runtime at all.
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset_name: accessengine-macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: accessengine-windows-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Run before packaging so a release cannot ship code whose own tests fail.
+      # These are not only unit tests: on both platforms the suite renders a real
+      # sentence through the system voice and checks the audio is not silent,
+      # which is the one thing that would break for a user before anything else.
+      - name: Test
+        run: cargo test --release --target ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          BIN="target/${{ matrix.target }}/release/accessengine"
+          DIST="dist/${{ matrix.asset_name }}"
+          APP="$DIST/Speech Output Engine.app"
+
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp "$BIN" "$APP/Contents/MacOS/accessengine"
+
+          # A bare binary launches, but with no bundle it has no dock identity,
+          # no display name, and no way for macOS to treat it as a real
+          # application. The document types are what make "Open With" work —
+          # the app already accepts a path on the command line, which is exactly
+          # what Finder passes. LSMinimumSystemVersion 11.0 is the floor for the
+          # aarch64 target.
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key>
+              <string>Speech Output Engine</string>
+              <key>CFBundleDisplayName</key>
+              <string>Speech Output Engine</string>
+              <key>CFBundleIdentifier</key>
+              <string>io.accessengine.accessengine</string>
+              <key>CFBundleVersion</key>
+              <string>$VERSION</string>
+              <key>CFBundleShortVersionString</key>
+              <string>$VERSION</string>
+              <key>CFBundleExecutable</key>
+              <string>accessengine</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+              <key>NSHumanReadableCopyright</key>
+              <string>Copyright (c) 2026 accessengine contributors. MIT License.</string>
+              <key>CFBundleDocumentTypes</key>
+              <array>
+                  <dict>
+                      <key>CFBundleTypeName</key>
+                      <string>Readable document or image</string>
+                      <key>CFBundleTypeRole</key>
+                      <string>Viewer</string>
+                      <key>LSHandlerRank</key>
+                      <string>Alternate</string>
+                      <key>LSItemContentTypes</key>
+                      <array>
+                          <string>public.plain-text</string>
+                          <string>net.daringfireball.markdown</string>
+                          <string>org.openxmlformats.wordprocessingml.document</string>
+                          <string>public.jpeg</string>
+                          <string>public.png</string>
+                          <string>public.heic</string>
+                          <string>public.heif</string>
+                      </array>
+                  </dict>
+              </array>
+          </dict>
+          </plist>
+          PLIST
+
+          # arm64 refuses to execute a Mach-O whose signature does not match its
+          # contents, and assembling a bundle by hand leaves it without a
+          # _CodeSignature at all. Ad-hoc signing is not notarisation — Gatekeeper
+          # will still warn on first open — but it makes the bundle internally
+          # valid rather than broken.
+          codesign --force --sign - "$APP/Contents/MacOS/accessengine"
+          codesign --force --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+
+          # Nothing outside the system frameworks should be linked. LAME and ring
+          # are static, so if a future dependency pulls in a Homebrew dylib the
+          # release would run only on a machine that happens to have Homebrew —
+          # fail here instead of shipping it.
+          leaked=$(otool -L "$APP/Contents/MacOS/accessengine" | tail -n +2 | awk '{print $1}' \
+            | grep -v '^/usr/lib/' | grep -v '^/System/' || true)
+          if [ -n "$leaked" ]; then
+            echo "error: the binary links libraries that will not exist on a user's Mac:"
+            echo "$leaked"
+            exit 1
+          fi
+
+          # The font is compiled into the binary, so its licence has to travel
+          # with the download to satisfy the Ubuntu Font Licence.
+          cp README.md LICENSE "$DIST/"
+          cp assets/fonts/UBUNTU-FONT-LICENCE-1.0.txt "$DIST/"
+          cd dist && zip -r "../${{ matrix.asset_name }}.zip" "${{ matrix.asset_name }}"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bin = "target/${{ matrix.target }}/release/accessengine.exe"
+          $dist = "dist/${{ matrix.asset_name }}"
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+          Copy-Item $bin "$dist/"
+          Copy-Item README.md, LICENSE "$dist/"
+          Copy-Item assets/fonts/UBUNTU-FONT-LICENCE-1.0.txt "$dist/"
+
+          # The Visual C++ runtime. Not part of Windows — it ships with the VC++
+          # Redistributable — and Rust's MSVC target links the CRT dynamically,
+          # so on a machine without the redistributable the app cannot start at
+          # all. (The api-ms-win-crt-* imports alongside it are the Universal
+          # CRT, which *is* part of Windows 10+, which is why this is easy to
+          # miss.) Copying app-local from the VS redist directory is explicitly
+          # permitted by Microsoft and changes nothing about how anything builds.
+          $installerDir = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vsInstall = & "$installerDir\vswhere.exe" -latest -products * -property installationPath
+          $crt = Get-ChildItem -Path "$vsInstall\VC\Redist\MSVC" -Recurse -Filter "vcruntime140.dll" `
+            | Where-Object { $_.FullName -match '\\x64\\' } `
+            | Sort-Object FullName | Select-Object -Last 1
+          if (-not $crt) { throw "could not locate the x64 VC++ redistributable DLLs" }
+          Write-Host "Bundling VC++ runtime from $($crt.Directory.FullName)"
+          Copy-Item "$($crt.Directory.FullName)\*.dll" "$dist/"
+
+          # Read the real import table rather than trusting the list below.
+          # Anything imported must be either part of Windows or present in the
+          # payload; hand-maintaining that judgement is exactly how a missing
+          # runtime DLL survives several releases unnoticed.
+          $vcvars = "$vsInstall\VC\Auxiliary\Build\vcvars64.bat"
+          $dumpOut = & cmd /c "`"$vcvars`" >nul 2>&1 && dumpbin /dependents `"$dist\accessengine.exe`""
+          $imports = $dumpOut | Select-String -Pattern '^\s{4}(\S+\.dll)$' `
+            | ForEach-Object { $_.Matches[0].Groups[1].Value.ToLower() }
+          if (-not $imports) { throw "could not read the import table of accessengine.exe" }
+
+          $shipped = Get-ChildItem $dist -Filter *.dll | ForEach-Object { $_.Name.ToLower() }
+
+          # The API-set contract DLLs. These are prefixes, matched separately
+          # from the exact names below — folding both into one anchored regex
+          # makes `api-ms-win-` only match the literal string "api-ms-win-.dll",
+          # so every real API-set name fails the check.
+          $systemPrefixes = @('api-ms-win-', 'ext-ms-win-')
+
+          # Present on any supported Windows. uiautomationcore is the UI
+          # Automation provider AccessKit binds to for screen reader support —
+          # load-bearing for this app in particular; avrt and ksuser are WASAPI
+          # audio playback; bcryptprimitives backs the system RNG.
+          $systemExact = @(
+            'kernel32.dll', 'user32.dll', 'gdi32.dll', 'advapi32.dll', 'shell32.dll',
+            'ole32.dll', 'oleaut32.dll', 'combase.dll', 'shlwapi.dll', 'comdlg32.dll',
+            'comctl32.dll', 'ws2_32.dll', 'crypt32.dll', 'secur32.dll', 'bcrypt.dll',
+            'bcryptprimitives.dll', 'ncrypt.dll', 'ntdll.dll', 'rpcrt4.dll',
+            'setupapi.dll', 'cfgmgr32.dll', 'dwmapi.dll', 'uxtheme.dll',
+            'uiautomationcore.dll', 'oleacc.dll', 'd3d11.dll', 'd3d12.dll',
+            'dxgi.dll', 'd3dcompiler_47.dll', 'opengl32.dll', 'winmm.dll',
+            'avrt.dll', 'ksuser.dll', 'mmdevapi.dll', 'audioses.dll',
+            'imm32.dll', 'version.dll', 'userenv.dll', 'powrprof.dll',
+            'propsys.dll', 'dbghelp.dll', 'hid.dll', 'dcomp.dll', 'msvcrt.dll'
+          )
+
+          $missing = $imports | Where-Object {
+            $name = $_
+            $matchesPrefix = @($systemPrefixes | Where-Object { $name.StartsWith($_) }).Count -gt 0
+            -not $matchesPrefix -and $systemExact -notcontains $name -and $shipped -notcontains $name
+          }
+          if ($missing) {
+            throw "accessengine.exe imports DLLs that are neither part of Windows nor bundled: $($missing -join ', ')"
+          }
+          Write-Host "Import check passed. Bundled: $($shipped -join ', ')"
+
+          Compress-Archive -Path $dist -DestinationPath "${{ matrix.asset_name }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}.zip
+          if-no-files-found: error
+
+      # Best-effort and non-blocking: a release must still publish when
+      # VT_API_KEY is not configured, or when VirusTotal is having a bad day.
+      - name: Submit to VirusTotal
+        shell: bash
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: |
+          set -uo pipefail
+          FILE="${{ matrix.asset_name }}.zip"
+
+          if [ -z "${VT_API_KEY:-}" ]; then
+            echo "No VT_API_KEY secret set; skipping VirusTotal submission."
+            exit 0
+          fi
+          if [ ! -f "$FILE" ]; then
+            echo "$FILE not found; skipping VirusTotal submission."
+            exit 0
+          fi
+
+          # The report is addressed by the file's own SHA-256, so the hash is
+          # what makes the link in the release notes work at all.
+          #
+          # No single tool computes it on both runners: macOS has no `sha256sum`
+          # (its GNU userland is not installed — the image aliases GNU tar as
+          # `gtar`, which is the giveaway), while Git Bash on Windows has
+          # `sha256sum` but not always `shasum`. Try each in turn rather than
+          # assuming.
+          if command -v sha256sum >/dev/null 2>&1; then
+            SHA256=$(sha256sum "$FILE" | cut -d' ' -f1)
+          elif command -v shasum >/dev/null 2>&1; then
+            SHA256=$(shasum -a 256 "$FILE" | cut -d' ' -f1)
+          else
+            SHA256=$(openssl dgst -sha256 "$FILE" | awk '{print $NF}')
+          fi
+
+          # Without a hash there is no link to publish, and uploading anyway
+          # would report success while writing a URL that goes nowhere.
+          if [ -z "$SHA256" ]; then
+            echo "Could not compute a SHA-256 for $FILE; skipping VirusTotal."
+            exit 0
+          fi
+
+          HTTP_STATUS=$(curl -s -o /tmp/vt_response.json -w "%{http_code}" \
+            --request POST \
+            --url https://www.virustotal.com/api/v3/files \
+            --header "x-apikey: $VT_API_KEY" \
+            --form file=@"$FILE")
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "VirusTotal submission failed (HTTP $HTTP_STATUS):"
+            cat /tmp/vt_response.json
+            exit 0
+          fi
+
+          echo "Submitted $FILE (sha256 $SHA256) to VirusTotal."
+          mkdir -p vt-links
+          echo "- [${{ matrix.asset_name }}](https://www.virustotal.com/gui/file/$SHA256)" > "vt-links/${{ matrix.asset_name }}.md"
+
+      - name: Upload VirusTotal link
+        if: hashFiles(format('vt-links/{0}.md', matrix.asset_name)) != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: vt-link-${{ matrix.asset_name }}
+          path: vt-links/${{ matrix.asset_name }}.md
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      # Full history: the notes are built from the commits since the previous
+      # tag, and the default shallow clone has neither the tags nor the commits
+      # to do that with.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      # CHANGELOG.md is used when there is one, because notes written for
+      # somebody deciding whether to update are not the same as commit subjects,
+      # which are written for somebody reviewing the diff. There is no changelog
+      # in this repository yet, so today this falls through to the commits.
+      - name: Extract the changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          # Everything between this version's heading and the next one. The
+          # link-reference block at the foot of such a file also ends a section:
+          # the oldest version has no heading after it, so stopping only at
+          # `## ` would append every compare URL in the file to its notes.
+          if [ -f CHANGELOG.md ]; then
+            awk -v ver="$VERSION" '
+              $0 ~ "^## \\[" ver "\\]" { inside = 1; next }
+              inside && (/^## / || /^\[[^]]+\]:/) { exit }
+              inside { print }
+            ' CHANGELOG.md > changelog-section.md
+          else
+            : > changelog-section.md
+          fi
+
+          # Trim leading and trailing blank lines. Reversing twice is the cheap
+          # way to do both ends with one rule; a blank-only file has to come out
+          # genuinely empty, because that is what the checks below test for.
+          trim() { awk 'NF {p = 1} p' | tac | awk 'NF {p = 1} p' | tac; }
+          trim < changelog-section.md > trimmed.md && mv trimmed.md changelog-section.md
+
+          if [ ! -s changelog-section.md ]; then
+            PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+            if [ -n "$PREV" ]; then
+              RANGE="${PREV}..${TAG}"
+            else
+              RANGE="$TAG"
+            fi
+            # "Bump version to X" is bookkeeping, not a change anyone updates for.
+            git log --no-merges --format='- %s' "$RANGE" \
+              | grep -v '^- Bump version to ' > changelog-section.md || true
+          fi
+
+          if [ ! -s changelog-section.md ]; then
+            echo "_No changes recorded for this release._" > changelog-section.md
+          fi
+
+      - name: Build release notes
+        run: |
+          {
+            echo "## What's changed"
+            echo
+            cat changelog-section.md
+            echo
+            echo "## Installing"
+            echo
+            echo "**macOS** — unzip and drag *Speech Output Engine.app* to Applications."
+            echo "The build is ad-hoc signed rather than notarised, so the first launch needs"
+            echo "**right-click → Open** to get past Gatekeeper. Apple silicon only."
+            echo
+            echo "**Windows** — unzip and run \`accessengine.exe\`. The Visual C++ runtime is"
+            echo "included, so nothing else needs installing."
+            echo
+            echo "Nothing needs setting up: the app uses the voices already built into your"
+            echo "operating system. Press <kbd>F1</kbd> for the keyboard shortcuts."
+            echo
+            echo "## VirusTotal scan reports"
+            echo
+            if ls artifacts/vt-link-*/*.md >/dev/null 2>&1; then
+              cat artifacts/vt-link-*/*.md
+            else
+              echo "_Not available for this release._"
+            fi
+          } > release-notes.md
+
+      - name: Attach binaries to the release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: artifacts/**/*.zip
+          body_path: release-notes.md
