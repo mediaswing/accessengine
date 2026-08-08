@@ -96,10 +96,16 @@ fn convert_to_jpeg(path: &Path) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_for_ollama, needs_conversion};
+    use super::needs_conversion;
     use std::path::PathBuf;
 
+    // Conversion only happens on macOS, so the fixture and the tests that use
+    // it are compiled there and nowhere else.
+    #[cfg(target_os = "macos")]
+    use super::encode_for_ollama;
+
     /// A 2×2 greyscale PNG, small enough to write inline.
+    #[cfg(target_os = "macos")]
     const TINY_PNG: &[u8] = &[
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x00, 0x00, 0x00, 0x00, 0x57,

@@ -20,8 +20,12 @@ use anyhow::{Result, bail};
 use anyhow::Context as _;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::io::Write as _;
+// Windows launches PowerShell through `sysexec`, which builds the `Command`
+// itself; only the macOS path constructs one here.
+#[cfg(target_os = "macos")]
+use std::process::Command;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// The keychain tool, by absolute path rather than by name.
 ///
