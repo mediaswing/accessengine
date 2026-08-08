@@ -3,6 +3,27 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.2.0] - 2026-08-08
+
+### Added
+
+- **Homebrew can be installed from inside the app** (macOS). Reading an image
+  needs Ollama, and installing Ollama needs Homebrew — so a Mac with neither
+  used to be handed a link to brew.sh and left to it. The app now offers to
+  install Homebrew itself, running Homebrew's own installer and showing what it
+  is doing as it goes. That installer needs administrator access, so a dialog
+  asks for your Mac password once; it goes straight to macOS and is not stored
+  anywhere, and dismissing it cancels the install rather than failing obscurely.
+- **Where a photo was taken.** A photo that carries a GPS position in its EXIF
+  data now has the place named at the end of its description — "Taken in
+  Sheffield, England, United Kingdom". The coordinate is all that leaves this
+  computer, to OpenStreetMap: no image, no filename, no account. A photo with no
+  location tag, or a lookup that doesn't answer, reads exactly as it did before.
+- **A new version says so.** One quiet check against the latest published
+  release when the app starts, compared to the version you are running. If
+  there is a newer one, a link to the release page appears under the header.
+  Nothing is downloaded or installed for you.
+
 ## [1.1.0] - 2026-08-08
 
 ### Fixed
