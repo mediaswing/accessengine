@@ -1,5 +1,6 @@
 //! Turning an input file into the plain text that will be spoken.
 
+pub mod csv;
 pub mod docx;
 pub mod image;
 pub mod txt;
@@ -14,6 +15,8 @@ pub enum FileKind {
     Text,
     /// Word document; text is pulled out of the OOXML body.
     Docx,
+    /// A spreadsheet export, read as a table rather than as lines of values.
+    Csv,
     /// A picture, which has to go through Ollama before there is any text.
     Image,
 }
@@ -25,6 +28,7 @@ impl FileKind {
         Some(match ext.as_str() {
             "txt" | "text" | "md" | "markdown" | "log" => Self::Text,
             "docx" => Self::Docx,
+            "csv" | "tsv" => Self::Csv,
             "jpg" | "jpeg" | "png" | "heic" | "heif" => Self::Image,
             _ => return None,
         })
@@ -34,6 +38,7 @@ impl FileKind {
         match self {
             Self::Text => "text file",
             Self::Docx => "Word document",
+            Self::Csv => "table",
             Self::Image => "image",
         }
     }
@@ -42,6 +47,7 @@ impl FileKind {
 /// Extensions offered in the open dialog, grouped the way the dialog shows them.
 pub const TEXT_EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "log"];
 pub const DOC_EXTENSIONS: &[&str] = &["docx"];
+pub const TABLE_EXTENSIONS: &[&str] = &["csv", "tsv"];
 pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "heic", "heif"];
 
 /// Reads a text or Word file. Images are not handled here because they need the
@@ -51,6 +57,7 @@ pub fn extract_document(path: &Path) -> Result<String> {
     match FileKind::from_path(path) {
         Some(FileKind::Text) => txt::extract(path),
         Some(FileKind::Docx) => docx::extract(path),
+        Some(FileKind::Csv) => csv::extract(path),
         Some(FileKind::Image) => bail!("images are read through Ollama, not this path"),
         None => bail!(
             "{} is not a file type this app can read",

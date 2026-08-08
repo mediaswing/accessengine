@@ -231,10 +231,35 @@ struct GenerateResponse {
     response: String,
     #[serde(default)]
     error: Option<String>,
+    /// Why generation stopped. `"length"` means the context ran out — see
+    /// [`VISION_CONTEXT_TOKENS`] for why that is worth knowing about.
+    #[serde(default)]
+    done_reason: Option<String>,
+}
+
+/// How much context the vision call asks for.
+///
+/// Ollama's own default is 4096 tokens, and an image is not free: a 12-megapixel
+/// photo becomes about 4095 of them all by itself. That leaves room for exactly
+/// one token of answer, which the model duly produces — a description one
+/// character long, spoken aloud as a syllable. Every photo a phone takes is over
+/// that line, so the default is no default at all here.
+///
+/// Context costs memory in proportion, so this is not set higher than the job
+/// needs: 8192 leaves a full-resolution photo about four thousand tokens to
+/// answer in, which is a page of transcription.
+const VISION_CONTEXT_TOKENS: u32 = 8192;
+
+/// A vision model's answer.
+pub struct Description {
+    pub text: String,
+    /// True if the model was cut off mid-answer by the context limit rather
+    /// than finishing. What is here is then a fragment, not an answer.
+    pub truncated: bool,
 }
 
 /// Sends one base64-encoded image to a vision model and returns its answer.
-pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<String> {
+pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<Description> {
     // Vision models on CPU are slow; ten minutes is generous but finite.
     let response = client(Duration::from_secs(600))?
         .post(format!("{HOST}/api/generate"))
@@ -243,6 +268,7 @@ pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<S
             "prompt": prompt,
             "images": [image_base64],
             "stream": false,
+            "options": { "num_ctx": VISION_CONTEXT_TOKENS },
         }))
         .send()
         .context("could not reach the Ollama server")?;
@@ -261,7 +287,26 @@ pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<S
     // An empty answer is returned as-is rather than as an error: small models
     // sometimes go quiet on an elaborate prompt, and the caller retries with a
     // simpler one before giving up.
-    Ok(body.response.trim().to_string())
+    Ok(Description {
+        text: body.response.trim().to_string(),
+        truncated: body.done_reason.as_deref() == Some("length"),
+    })
+}
+
+/// Below this, a cut-off answer is a fragment rather than a short description —
+/// the failure this app actually saw was a single character. Above it there is
+/// real content to read, even if the end is missing.
+pub const FRAGMENT_CHARS: usize = 40;
+
+/// What to say when a model runs out of room mid-answer. Only reachable now
+/// with an image dense enough to fill 8192 tokens on its own, so the advice is
+/// about the image rather than the setting.
+pub fn explain_truncation(model: &str) -> String {
+    format!(
+        "“{model}” ran out of room to answer: this image alone fills the context it was \
+         given, leaving nothing to describe it with. Try a smaller copy of the image, or \
+         a model that takes a larger context."
+    )
 }
 
 /// Turns an Ollama error into something a user can act on.

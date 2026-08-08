@@ -229,24 +229,37 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
     let encoded = extract::image::encode_for_ollama(&path)?;
 
     let _ = tx.send(Update::Status(format!("Asking {model} to read the image…")));
-    let mut text = ollama::describe_image(model, &config.ollama_prompt, &encoded.base64)?;
+    let mut described = ollama::describe_image(model, &config.ollama_prompt, &encoded.base64)?;
 
     // Smaller vision models sometimes answer a long conditional prompt with
     // nothing at all. One retry with a plain question usually gets a real
     // answer, which is a better outcome than reporting failure.
-    if text.is_empty() && !cancelled(cancel) {
+    if described.text.is_empty() && !cancelled(cancel) {
         let _ = tx.send(Update::Log(format!(
             "{model} returned nothing; retrying with a simpler prompt"
         )));
         let _ = tx.send(Update::Status(format!("Asking {model} again…")));
-        text = ollama::describe_image(
+        described = ollama::describe_image(
             model,
             crate::config::FALLBACK_VISION_PROMPT,
             &encoded.base64,
         )?;
     }
 
-    let mut text = extract::tidy(&text);
+    // A model cut off by its context limit is not worth retrying — a simpler
+    // prompt leaves the image exactly as large — so a fragment is reported
+    // rather than spoken, and a long answer that merely lost its ending is
+    // kept with a note in the log.
+    if described.truncated {
+        if described.text.chars().count() < ollama::FRAGMENT_CHARS {
+            bail!("{}", ollama::explain_truncation(model));
+        }
+        let _ = tx.send(Update::Log(format!(
+            "{model} ran out of context and stopped early; the end of this description is missing"
+        )));
+    }
+
+    let mut text = extract::tidy(&described.text);
     if text.is_empty() {
         bail!("{model} could not read anything from this image");
     }

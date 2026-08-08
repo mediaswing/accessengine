@@ -14,7 +14,9 @@
 
 use crate::audio::{self, AudioFormat, Playback};
 use crate::config::{Action, Config, DEFAULT_VISION_PROMPT, EnginePreference};
-use crate::extract::{DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, TEXT_EXTENSIONS};
+use crate::extract::{
+    DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS,
+};
 use crate::jobs::{self, Cancel, Job, Update};
 use crate::keychain::{self, KeySource};
 use crate::theme::{CONTROL_HEIGHT, FORM_WIDTH};
@@ -473,10 +475,17 @@ impl SpeechApp {
             .set_title("Choose a document or image to read")
             .add_filter(
                 "All supported files",
-                &[TEXT_EXTENSIONS, DOC_EXTENSIONS, IMAGE_EXTENSIONS].concat(),
+                &[
+                    TEXT_EXTENSIONS,
+                    DOC_EXTENSIONS,
+                    TABLE_EXTENSIONS,
+                    IMAGE_EXTENSIONS,
+                ]
+                .concat(),
             )
             .add_filter("Text files", TEXT_EXTENSIONS)
             .add_filter("Word documents", DOC_EXTENSIONS)
+            .add_filter("Tables", TABLE_EXTENSIONS)
             .add_filter("Images", IMAGE_EXTENSIONS)
             .pick_file()
         {
@@ -2249,7 +2258,7 @@ fn is_playable(path: &Path) -> bool {
         })
 }
 
-const READY_HINT: &str = "Choose a .txt, .docx or image file, then press Apply. \
+const READY_HINT: &str = "Choose a .txt, .docx, .csv or image file, then press Apply. \
                           Press F1 for keyboard shortcuts.";
 
 const DEFAULT_VOICE_LABEL: &str = "This computer's default voice";

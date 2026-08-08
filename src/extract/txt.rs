@@ -30,7 +30,7 @@ pub fn extract(path: &Path) -> Result<String> {
 /// Decodes a byte buffer to text. UTF-16 files (common when Windows tools write
 /// "Unicode" text) are detected by their byte-order mark; everything else is
 /// treated as UTF-8, with invalid sequences replaced rather than rejected.
-fn decode(bytes: &[u8]) -> String {
+pub(super) fn decode(bytes: &[u8]) -> String {
     match bytes {
         [0xFF, 0xFE, rest @ ..] => decode_utf16(rest, u16::from_le_bytes),
         [0xFE, 0xFF, rest @ ..] => decode_utf16(rest, u16::from_be_bytes),
