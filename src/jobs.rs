@@ -8,6 +8,7 @@
 use crate::audio::{self, AudioFormat};
 use crate::config::Config;
 use crate::extract::{self, FileKind};
+use crate::geocode;
 use crate::ollama;
 use crate::tts::{self, Voice};
 use anyhow::{Context, Result, bail};
@@ -37,6 +38,9 @@ pub enum Job {
     ReadDocument(PathBuf),
     /// Read an image, arranging Ollama first if it needs arranging.
     ReadImage { path: PathBuf, config: Box<Config> },
+    /// Claims Homebrew's install prefix, prompting for a password only if
+    /// that needs elevating, then runs Homebrew's own installer.
+    InstallHomebrew,
     /// `brew install ollama`.
     InstallOllama,
     /// Download a vision model.
@@ -70,6 +74,7 @@ impl Job {
                 "Looking at {}…",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ),
+            Self::InstallHomebrew => "Installing Homebrew…".to_string(),
             Self::InstallOllama => "Installing Ollama…".to_string(),
             Self::PullModel(model) => format!("Downloading {model}…"),
             Self::LoadElevenLabsVoices(_) => "Loading ElevenLabs voices…".to_string(),
@@ -81,10 +86,10 @@ impl Job {
         }
     }
 
-    /// Whether the Cancel button should appear. Interrupting a Homebrew install
-    /// halfway would leave a mess, so that one is not cancellable.
+    /// Whether the Cancel button should appear. Interrupting a Homebrew or
+    /// Ollama install halfway would leave a mess, so neither is cancellable.
     pub fn is_cancellable(&self) -> bool {
-        !matches!(self, Self::InstallOllama)
+        !matches!(self, Self::InstallHomebrew | Self::InstallOllama)
     }
 }
 
@@ -112,8 +117,10 @@ pub enum Update {
     NeedsOllamaInstall,
     /// Ollama is there but the vision model isn't.
     NeedsModel(String),
-    /// A setup step finished; the UI can retry whatever was blocked.
-    SetupComplete,
+    /// A setup step finished; the UI can retry whatever was blocked. Carries
+    /// its own message since "Ollama is ready" would be wrong to say after,
+    /// say, only Homebrew just finished installing.
+    SetupComplete(String),
     Error(String),
     /// Always sent last, whatever the outcome.
     Finished,
@@ -145,6 +152,7 @@ fn run(job: Job, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
     match job {
         Job::ReadDocument(path) => read_document(path, tx),
         Job::ReadImage { path, config } => read_image(path, &config, tx, cancel),
+        Job::InstallHomebrew => install_homebrew(tx),
         Job::InstallOllama => install_ollama(tx),
         Job::PullModel(model) => pull_model(model, tx, cancel),
         Job::LoadElevenLabsVoices(key) => {
@@ -221,7 +229,7 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
     let encoded = extract::image::encode_for_ollama(&path)?;
 
     let _ = tx.send(Update::Status(format!("Asking {model} to read the image…")));
-    let mut text = ollama::describe_image(model, &config.ollama_prompt, &encoded)?;
+    let mut text = ollama::describe_image(model, &config.ollama_prompt, &encoded.base64)?;
 
     // Smaller vision models sometimes answer a long conditional prompt with
     // nothing at all. One retry with a plain question usually gets a real
@@ -231,12 +239,38 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
             "{model} returned nothing; retrying with a simpler prompt"
         )));
         let _ = tx.send(Update::Status(format!("Asking {model} again…")));
-        text = ollama::describe_image(model, crate::config::FALLBACK_VISION_PROMPT, &encoded)?;
+        text = ollama::describe_image(
+            model,
+            crate::config::FALLBACK_VISION_PROMPT,
+            &encoded.base64,
+        )?;
     }
 
-    let text = extract::tidy(&text);
+    let mut text = extract::tidy(&text);
     if text.is_empty() {
         bail!("{model} could not read anything from this image");
+    }
+
+    // A bonus, not a requirement: a photo with no location tag, or a lookup
+    // that fails, still leaves the description the model already gave.
+    if let Some(location) = encoded.location
+        && !cancelled(cancel)
+    {
+        let _ = tx.send(Update::Status(
+            "Looking up where the photo was taken…".into(),
+        ));
+        match geocode::place_name(location.latitude, location.longitude) {
+            Ok(place) => {
+                text.push_str("\n\nTaken in ");
+                text.push_str(&place);
+                text.push('.');
+            }
+            Err(error) => {
+                let _ = tx.send(Update::Log(format!(
+                    "could not look up where the photo was taken: {error:#}"
+                )));
+            }
+        }
     }
 
     let note = format!(
@@ -244,6 +278,15 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         text.chars().count()
     );
     let _ = tx.send(Update::TextReady { text, note });
+    Ok(())
+}
+
+fn install_homebrew(tx: &Sender<Update>) -> Result<()> {
+    let log = tx.clone();
+    crate::homebrew::install(move |line| {
+        let _ = log.send(Update::Log(line));
+    })?;
+    let _ = tx.send(Update::SetupComplete("Homebrew is installed.".into()));
     Ok(())
 }
 
@@ -261,7 +304,7 @@ fn install_ollama(tx: &Sender<Update>) -> Result<()> {
 
     let _ = tx.send(Update::Status("Starting Ollama…".into()));
     ollama::ensure_running()?;
-    let _ = tx.send(Update::SetupComplete);
+    let _ = tx.send(Update::SetupComplete("Ollama is ready.".into()));
     Ok(())
 }
 
@@ -279,7 +322,7 @@ fn pull_model(model: String, tx: &Sender<Update>, cancel: &Cancel) -> Result<()>
             let _ = progress.send(Update::Progress(fraction));
         }
     })?;
-    let _ = tx.send(Update::SetupComplete);
+    let _ = tx.send(Update::SetupComplete(format!("{model} is ready.")));
     Ok(())
 }
 

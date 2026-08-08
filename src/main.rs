@@ -16,6 +16,8 @@ mod audio;
 mod config;
 mod dictionary;
 mod extract;
+mod geocode;
+mod homebrew;
 mod jobs;
 mod keychain;
 mod ollama;

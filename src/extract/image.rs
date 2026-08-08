@@ -3,6 +3,10 @@
 //! Ollama's API takes base64 image data. JPEG and PNG go straight through;
 //! HEIF/HEIC — what an iPhone photo actually is — is converted to JPEG first
 //! using macOS's own `sips`, since vision models generally can't decode it.
+//!
+//! Along the way, the same bytes are checked for an embedded GPS position —
+//! most cameras and phones write one to EXIF unless location tagging was
+//! turned off. See [`crate::geocode`] for what becomes of it.
 
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
@@ -13,8 +17,22 @@ use std::path::Path;
 /// models downscale aggressively anyway, so a huge file buys nothing.
 const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Loads an image as base64, converting to JPEG if the format needs it.
-pub fn encode_for_ollama(path: &Path) -> Result<String> {
+/// A coordinate read out of a photo's EXIF data, in decimal degrees.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GpsLocation {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+/// An image ready to send to Ollama, and wherever EXIF says it was taken.
+pub struct EncodedImage {
+    pub base64: String,
+    pub location: Option<GpsLocation>,
+}
+
+/// Loads an image as base64, converting to JPEG if the format needs it, and
+/// pulls out its GPS position if it has one.
+pub fn encode_for_ollama(path: &Path) -> Result<EncodedImage> {
     let size = std::fs::metadata(path)
         .with_context(|| format!("could not read {}", path.display()))?
         .len();
@@ -30,7 +48,67 @@ pub fn encode_for_ollama(path: &Path) -> Result<String> {
     } else {
         std::fs::read(path).with_context(|| format!("could not read {}", path.display()))?
     };
-    Ok(BASE64.encode(bytes))
+    let location = gps_location(&bytes);
+    Ok(EncodedImage {
+        base64: BASE64.encode(bytes),
+        location,
+    })
+}
+
+/// Reads a GPS position out of EXIF, if the image has one. Absent EXIF, an
+/// unrecognised container, or a photo with location tagging turned off are
+/// all just `None` — this is a bonus, not something the read should fail
+/// over.
+fn gps_location(bytes: &[u8]) -> Option<GpsLocation> {
+    let exif = exif::Reader::new()
+        .read_from_container(&mut std::io::Cursor::new(bytes))
+        .ok()?;
+    Some(GpsLocation {
+        latitude: coordinate(
+            &exif,
+            exif::Tag::GPSLatitude,
+            exif::Tag::GPSLatitudeRef,
+            b'S',
+        )?,
+        longitude: coordinate(
+            &exif,
+            exif::Tag::GPSLongitude,
+            exif::Tag::GPSLongitudeRef,
+            b'W',
+        )?,
+    })
+}
+
+/// One half of a coordinate: the `value_tag` gives degrees/minutes/seconds,
+/// the `ref_tag` gives the hemisphere. `negative` is the reference letter
+/// ('S' or 'W') that flips the sign — EXIF stores both always positive.
+fn coordinate(
+    exif: &exif::Exif,
+    value_tag: exif::Tag,
+    ref_tag: exif::Tag,
+    negative: u8,
+) -> Option<f64> {
+    let exif::Value::Rational(parts) = &exif.get_field(value_tag, exif::In::PRIMARY)?.value else {
+        return None;
+    };
+    let degrees = dms_to_decimal(parts)?;
+
+    let exif::Value::Ascii(refs) = &exif.get_field(ref_tag, exif::In::PRIMARY)?.value else {
+        return None;
+    };
+    let is_negative = refs.first()?.first()?.to_ascii_uppercase() == negative;
+    Some(if is_negative { -degrees } else { degrees })
+}
+
+/// EXIF gives degrees/minutes/seconds as up to three rationals; some cameras
+/// omit the seconds, or even the minutes, so all three lengths are accepted.
+fn dms_to_decimal(parts: &[exif::Rational]) -> Option<f64> {
+    match parts {
+        [deg] => Some(deg.to_f64()),
+        [deg, min] => Some(deg.to_f64() + min.to_f64() / 60.0),
+        [deg, min, sec] => Some(deg.to_f64() + min.to_f64() / 60.0 + sec.to_f64() / 3600.0),
+        _ => None,
+    }
 }
 
 fn needs_conversion(path: &Path) -> bool {
@@ -145,7 +223,7 @@ mod tests {
         std::fs::remove_file(&heic).ok();
 
         let bytes = base64::engine::general_purpose::STANDARD
-            .decode(&encoded)
+            .decode(&encoded.base64)
             .expect("the result should be base64");
         // JPEG's magic number: what reaches Ollama is no longer HEIC.
         assert_eq!(&bytes[..3], &[0xFF, 0xD8, 0xFF], "not a JPEG");

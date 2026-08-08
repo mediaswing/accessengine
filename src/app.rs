@@ -860,7 +860,7 @@ impl SpeechApp {
                 }
                 // Whatever was waiting on Ollama is in `deferred` and starts as
                 // soon as the setup job sends `Finished`.
-                Update::SetupComplete => self.set_status("Ollama is ready.", Tone::Success),
+                Update::SetupComplete(message) => self.set_status(message, Tone::Success),
                 Update::ElevenLabsVoicesFailed(message) => {
                     self.elevenlabs_voices = VoiceList {
                         voices: Vec::new(),
@@ -2121,7 +2121,25 @@ impl SpeechApp {
                         ui.add(egui::Label::new(crate::ollama::MANUAL_INSTALL_ADVICE).wrap());
                         ui.hyperlink_to("Download Ollama", "https://ollama.com/download");
                         if cfg!(target_os = "macos") {
-                            ui.hyperlink_to("Install Homebrew", "https://brew.sh");
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new(format!(
+                                    "This may ask for your Mac's password, then runs: {}",
+                                    crate::homebrew::INSTALL_COMMAND
+                                ))
+                                .monospace(),
+                            );
+                            ui.add_space(8.0);
+                            if ui
+                                .add_enabled(
+                                    !busy,
+                                    egui::Button::new("Install Homebrew")
+                                        .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+                                )
+                                .clicked()
+                            {
+                                decision = Some(Some(Job::InstallHomebrew));
+                            }
                         }
                         ui.add_space(8.0);
                     }

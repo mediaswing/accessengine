@@ -305,8 +305,8 @@ pub fn install_command() -> Option<String> {
 
 /// Advice for when there is no package manager to drive.
 #[cfg(target_os = "macos")]
-pub const MANUAL_INSTALL_ADVICE: &str = "Homebrew isn't installed either, so this can't be automated. Ollama can be \
-     downloaded and installed by hand instead.";
+pub const MANUAL_INSTALL_ADVICE: &str = "Homebrew isn't installed, so this can't be automated yet. Install Homebrew \
+     below, or download Ollama and install it by hand.";
 #[cfg(not(target_os = "macos"))]
 pub const MANUAL_INSTALL_ADVICE: &str = "There is no package manager here that the app can drive, so this can't be \
      automated. Ollama can be downloaded and installed by hand instead.";
@@ -351,12 +351,8 @@ fn package_manager() -> Option<Installer> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
-            .iter()
-            .map(std::path::PathBuf::from)
-            .find(|path| path.exists())?;
         Some(Installer {
-            program: brew,
+            program: crate::homebrew::path()?,
             args: &["install", "ollama"],
         })
     }
