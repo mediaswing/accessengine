@@ -420,6 +420,12 @@ mod tests {
     }
 
     /// Runs a save job to completion and returns the updates it emitted.
+    ///
+    /// Carries the same `cfg` as the only tests that call it: both drive the
+    /// system voice through a real save, which this suite does on macOS only.
+    /// Without it the helper is dead code on Windows, which `-D warnings`
+    /// rightly refuses to build.
+    #[cfg(target_os = "macos")]
     fn run_save(path: &std::path::Path, format: AudioFormat) -> Vec<Update> {
         let (tx, rx) = channel();
         let cancel: Cancel = Arc::new(AtomicBool::new(false));
