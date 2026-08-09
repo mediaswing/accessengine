@@ -69,6 +69,14 @@ fn delimiter_of(text: &str) -> char {
 /// since a hand-written file is likelier to contain 5" than to mean anything
 /// by it.
 ///
+/// "Anywhere else" deliberately does not include the space after a delimiter.
+/// RFC 4180 says an opening quote comes immediately after the separator, and
+/// plenty of real exports write `a, "b"` anyway. Read strictly, the quotes in
+/// such a field stop being punctuation and become part of the value — which is
+/// heard as a stray "quote" in the middle of a sentence, and, far worse, lets
+/// a delimiter inside the field split it in two. Leading whitespace before an
+/// opening quote is therefore skipped.
+///
 /// Rows that are entirely empty are dropped — a trailing newline is not a row,
 /// and neither is the blank line spreadsheets like to leave at the end.
 fn parse(text: &str, delimiter: char) -> Vec<Vec<String>> {
@@ -91,7 +99,11 @@ fn parse(text: &str, delimiter: char) -> Vec<Vec<String>> {
             continue;
         }
         match c {
-            '"' if field.is_empty() => quoted = true,
+            '"' if field.trim().is_empty() => {
+                // The padding, not part of the value that follows it.
+                field.clear();
+                quoted = true;
+            }
             '\r' | '\n' => {
                 if c == '\r' && chars.peek() == Some(&'\n') {
                     chars.next();
@@ -140,7 +152,7 @@ fn speak(rows: &[Vec<String>]) -> String {
 
     out.push('\n');
     for (index, row) in body.iter().enumerate() {
-        let values: Vec<String> = row
+        let values: Vec<String> = trimmed(row, headings.len())
             .iter()
             .enumerate()
             .map(|(column, value)| {
@@ -154,6 +166,26 @@ fn speak(rows: &[Vec<String>]) -> String {
         out.push_str(&format!("\nRow {}. {}", index + 1, values.join(" ")));
     }
     out
+}
+
+/// A row without the empty cells hanging off the end of it that no heading
+/// covers.
+///
+/// A line ending in the delimiter — `Entertainment,£82.50,` — is a field the
+/// writer did not mean to add, and spreadsheet exports produce them readily.
+/// Left in, every row of such a file ends with "Column 3: empty", which is the
+/// last thing heard about each row and says nothing about any of them.
+///
+/// Only cells *past the headings* are dropped, and only empty ones. A short row
+/// still reports the columns it is missing, and a genuinely extra value is
+/// still announced under a numbered column rather than silently discarded — the
+/// alternative would be an app that quietly does not read part of the file.
+fn trimmed(row: &[String], headings: usize) -> &[String] {
+    let mut len = row.len();
+    while len > headings && row[len - 1].trim().is_empty() {
+        len -= 1;
+    }
+    &row[..len]
 }
 
 /// A heading as it should be heard: underscores are spaces, runs of whitespace
@@ -310,6 +342,57 @@ mod tests {
             "Table with 1 row and 2 columns.\n\
              \nRow 1. first name: Ada. city: London, England."
         );
+    }
+
+    /// `a, "b"` — a space between the separator and the opening quote, which
+    /// RFC 4180 does not allow and real exports write anyway.
+    ///
+    /// Read strictly, the quotes become part of the value and are heard aloud;
+    /// worse, a delimiter inside the field then splits it, so `"London,
+    /// England"` arrives as two columns and the row is silently wrong from
+    /// there on.
+    #[test]
+    fn a_space_before_an_opening_quote_does_not_make_the_quotes_part_of_the_value() {
+        let rows = parse("name,city\nAda, \"London, England\"\n", ',');
+        assert_eq!(rows[1], vec!["Ada", "London, England"]);
+    }
+
+    /// The other half of that rule: a quote that is not opening a field is an
+    /// ordinary character, because a table of measurements is full of them.
+    #[test]
+    fn a_quote_inside_an_unquoted_value_is_still_an_ordinary_character() {
+        let rows = parse("part,size\npipe,5\" bore\n", ',');
+        assert_eq!(rows[1], vec!["pipe", "5\" bore"]);
+    }
+
+    /// A line ending in the delimiter adds a field nobody meant to write. Read
+    /// out, it ends every single row with "Column 3: empty".
+    #[test]
+    fn a_trailing_delimiter_does_not_add_an_empty_column_to_every_row() {
+        let spoken = speak(&parse("name,age\nAda,36,\nAlan,41,\n", ','));
+        assert_eq!(
+            spoken,
+            "Table with 2 rows and 2 columns.\n\
+             \nRow 1. name: Ada. age: 36.\
+             \nRow 2. name: Alan. age: 41."
+        );
+    }
+
+    /// Dropping the phantom column must not become an app that quietly skips
+    /// data: an extra value with something in it is still read.
+    #[test]
+    fn an_extra_value_past_the_headings_is_still_read_out() {
+        let spoken = speak(&parse("name,age\nAda,36,Countess,\n", ','));
+        assert!(spoken.contains("Row 1. name: Ada. age: 36. Column 3: Countess."));
+        assert!(!spoken.contains("Column 4"), "{spoken}");
+    }
+
+    /// An empty cell *within* the table is missing data and worth saying; only
+    /// the ones hanging off the end past every heading are noise.
+    #[test]
+    fn an_empty_cell_under_a_heading_is_still_announced() {
+        let spoken = speak(&parse("name,age\nAda,\n", ','));
+        assert!(spoken.contains("name: Ada. age: empty."), "{spoken}");
     }
 
     /// Blank lines are formatting, and a trailing newline is not a row.
