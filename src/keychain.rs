@@ -282,9 +282,18 @@ fn read_at(path: &std::path::Path) -> Result<Option<String>> {
     }
     // `ConvertTo-SecureString` on a DPAPI blob only succeeds for the account
     // that wrote it, which is the whole point of storing it this way.
+    //
+    // `Import-Module` is explicit rather than left to PowerShell's own
+    // autoloading: autoloading resolves an unqualified command by scanning
+    // and writing a shared module-analysis cache, and several PowerShell
+    // processes doing that at once — as several of this app's own scripts do,
+    // launched close together — can race on that cache and fail with
+    // `CouldNotAutoloadMatchingModule` even though the module is right there.
+    // Naming it up front sidesteps the discovery step entirely.
     let script = format!(
         "\
 $ErrorActionPreference = 'Stop'
+Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $blob = (Get-Content -LiteralPath {} -Raw).Trim()
 $secure = ConvertTo-SecureString -String $blob
@@ -310,13 +319,14 @@ pub fn store(key: &str) -> Result<()> {
 }
 
 /// See [`read_at`] for why `InputEncoding` is set before the key is read off
-/// the console stream — without it, a non-ASCII character sent over stdin
-/// arrives as the wrong character.
+/// the console stream, and why the module is imported by name rather than
+/// left to autoload.
 #[cfg(target_os = "windows")]
 fn store_at(path: &std::path::Path, key: &str) -> Result<()> {
     let script = format!(
         "\
 $ErrorActionPreference = 'Stop'
+Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
 [Console]::InputEncoding = [Text.Encoding]::UTF8
 $plain = [Console]::In.ReadToEnd().Trim()
 $secure = ConvertTo-SecureString -String $plain -AsPlainText -Force
