@@ -3,6 +3,37 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.2.5] - 2026-08-09
+
+### Added
+
+- **A newer version now shows its changelog, not just a link.** The startup
+  check for a newer release opens a window with what changed in it, and two
+  buttons: **Download Release**, which goes straight to the build for this
+  platform, and **Not Right Now**, which dismisses it for the session.
+  Previously all this gave you was a small link to the releases page under
+  the header.
+
+### Fixed
+
+- **Non-ASCII characters in an API key, or in a system voice's name, were
+  silently corrupted on Windows.** The app talks to PowerShell over standard
+  input and output for both, and Windows reads and writes those streams
+  through a legacy code page rather than UTF-8 whenever there is no console
+  window attached — which is always, for the windowless PowerShell this app
+  runs. An ElevenLabs key with anything but plain ASCII in it could fail to
+  save with "the key was not stored correctly," and an installed voice with
+  an accented name could show up wrong in the voice picker. Both streams are
+  now explicitly read and written as UTF-8.
+
+- **Text and CSV files saved as "ANSI" read out as replacement characters
+  instead of accented letters.** Excel's plain "CSV (Comma delimited)"
+  export, and Notepad before Windows 10's 1809 update, both write
+  Windows-1252 rather than UTF-8 — a name like "José" came out with the
+  accent replaced by a stray placeholder glyph instead of being read
+  correctly. A file that isn't valid UTF-8 is now read as Windows-1252
+  instead of losing the accented characters.
+
 ## [1.2.3] - 2026-08-09
 
 ### Added
