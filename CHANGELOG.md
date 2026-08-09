@@ -3,6 +3,34 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.2.8] - 2026-08-10
+
+### Added
+
+- **Word documents can now have their formatting read out.** A new **What to
+  read** dropdown on the main pane chooses between *Words only*, which is what
+  the app has always done and is still what it does unless you change it, and
+  *Words and formatting*, which announces where bold, italic, underline,
+  strikethrough, colour and highlighting start and end — "your payment of,
+  bold, dark red text, £82.50, end dark red text, end bold, is due on the
+  30th". If you cannot see the page there is otherwise no way to know that a
+  date was emphasised, or that a contract put one clause in red.
+
+  Both ends of each run are announced rather than only the start, so you can
+  tell which words were covered. Only the *change* between one run and the next
+  is spoken, so a whole emphasised sentence is announced once rather than at
+  every word. Colours are named — "dark red", "light blue" — rather than read
+  out as the hex numbers Word stores. Black is not announced at all, since Word
+  writes it explicitly throughout documents nobody has ever recoloured.
+
+  Changing the setting re-reads the document you already have open. It is
+  greyed out, with the reason, for files that carry no formatting.
+
+  Formatting applied through a Word *style* is not announced — only formatting
+  applied directly, which is what the bold button does. In practice this
+  reports what the author chose to emphasise, instead of announcing every
+  heading in the document as bold.
+
 ## [1.2.7] - 2026-08-09
 
 ### Fixed
