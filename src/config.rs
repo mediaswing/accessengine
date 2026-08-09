@@ -1,6 +1,8 @@
 //! Non-secret settings, persisted as JSON next to the app's support files.
 //!
-//! The ElevenLabs API key deliberately lives elsewhere; see [`crate::keychain`].
+//! The ElevenLabs API key lives in a file of its own alongside this one, so
+//! that a secret is not rewritten every time a setting changes; see
+//! [`crate::apikey`].
 
 use crate::audio::AudioFormat;
 use crate::dictionary::Replacement;

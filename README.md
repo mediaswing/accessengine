@@ -131,10 +131,16 @@ audio that comes back is neither empty nor silent.
 
 Without a key the app just works, using the system voices. To use ElevenLabs,
 choose it in the **Speech engine** dropdown and the key dialog appears; you can
-also reach it any time with <kbd>⌘K</kbd>. The key is stored in your **login
-keychain** on macOS, and **encrypted for your Windows account** with DPAPI on
-Windows. It never goes in a settings file, and never on a command line where
-another process could read it.
+also reach it any time with <kbd>⌘K</kbd>. The key is saved in `elevenlabs.key`
+in the app's own settings folder — under `~/Library/Application Support` on
+macOS, `%APPDATA%` on Windows — as plain text, in a file only your account can
+read. It never goes on a command line where another process could read it.
+
+Earlier versions kept it in the macOS login keychain and in a DPAPI blob on
+Windows. Both reached their storage by handing the key to another program, and
+both had ways to fail that produced a wrong answer without saying so; a key
+saved by one of those versions is moved into the file above the first time this
+one runs. See [Security](#security) for what the change does and doesn't cost.
 
 If you'd rather not store it at all, set the environment variable instead — it
 takes priority over the stored key and nothing is written to disk:
@@ -194,17 +200,26 @@ treated as untrusted.
   program is launched with its arguments as a list.
 - **Programs are named by absolute path** — `/usr/bin/say`, `/usr/bin/security`,
   `System32\WindowsPowerShell\v1.0\powershell.exe`. A bare name would let
-  `PATH`, or the directory the app was unzipped into, decide which binary runs;
-  one of those binaries is handed the API key.
+  `PATH`, or the directory the app was unzipped into, decide which binary runs —
+  and one of them is handed your documents to speak, another the old stored key
+  to hand back.
 - **Documents never go on a command line.** macOS pipes the text to `say` over
   stdin; Windows stages it in a file the PowerShell script deletes as soon as it
   has read it. Anything that *is* interpolated into a generated script — paths,
   voice names — is escaped for a PowerShell single-quoted string, and that
   escaping is unit-tested on every platform.
-- **The API key goes over stdin in both directions**, so it never appears in the
-  process list, and never in the config file. macOS keeps it in the login
-  keychain; Windows encrypts it with DPAPI, readable only by the same account on
-  the same machine.
+- **The API key never appears on a command line**, so it is never in the process
+  list, and it is kept out of the config file so that the file you would paste
+  into a bug report holds no secret. It is stored as plain text in
+  `elevenlabs.key` in the app's settings folder, created `0600` on macOS so no
+  other account can read it. This is a deliberate step back from the keychain
+  and DPAPI that earlier versions used: both worked by handing the key to
+  another program, and both could fail in ways that stored the wrong thing and
+  reported success. What they actually bought was less than it looks — the
+  DPAPI blob decrypts for this same user, and the keychain item was written so
+  that `security` could read it back without a prompt, so both were one
+  subprocess away for anything already running as you. Reliably having the key
+  the user typed was worth more than that margin.
 - **Input is bounded.** Images are capped at 64 MB, plain text at 64 MB, and a
   `.docx` body at 128 MB *after decompression* — a zip bomb is a few hundred
   kilobytes on disk, and an app that dies on one is an app that fails the person
@@ -231,7 +246,7 @@ Output Engine.
 | `src/tts/` | The ElevenLabs and system-voice engines, and text chunking |
 | `src/audio.rs` | PCM, WAV/MP3 encoding, playback and the transport |
 | `src/ollama.rs` | Detecting, installing and calling Ollama |
-| `src/keychain.rs` | API key storage |
+| `src/apikey.rs` | API key storage |
 | `src/sysexec.rs` | Locating system programs, and staging files for them |
 | `src/config.rs` | Everything else, as JSON |
 
@@ -240,7 +255,7 @@ install, rendering a file — becomes a job on its own thread that reports
 progress over a channel, which the UI drains once per frame. Jobs know nothing
 about egui.
 
-Platform differences are confined to `src/tts/system.rs`, `src/keychain.rs` and
+Platform differences are confined to `src/tts/system.rs` and
 `src/ollama.rs`, each of which has one module per platform behind a shared
 signature, rather than `cfg` scattered through the app.
 

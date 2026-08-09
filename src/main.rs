@@ -11,6 +11,7 @@
 // Don't open a console window alongside the GUI on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod apikey;
 mod app;
 mod audio;
 mod config;
@@ -19,7 +20,6 @@ mod extract;
 mod geocode;
 mod homebrew;
 mod jobs;
-mod keychain;
 mod log;
 mod ollama;
 mod sysexec;

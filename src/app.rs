@@ -12,13 +12,13 @@
 //! The UI thread never blocks. Anything slow becomes a [`Job`]; results arrive
 //! as [`Update`]s that [`SpeechApp::drain_updates`] applies once per frame.
 
+use crate::apikey::{self, KeySource};
 use crate::audio::{self, AudioFormat, Playback};
 use crate::config::{Action, Config, DEFAULT_VISION_PROMPT, EnginePreference};
 use crate::extract::{
     DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS,
 };
 use crate::jobs::{self, Cancel, Job, Update};
-use crate::keychain::{self, KeySource};
 use crate::theme::{CONTROL_HEIGHT, FORM_WIDTH};
 use crate::tts::{self, Voice};
 use crate::update;
@@ -272,7 +272,7 @@ impl SpeechApp {
 
         let (tx, rx) = channel();
         let (update_tx, update_rx) = channel();
-        let (api_key, key_source) = keychain::load();
+        let (api_key, key_source) = apikey::load();
         let config = Config::load();
 
         let mut app = Self {
@@ -1154,7 +1154,7 @@ impl SpeechApp {
             ActiveEngine::ElevenLabs => {
                 let source = match self.key_source {
                     KeySource::Env => "API key from the environment",
-                    _ => "API key stored securely on this computer",
+                    _ => "API key saved on this computer",
                 };
                 let muted = crate::theme::palette(ui.visuals()).muted;
                 ui.label(RichText::new(source).color(muted));
@@ -1591,11 +1591,11 @@ impl SpeechApp {
                 ui.label(format!(
                     "The key in the {} environment variable is being used. \
                      Unset it if you would rather manage the key here.",
-                    keychain::ENV_VAR
+                    apikey::ENV_VAR
                 ));
             }
-            KeySource::Keychain => {
-                ui.label("A key is saved securely on this computer, so ElevenLabs voices are ready to use.");
+            KeySource::Stored => {
+                ui.label("A key is saved on this computer, so ElevenLabs voices are ready to use.");
                 ui.add_space(8.0);
                 if ui
                     .add(
@@ -1604,7 +1604,7 @@ impl SpeechApp {
                     )
                     .clicked()
                 {
-                    match keychain::clear() {
+                    match apikey::clear() {
                         Ok(()) => {
                             self.api_key = None;
                             self.key_source = KeySource::None;
@@ -1618,10 +1618,10 @@ impl SpeechApp {
             KeySource::None => {
                 ui.add(
                     egui::Label::new(format!(
-                        "Paste the key from your ElevenLabs account. It is stored {}, \
-                         never in a settings file. Without a key, choose System voices instead — \
+                        "Paste the key from your ElevenLabs account. It is kept {}, in a file only \
+                         your account can read. Without a key, choose System voices instead — \
                          they need no account and work offline.",
-                        keychain::STORAGE_DESCRIPTION
+                        apikey::STORAGE_DESCRIPTION
                     ))
                     .wrap(),
                 );
@@ -1650,10 +1650,10 @@ impl SpeechApp {
                 );
                 if save.clicked() || (submitted && typed) {
                     let key = self.key_input.trim().to_string();
-                    match keychain::store(&key) {
+                    match apikey::store(&key) {
                         Ok(()) => {
                             self.api_key = Some(key);
-                            self.key_source = KeySource::Keychain;
+                            self.key_source = KeySource::Stored;
                             self.elevenlabs_voices = VoiceList::default();
                             self.set_status("API key saved.", Tone::Success);
                             self.close_dialog();
