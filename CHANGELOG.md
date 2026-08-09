@@ -3,6 +3,64 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.2.3] - 2026-08-09
+
+### Added
+
+- **A diagnostics log, and a button to copy it.** The app now keeps a record of
+  what it did during each session — the files it opened, the vision models it
+  called and what they answered, how long each step took. **Settings** has a
+  **Copy Diagnostics To Clipboard** button that puts the whole thing on the
+  clipboard, ready to paste into a bug report, so nobody has to go hunting for a
+  file to report a problem. The log starts fresh each time the app opens and the
+  previous session's is kept alongside it, so restarting to have another go
+  doesn't destroy the evidence of what went wrong the first time. It records
+  what the app *did*, not what you read: the text of your documents never goes
+  in, only how much of it there was, and anything shaped like an API key is
+  scrubbed out. On macOS it is in `~/Library/Logs/accessengine`, where Console
+  finds it on its own.
+
+### Fixed
+
+- **The ElevenLabs API key was not being saved.** Entering a key worked for as
+  long as the app stayed open, and was gone the next time it started — the app
+  said "API key saved" and had in fact saved nothing. Saving a password to the
+  keychain means answering two prompts, the password and a confirmation, and the
+  app only ever answered the first; the keychain then stored an empty password
+  and reported success. Anyone who launched the app from a terminal saw this as
+  a stray password prompt appearing in the terminal window. The key is now
+  stored properly, and read back and checked before the app claims to have saved
+  it, so a failure can no longer be silent. Enter your key once more and it will
+  stay.
+
+- **Photographs of places were answered with a road sign.** A photo of a city
+  square came back as the words "One Way" and nothing else — no description of
+  the buildings, the crossing or the trees. The app asked the vision model to
+  transcribe the text in an image and to describe the picture *only if it
+  contained no text*, and almost every real photograph contains some text
+  somewhere: a shop front, a number plate, a road sign. One incidental sign was
+  enough to suppress the description entirely. Photos are now always described,
+  with any text in them read out afterwards, while a photographed page or
+  screenshot is still transcribed in full and without a preamble. If you were
+  using the standard prompt it is updated for you; a prompt you wrote yourself
+  is left alone.
+
+- **Photographed text was read out as gibberish.** A photo of a page came back
+  as invented words — `L1: 2 l1s q4k b3wv f0 rjzrsw0` — so the only intelligible
+  thing in the audio was the line saying where the photo was taken. Photos were
+  sent at full resolution, and Ollama's own shrinking of them to fit the vision
+  model turned small text to mush; a vision model handed mush does not say it
+  cannot read the image, it invents text that looks about right. Photos are now
+  shrunk before they are sent, carefully enough to stay legible. This costs the
+  model exactly the same to read as before, so nothing is slower, and the same
+  photo that produced nonsense now transcribes correctly. HEIC photos from an
+  iPhone were the worst affected.
+
+- **Sideways photos are turned upright.** A photo taken with the phone rotated
+  is stored on its side with a note to turn it, which was lost on the way to the
+  vision model — so it was asked to read a page lying on its side. The rotation
+  is now applied to the picture itself before it is sent.
+
 ## [1.2.2] - 2026-08-08
 
 ### Fixed
