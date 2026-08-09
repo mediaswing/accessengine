@@ -3,6 +3,35 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.2.6] - 2026-08-09
+
+### Changed
+
+- **The ElevenLabs API key is now kept in a file, not in the keychain.** It goes
+  in `elevenlabs.key` in the app's own settings folder — `~/Library/Application
+  Support` on macOS, `%APPDATA%` on Windows — as plain text, in a file only your
+  account can read. A key saved by an earlier version is moved there the first
+  time this one runs, so there is nothing to re-enter.
+
+  This is a deliberate step back from the macOS login keychain and Windows
+  DPAPI, because both were reached by handing the key to another program and
+  both could fail in ways that *stored the wrong thing and reported success*.
+  The macOS one had the worse version of that: `security` reads a password from
+  the terminal, not from the pipe it was given, so running the app from a
+  terminal made it hang on a prompt the user could not see, and then store
+  whatever they eventually typed. What the old storage bought was thinner than
+  it sounds — the DPAPI blob decrypts for this same account, and the keychain
+  item could be read back without a prompt — so anything already running as you
+  could reach either. Actually keeping the key you typed is worth more.
+
+### Fixed
+
+- **Entering an API key could hang the app and then save the wrong thing.** The
+  cause is above. The window stopped responding, a password prompt appeared in
+  the terminal if the app had been started from one, and whatever was typed
+  there was saved in place of the key — after which the app still reported that
+  no key had been entered.
+
 ## [1.2.5] - 2026-08-09
 
 ### Added
