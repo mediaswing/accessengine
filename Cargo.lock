@@ -28,6 +28,7 @@ dependencies = [
  "eframe",
  "egui",
  "hound",
+ "image",
  "kamadak-exif",
  "mp3lame-encoder",
  "quick-xml",
@@ -1833,6 +1834,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

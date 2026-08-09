@@ -849,6 +849,7 @@ impl SpeechApp {
                     }
                 }
                 Update::Log(line) => {
+                    crate::log::line(&line);
                     self.show_log = true;
                     self.log.push(line);
                     // Keep the pane bounded; a model pull emits a lot of lines.
@@ -857,6 +858,9 @@ impl SpeechApp {
                     }
                 }
                 Update::TextReady { text, note } => {
+                    // The note, not the text: how much was extracted is the
+                    // useful part, and the document itself is the user's.
+                    crate::log::line(format!("extracted {note}"));
                     self.text = text;
                     self.text_note = note;
                     self.cached = None;
@@ -887,6 +891,7 @@ impl SpeechApp {
                     self.begin_playback(mp3);
                 }
                 Update::Saved(path) => {
+                    crate::log::line(format!("saved {}", path.display()));
                     self.set_status(format!("Saved to {}", path.display()), Tone::Success);
                 }
                 Update::NeedsOllamaInstall => {
@@ -906,6 +911,7 @@ impl SpeechApp {
                     };
                 }
                 Update::Error(message) => {
+                    crate::log::line(format!("failed: {message}"));
                     self.set_status(message, Tone::Error);
                     // Don't retry the step that was waiting on a failed one; it
                     // would only re-raise the same prompt.
@@ -2109,11 +2115,50 @@ impl SpeechApp {
 
         ui.add_space(12.0);
         ui.separator();
+        ui.add(
+            egui::Label::new(
+                "If something goes wrong, this copies a record of what the app did this \
+                 session — the files it read, the models it called and what they answered — \
+                 ready to paste into a bug report. It contains no part of your documents and \
+                 not your API key.",
+            )
+            .wrap(),
+        );
+        ui.add_space(8.0);
+        // Copied to the clipboard rather than revealed in a file manager: the
+        // people this app is built for should not have to go and find a file
+        // on disk to report a problem with it.
+        if ui
+            .add(
+                egui::Button::new("Copy Diagnostics To Clipboard")
+                    .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
+            )
+            .clicked()
+        {
+            let diagnostics = crate::log::contents();
+            let lines = diagnostics.lines().count();
+            ui.ctx().copy_text(diagnostics);
+            self.set_status(
+                format!("Diagnostics copied — {lines} lines. Paste them into your report."),
+                Tone::Success,
+            );
+        }
+
+        ui.add_space(12.0);
+        ui.separator();
+        let muted = crate::theme::palette(ui.visuals()).muted;
         if let Some(path) = Config::path() {
-            let muted = crate::theme::palette(ui.visuals()).muted;
             ui.add(
                 egui::Label::new(
                     RichText::new(format!("Settings file: {}", path.display())).color(muted),
+                )
+                .wrap(),
+            );
+        }
+        if let Some(path) = crate::log::path() {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("Log file: {}", path.display())).color(muted),
                 )
                 .wrap(),
             );

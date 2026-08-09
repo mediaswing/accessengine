@@ -235,6 +235,14 @@ struct GenerateResponse {
     /// [`VISION_CONTEXT_TOKENS`] for why that is worth knowing about.
     #[serde(default)]
     done_reason: Option<String>,
+    /// Tokens the image and prompt cost, and tokens the answer took. Not used
+    /// to decide anything — they go in the log, where they are the numbers that
+    /// distinguish "the model read a clear image" from "the model was handed
+    /// something it had to squeeze, and invented an answer".
+    #[serde(default)]
+    prompt_eval_count: Option<u32>,
+    #[serde(default)]
+    eval_count: Option<u32>,
 }
 
 /// How much context the vision call asks for.
@@ -260,6 +268,12 @@ pub struct Description {
 
 /// Sends one base64-encoded image to a vision model and returns its answer.
 pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<Description> {
+    crate::log::line(format!(
+        "ollama: asking {model} to read an image ({} KB encoded, prompt {} characters, num_ctx {VISION_CONTEXT_TOKENS})",
+        image_base64.len() / 1024,
+        prompt.chars().count()
+    ));
+
     // Vision models on CPU are slow; ten minutes is generous but finite.
     let response = client(Duration::from_secs(600))?
         .post(format!("{HOST}/api/generate"))
@@ -278,19 +292,58 @@ pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<D
         .json()
         .context("the Ollama server returned an unexpected response")?;
     if let Some(error) = body.error {
+        crate::log::line(format!("ollama: failed — {error}"));
         bail!("{}", explain_failure(model, &error));
     }
     if !status.is_success() {
+        crate::log::line(format!("ollama: HTTP {status}"));
         bail!("Ollama returned HTTP {status} while reading the image");
     }
+
+    let answer = body.response.trim();
+    crate::log::line(format!(
+        "ollama: answered in {} characters — done_reason {}, image and prompt cost {} tokens, answer took {} tokens",
+        answer.chars().count(),
+        body.done_reason.as_deref().unwrap_or("none given"),
+        describe_count(body.prompt_eval_count),
+        describe_count(body.eval_count),
+    ));
+    // The opening of the answer, and only the opening.
+    //
+    // This is the one piece of the user's own content the log keeps, and it
+    // earns its place: a model that has been handed an unreadable image says so
+    // nowhere in the numbers above — every one of them reads as success — and
+    // the only way to tell is to look at the words. Invented text gives itself
+    // away immediately, so the first line is enough, and a bounded excerpt
+    // keeps the log from quietly accumulating whole private documents.
+    crate::log::line(format!("ollama: answer begins — {}", excerpt(answer)));
 
     // An empty answer is returned as-is rather than as an error: small models
     // sometimes go quiet on an elaborate prompt, and the caller retries with a
     // simpler one before giving up.
     Ok(Description {
-        text: body.response.trim().to_string(),
+        text: answer.to_string(),
         truncated: body.done_reason.as_deref() == Some("length"),
     })
+}
+
+fn describe_count(count: Option<u32>) -> String {
+    count.map_or_else(|| "an unreported number of".to_string(), |n| n.to_string())
+}
+
+/// How much of the model's answer goes in the log. Enough to read a sentence
+/// and see whether it is one.
+const EXCERPT_CHARS: usize = 300;
+
+fn excerpt(answer: &str) -> String {
+    // On one line, so a multi-paragraph answer cannot be mistaken for many log
+    // entries by whoever reads the file.
+    let flattened = answer.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flattened.chars().count() <= EXCERPT_CHARS {
+        return flattened;
+    }
+    let kept: String = flattened.chars().take(EXCERPT_CHARS).collect();
+    format!("{kept}… (truncated for the log)")
 }
 
 /// Below this, a cut-off answer is a fragment rather than a short description —

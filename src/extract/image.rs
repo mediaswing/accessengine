@@ -1,8 +1,14 @@
 //! Reading images by way of a local vision model.
 //!
-//! Ollama's API takes base64 image data. JPEG and PNG go straight through;
-//! HEIF/HEIC — what an iPhone photo actually is — is converted to JPEG first
-//! using macOS's own `sips`, since vision models generally can't decode it.
+//! Ollama's API takes base64 image data. HEIF/HEIC — what an iPhone photo
+//! actually is — is converted to JPEG first using macOS's own `sips`, since
+//! vision models generally can't decode it.
+//!
+//! Whatever the source format, an oversized picture is then shrunk to
+//! [`MAX_LONG_EDGE`] before it is sent. That is not about bandwidth: Ollama
+//! squeezes a large image down to its own token budget anyway, and does it
+//! badly enough that a photographed page comes back as invented text rather
+//! than a transcription. See [`MAX_LONG_EDGE`] for the measurements.
 //!
 //! Along the way, the same bytes are checked for an embedded GPS position —
 //! most cameras and phones write one to EXIF unless location tagging was
@@ -48,11 +54,172 @@ pub fn encode_for_ollama(path: &Path) -> Result<EncodedImage> {
     } else {
         std::fs::read(path).with_context(|| format!("could not read {}", path.display()))?
     };
+    // Read before any resize: shrinking re-encodes the image and drops EXIF
+    // with it, so both the position and the orientation have to come off the
+    // original bytes.
     let location = gps_location(&bytes);
+    let orientation = exif_orientation(&bytes);
+    let bytes = shrink_for_vision(bytes, orientation);
+
     Ok(EncodedImage {
         base64: BASE64.encode(bytes),
         location,
     })
+}
+
+/// The longest edge, in pixels, an image is sent at.
+///
+/// Not a size limit — a legibility one. Ollama caps how many tokens an image is
+/// worth and squeezes anything bigger down to fit, and its resampling is poor
+/// enough that small text turns to mush. A vision model handed mush does not
+/// say it cannot read the image; it invents plausible-looking characters, and
+/// the app happily speaks them.
+///
+/// Measured against qwen2.5vl:3b, transcribing a page of text photographed at
+/// 4032×3024: sent as-is it came back as `L1: 2 l1s q4k b3wv f0 rjzrsw0 t6
+/// hzydog`, and resized to 2048 first it came back exactly right. Both cost
+/// **the same 4095 image tokens** — the resize buys accuracy, not budget, which
+/// is why this is worth doing rather than just asking for more context.
+///
+/// 2048 rather than lower because that is the largest edge that still costs the
+/// same as sending the original; 1568 also transcribed cleanly but started
+/// losing detail, and there is nothing to gain by paying less than the model
+/// charges anyway.
+const MAX_LONG_EDGE: u32 = 2048;
+
+/// Shrinks an oversized image and bakes in its EXIF orientation.
+///
+/// Returns the original bytes untouched if the image is already small enough,
+/// is upright, or cannot be decoded — a picture this crate has no decoder for
+/// is still worth sending, since Ollama may well read it.
+fn shrink_for_vision(bytes: Vec<u8>, orientation: Orientation) -> Vec<u8> {
+    let size = dimensions(&bytes);
+    let oversized = size
+        .map(|(width, height)| width.max(height) > MAX_LONG_EDGE)
+        .unwrap_or(false);
+    let describe = |(width, height)| format!("{width}×{height}");
+    let before = size.map_or_else(|| "an unreadable size".to_string(), describe);
+
+    if !oversized && orientation == Orientation::Upright {
+        crate::log::line(format!(
+            "image: {before}, upright and small enough — sent as-is"
+        ));
+        return bytes;
+    }
+
+    match resample(&bytes, oversized, orientation) {
+        Some(resized) => {
+            let after = dimensions(&resized).map_or_else(|| "unknown".to_string(), describe);
+            crate::log::line(format!(
+                "image: {before} {orientation:?} — sent as {after}, {} KB",
+                resized.len() / 1024
+            ));
+            resized
+        }
+        // Anything that fails here is a picture that could not be decoded or
+        // re-encoded, which is not a reason to refuse to read it at all.
+        None => {
+            crate::log::line(format!(
+                "image: {before} could not be resized or rotated — sent unchanged"
+            ));
+            bytes
+        }
+    }
+}
+
+/// Reads an image's pixel dimensions from its header alone, without decoding
+/// the whole thing — the usual case is an image that needs no resizing, and
+/// that case should not pay for a full decode to find out.
+fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
+}
+
+fn resample(bytes: &[u8], oversized: bool, orientation: Orientation) -> Option<Vec<u8>> {
+    let mut image = image::load_from_memory(bytes).ok()?;
+
+    if oversized {
+        // Lanczos3 specifically: the whole point is to land a *legible*
+        // downscale where Ollama's own was not, and a cheaper filter here
+        // would reproduce the bug this function exists to fix.
+        let (width, height) = (image.width(), image.height());
+        let scale = MAX_LONG_EDGE as f64 / width.max(height) as f64;
+        image = image.resize(
+            ((width as f64 * scale).round() as u32).max(1),
+            ((height as f64 * scale).round() as u32).max(1),
+            image::imageops::FilterType::Lanczos3,
+        );
+    }
+
+    // After the resize, so the rotation is applied to fewer pixels.
+    image = match orientation {
+        Orientation::Upright => image,
+        Orientation::Rotate90 => image.rotate90(),
+        Orientation::Rotate180 => image.rotate180(),
+        Orientation::Rotate270 => image.rotate270(),
+        Orientation::FlipHorizontal => image.fliph(),
+        Orientation::FlipVertical => image.flipv(),
+        Orientation::Transpose => image.rotate90().fliph(),
+        Orientation::Transverse => image.rotate270().fliph(),
+    };
+
+    let mut out = Vec::new();
+    // Quality 90: visually lossless at this size, and JPEG artefacts around
+    // small glyphs are exactly what must not be introduced here.
+    image
+        .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut out, 90,
+        ))
+        .ok()?;
+    Some(out)
+}
+
+/// The eight EXIF orientations, as the transform needed to make the image
+/// upright.
+///
+/// Phones overwhelmingly store a photo in the sensor's own orientation and note
+/// the rotation here rather than rotating the pixels, so a portrait photo is a
+/// landscape image plus a tag. Re-encoding drops the tag, and a vision model
+/// handed a page of text lying on its side reads it about as well as a person
+/// would.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Orientation {
+    Upright,
+    FlipHorizontal,
+    Rotate180,
+    FlipVertical,
+    Transpose,
+    Rotate90,
+    Transverse,
+    Rotate270,
+}
+
+/// Reads the EXIF orientation tag. Anything missing or unrecognised is treated
+/// as upright, which is what an image with no tag at all means.
+fn exif_orientation(bytes: &[u8]) -> Orientation {
+    let value = exif::Reader::new()
+        .read_from_container(&mut std::io::Cursor::new(bytes))
+        .ok()
+        .and_then(|exif| {
+            exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?
+                .value
+                .get_uint(0)
+        });
+
+    match value {
+        Some(2) => Orientation::FlipHorizontal,
+        Some(3) => Orientation::Rotate180,
+        Some(4) => Orientation::FlipVertical,
+        Some(5) => Orientation::Transpose,
+        // The common one: an upright photo from a phone held normally.
+        Some(6) => Orientation::Rotate90,
+        Some(7) => Orientation::Transverse,
+        Some(8) => Orientation::Rotate270,
+        _ => Orientation::Upright,
+    }
 }
 
 /// Reads a GPS position out of EXIF, if the image has one. Absent EXIF, an
@@ -174,13 +341,8 @@ fn convert_to_jpeg(path: &Path) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::needs_conversion;
+    use super::*;
     use std::path::PathBuf;
-
-    // Conversion only happens on macOS, so the fixture and the tests that use
-    // it are compiled there and nowhere else.
-    #[cfg(target_os = "macos")]
-    use super::encode_for_ollama;
 
     /// A 2×2 greyscale PNG, small enough to write inline.
     #[cfg(target_os = "macos")]
@@ -248,6 +410,88 @@ mod tests {
         // PNG needs no conversion, but it must still be read rather than refused.
         assert!(encode_for_ollama(&path).is_ok());
         std::fs::remove_file(&path).ok();
+    }
+
+    /// A JPEG of the given size, with enough variation that it cannot be
+    /// mistaken for a blank image.
+    fn jpeg(width: u32, height: u32) -> Vec<u8> {
+        let image = image::RgbImage::from_fn(width, height, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
+        });
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(image)
+            .write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+                &mut bytes, 90,
+            ))
+            .unwrap();
+        bytes
+    }
+
+    fn size_of(bytes: &[u8]) -> (u32, u32) {
+        super::dimensions(bytes).expect("the result should be a decodable image")
+    }
+
+    /// The bug this whole path exists for: a photo-sized image reached the
+    /// model at full resolution, was crushed to fit its token budget, and came
+    /// back as invented text.
+    #[test]
+    fn an_oversized_photo_is_shrunk_to_the_long_edge() {
+        let original = jpeg(4032, 3024);
+        let shrunk = shrink_for_vision(original, Orientation::Upright);
+
+        let (width, height) = size_of(&shrunk);
+        assert_eq!(width, MAX_LONG_EDGE);
+        // The aspect ratio has to survive, or the model reads a stretched page.
+        assert_eq!(height, 1536, "4:3 should stay 4:3");
+    }
+
+    /// The long edge is the one that matters, whichever way round it is.
+    #[test]
+    fn a_portrait_photo_is_shrunk_by_its_height() {
+        let shrunk = shrink_for_vision(jpeg(3024, 4032), Orientation::Upright);
+        let (width, height) = size_of(&shrunk);
+        assert_eq!(height, MAX_LONG_EDGE);
+        assert_eq!(width, 1536);
+    }
+
+    /// Re-encoding a small image would cost quality for nothing.
+    #[test]
+    fn an_image_already_small_enough_is_left_exactly_as_it_was() {
+        let original = jpeg(1200, 900);
+        let untouched = shrink_for_vision(original.clone(), Orientation::Upright);
+        assert_eq!(
+            untouched, original,
+            "a small upright image should be passed through"
+        );
+    }
+
+    /// A sideways page of text is a page a vision model cannot read, so the
+    /// rotation is applied even when the image needs no resizing.
+    #[test]
+    fn a_rotated_image_is_turned_upright_even_when_it_is_small() {
+        let original = jpeg(1200, 900);
+        let rotated = shrink_for_vision(original.clone(), Orientation::Rotate90);
+
+        assert_ne!(rotated, original, "the rotation should have been applied");
+        // rotate90 swaps the axes.
+        assert_eq!(size_of(&rotated), (900, 1200));
+    }
+
+    #[test]
+    fn orientation_six_is_the_common_phone_rotation() {
+        // A JPEG with no EXIF at all is upright, not an error.
+        assert_eq!(exif_orientation(&jpeg(8, 8)), Orientation::Upright);
+        assert_eq!(exif_orientation(b"not an image"), Orientation::Upright);
+    }
+
+    /// A file this crate has no decoder for is still worth sending.
+    #[test]
+    fn an_undecodable_image_is_passed_through_rather_than_dropped() {
+        let bytes = b"neither a JPEG nor a PNG".to_vec();
+        assert_eq!(
+            shrink_for_vision(bytes.clone(), Orientation::Upright),
+            bytes
+        );
     }
 
     #[test]

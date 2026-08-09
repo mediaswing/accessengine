@@ -68,15 +68,27 @@ pub fn load() -> (Option<String>, KeySource) {
     if let Ok(key) = std::env::var(ENV_VAR) {
         let key = key.trim().to_string();
         if !key.is_empty() {
+            crate::log::line(format!("keychain: using the key from {ENV_VAR}"));
             return (Some(key), KeySource::Env);
         }
     }
     match read() {
-        Ok(Some(key)) => (Some(key), KeySource::Keychain),
+        Ok(Some(key)) => {
+            crate::log::line("keychain: loaded a saved key");
+            (Some(key), KeySource::Keychain)
+        }
         // A missing key is the normal first-run state, and a storage backend
         // that is broken shouldn't stop the app opening — the system voices
-        // don't need a key at all.
-        _ => (None, KeySource::None),
+        // don't need a key at all. The two are worth telling apart in the log,
+        // since only one of them is a problem.
+        Ok(None) => {
+            crate::log::line("keychain: no saved key found");
+            (None, KeySource::None)
+        }
+        Err(error) => {
+            crate::log::line(format!("keychain: could not be read — {error:#}"));
+            (None, KeySource::None)
+        }
     }
 }
 
@@ -84,8 +96,15 @@ pub fn load() -> (Option<String>, KeySource) {
 
 #[cfg(target_os = "macos")]
 fn read() -> Result<Option<String>> {
+    read_item(SERVICE, ACCOUNT)
+}
+
+/// The service and account are parameters so the round-trip test can use a
+/// scratch item instead of the one holding the user's real key.
+#[cfg(target_os = "macos")]
+fn read_item(service: &str, account: &str) -> Result<Option<String>> {
     let out = Command::new(SECURITY)
-        .args(["find-generic-password", "-s", SERVICE, "-a", ACCOUNT, "-w"])
+        .args(["find-generic-password", "-s", service, "-a", account, "-w"])
         .output()
         .context("failed to run `security`")?;
     if !out.status.success() {
@@ -98,17 +117,30 @@ fn read() -> Result<Option<String>> {
 
 /// Stores the key in the login keychain, replacing any previous value.
 ///
-/// `-w` with no argument makes `security` read the password from stdin, which
-/// keeps the key out of the process list.
+/// `-w` as the last option makes `security` prompt for the password rather than
+/// take it as an argument, which keeps the key out of the process list. What
+/// that prompt actually wants is the password *twice* — "password data for new
+/// item:" and then "retype password for new item:" — so the key is written
+/// twice. Sending it once is the bug this comment exists to prevent coming
+/// back: `security` reads the lone value, hits EOF on the retype, decides the
+/// two don't match, and then stores an item with an **empty password while
+/// still exiting 0**. Nothing looks wrong until the next launch reads the key
+/// back and finds nothing there.
 #[cfg(target_os = "macos")]
 pub fn store(key: &str) -> Result<()> {
+    store_item(SERVICE, ACCOUNT, key)?;
+    verify_stored(key)
+}
+
+#[cfg(target_os = "macos")]
+fn store_item(service: &str, account: &str, key: &str) -> Result<()> {
     let mut child = Command::new(SECURITY)
         .args([
             "add-generic-password",
             "-s",
-            SERVICE,
+            service,
             "-a",
-            ACCOUNT,
+            account,
             "-U", // update if it already exists
             "-w",
         ])
@@ -121,7 +153,7 @@ pub fn store(key: &str) -> Result<()> {
         .stdin
         .take()
         .context("could not pass the key to `security`")?
-        .write_all(format!("{key}\n").as_bytes())
+        .write_all(format!("{key}\n{key}\n").as_bytes())
         .context("could not pass the key to `security`")?;
 
     let out = child
@@ -134,6 +166,36 @@ pub fn store(key: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Reads the key straight back and checks it arrived intact.
+///
+/// `security` exits 0 on the failure that matters here — an item written with
+/// an empty password — so its exit status is not enough on its own to report
+/// "API key saved" to someone who will not find out otherwise until the next
+/// time they open the app.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn verify_stored(key: &str) -> Result<()> {
+    match read() {
+        Ok(Some(stored)) if stored == key => {
+            crate::log::line("keychain: key saved and read back intact");
+            Ok(())
+        }
+        Ok(Some(_)) => {
+            crate::log::line("keychain: the key read back did not match the one saved");
+            bail!("the key was not stored correctly — please try entering it again")
+        }
+        Ok(None) => {
+            // The exact failure this check exists for: storage reported
+            // success and kept nothing.
+            crate::log::line("keychain: storage reported success but saved nothing");
+            bail!("the key was not stored correctly — please try entering it again")
+        }
+        Err(error) => {
+            crate::log::line(format!("keychain: could not read the key back — {error:#}"));
+            Err(error.context("the key could not be read back after saving"))
+        }
+    }
 }
 
 /// Removes the stored key. Succeeds if there was nothing to remove.
@@ -244,7 +306,7 @@ ConvertFrom-SecureString -SecureString $secure | Set-Content -LiteralPath {} -En
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    Ok(())
+    verify_stored(key)
 }
 
 /// Removes the stored key. Succeeds if there was nothing to remove.
@@ -276,4 +338,44 @@ pub fn store(_key: &str) -> Result<()> {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn clear() -> Result<()> {
     Ok(())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    /// A scratch item, so the test never touches the one holding a real key.
+    const TEST_SERVICE: &str = "accessengine-keychain-test";
+    const TEST_ACCOUNT: &str = "roundtrip";
+
+    /// Stores a key and reads it straight back.
+    ///
+    /// The bug this exists for stored an item with an *empty password* and
+    /// exited 0, so the app said "API key saved" and the key was gone by the
+    /// next launch. Asserting on the exit status alone would have passed
+    /// throughout; only reading the value back catches it.
+    #[test]
+    fn a_stored_key_reads_back_unchanged() {
+        let key = "sk_test_0123456789abcdef";
+
+        store_item(TEST_SERVICE, TEST_ACCOUNT, key).expect("the key should store");
+        let read_back = read_item(TEST_SERVICE, TEST_ACCOUNT);
+
+        // Removed before asserting, so a failure doesn't leave the item behind.
+        let _ = Command::new(SECURITY)
+            .args([
+                "delete-generic-password",
+                "-s",
+                TEST_SERVICE,
+                "-a",
+                TEST_ACCOUNT,
+            ])
+            .output();
+
+        assert_eq!(
+            read_back.expect("reading back should succeed").as_deref(),
+            Some(key),
+            "the key did not survive the round trip"
+        );
+    }
 }

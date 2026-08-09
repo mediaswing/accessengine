@@ -20,6 +20,7 @@ mod geocode;
 mod homebrew;
 mod jobs;
 mod keychain;
+mod log;
 mod ollama;
 mod sysexec;
 mod theme;
@@ -30,6 +31,9 @@ mod update;
 const APP_TITLE: &str = "Speech Output Engine";
 
 fn main() -> eframe::Result<()> {
+    // First, so that anything going wrong during startup is in the log too.
+    log::start(env!("CARGO_PKG_VERSION"));
+
     // reqwest is built without a built-in crypto provider (see Cargo.toml), so
     // one has to be installed before the first HTTPS request or the ElevenLabs
     // client fails to build. Failure here means another provider is already

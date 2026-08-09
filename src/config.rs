@@ -175,6 +175,7 @@ pub struct Config {
     /// Ollama vision model used to turn an image into readable text.
     #[serde(deserialize_with = "deserialize_vision_model")]
     pub ollama_model: String,
+    #[serde(deserialize_with = "deserialize_vision_prompt")]
     pub ollama_prompt: String,
 
     /// Directory the last save went to, so the dialog reopens somewhere useful.
@@ -208,11 +209,58 @@ impl Default for Config {
 /// this is deliberately as simple as it can be.
 pub const FALLBACK_VISION_PROMPT: &str = "Describe this image, including any text it contains.";
 
+/// What the vision model is asked for.
+///
+/// The description comes first and unconditionally, which is the whole point of
+/// the wording. The prompt this replaced asked for a transcription and said to
+/// describe the picture *only* if it contained no text — and a photograph of a
+/// street corner contains text, because there is a road sign in it. A model
+/// following that instruction faithfully answered a photo of a city square with
+/// the words "ONE WAY" and nothing else, which is both correct and useless. Any
+/// text at all, however incidental, suppressed the description entirely.
+///
+/// So: always describe, then transcribe whatever text is there, and shorten the
+/// description to one sentence when the image really is a page — which keeps
+/// document reading, the other thing this app is for, from growing a preamble.
+///
+/// The last sentence earns its place too. Asked for a transcription without it,
+/// the model returns Markdown — `**Transcription:**` and a fenced block — and a
+/// speech synthesiser reads the asterisks out.
 pub const DEFAULT_VISION_PROMPT: &str = "\
+Describe what this image shows in two or three plain sentences. Then transcribe every \
+word of any text that appears in it, exactly as written, preserving the reading order \
+and line breaks. If the image is mainly a page or screen of text, keep the description \
+to one short sentence and give the full transcription. Your answer will be read aloud, \
+so write plain sentences with no headings, bullet points, markdown, asterisks or code \
+blocks.";
+
+/// The prompt shipped up to version 1.2.2, kept only to recognise it.
+///
+/// Anyone who has run the app before has this saved in their config, and a
+/// default is only a default for someone opening the app for the first time.
+/// Left alone, the people most affected by the bug above — everyone already
+/// using the app — would be the only ones never to get the fix.
+const SUPERSEDED_VISION_PROMPT: &str = "\
 Transcribe every word of text visible in this image, exactly as written, preserving \
 the reading order and line breaks. If the image contains no text, instead describe \
 what it shows in two or three plain sentences. Reply with the transcription or \
 description only, with no preamble, headings, or commentary.";
+
+/// Replaces the superseded prompt with the current one, leaving a prompt the
+/// user has written themselves exactly as they wrote it.
+fn deserialize_vision_prompt<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    Ok(
+        if raw.trim().is_empty() || raw.trim() == SUPERSEDED_VISION_PROMPT.trim() {
+            DEFAULT_VISION_PROMPT.to_string()
+        } else {
+            raw
+        },
+    )
+}
 
 impl Config {
     pub fn path() -> Option<PathBuf> {
@@ -285,6 +333,38 @@ mod tests {
         assert_eq!(config.engine, EnginePreference::ElevenLabs);
         assert_eq!(config.system_rate, 210);
         assert_eq!(config.elevenlabs_voice_name, "Rachel");
+    }
+
+    /// The prompt that answered a photograph of a city square with the words
+    /// "ONE WAY" is saved in the config of everyone who has used the app, so
+    /// loading it has to be what replaces it.
+    #[test]
+    fn the_superseded_prompt_is_replaced_on_load() {
+        let saved = serde_json::json!({ "ollama_prompt": SUPERSEDED_VISION_PROMPT }).to_string();
+        let config: Config = serde_json::from_str(&saved).unwrap();
+        assert_eq!(config.ollama_prompt, DEFAULT_VISION_PROMPT);
+    }
+
+    /// The description has to be unconditional. A prompt that asks for one only
+    /// when there is no text is the bug, whatever else it says.
+    #[test]
+    fn the_default_prompt_asks_for_a_description_before_any_condition() {
+        let prompt = DEFAULT_VISION_PROMPT;
+        assert!(prompt.starts_with("Describe what this image shows"));
+        assert!(
+            !prompt.contains("contains no text"),
+            "the description must not be conditional on the image having no text"
+        );
+        // Spoken output, so the model has to be told not to write Markdown.
+        assert!(prompt.contains("read aloud"));
+    }
+
+    /// A prompt somebody has written for themselves is theirs.
+    #[test]
+    fn a_hand_written_prompt_survives_loading() {
+        let saved = r#"{ "ollama_prompt": "Just read the numbers out." }"#;
+        let config: Config = serde_json::from_str(saved).unwrap();
+        assert_eq!(config.ollama_prompt, "Just read the numbers out.");
     }
 
     #[test]
