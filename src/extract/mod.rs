@@ -53,10 +53,11 @@ pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "heic", "heif"];
 /// Reads a text or Word file. Images are not handled here because they need the
 /// Ollama plumbing in [`image`], which the caller drives separately so it can
 /// prompt about installing Ollama first.
-pub fn extract_document(path: &Path) -> Result<String> {
+/// `formatting` applies to Word documents, the only kind that carries any.
+pub fn extract_document(path: &Path, formatting: crate::config::Formatting) -> Result<String> {
     match FileKind::from_path(path) {
         Some(FileKind::Text) => txt::extract(path),
-        Some(FileKind::Docx) => docx::extract(path),
+        Some(FileKind::Docx) => docx::extract(path, formatting),
         Some(FileKind::Csv) => csv::extract(path),
         Some(FileKind::Image) => bail!("images are read through Ollama, not this path"),
         None => bail!(

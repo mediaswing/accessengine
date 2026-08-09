@@ -6,7 +6,7 @@
 //! egui, and nothing in the UI blocks on any of it.
 
 use crate::audio::{self, AudioFormat};
-use crate::config::Config;
+use crate::config::{Config, Formatting};
 use crate::extract::{self, FileKind};
 use crate::geocode;
 use crate::ollama;
@@ -35,7 +35,11 @@ pub enum Engine {
 #[derive(Debug, Clone)]
 pub enum Job {
     /// Read a .txt or .docx straight off disk.
-    ReadDocument(PathBuf),
+    ReadDocument {
+        path: PathBuf,
+        /// Only Word documents carry any; see [`crate::extract::docx`].
+        formatting: Formatting,
+    },
     /// Read an image, arranging Ollama first if it needs arranging.
     ReadImage { path: PathBuf, config: Box<Config> },
     /// Runs Homebrew's own installer, answering the password it asks for with
@@ -66,7 +70,7 @@ impl Job {
     /// Text shown in the progress bar while this job runs.
     pub fn status_label(&self) -> String {
         match self {
-            Self::ReadDocument(path) => format!(
+            Self::ReadDocument { path, .. } => format!(
                 "Reading {}…",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ),
@@ -150,7 +154,7 @@ pub fn spawn(job: Job, tx: Sender<Update>, cancel: Cancel, repaint: impl Fn() + 
 
 fn run(job: Job, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
     match job {
-        Job::ReadDocument(path) => read_document(path, tx),
+        Job::ReadDocument { path, formatting } => read_document(path, formatting, tx),
         Job::ReadImage { path, config } => read_image(path, &config, tx, cancel),
         Job::InstallHomebrew => install_homebrew(tx),
         Job::InstallOllama => install_ollama(tx),
@@ -179,8 +183,8 @@ fn run(job: Job, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
     }
 }
 
-fn read_document(path: PathBuf, tx: &Sender<Update>) -> Result<()> {
-    let text = extract::extract_document(&path)?;
+fn read_document(path: PathBuf, formatting: Formatting, tx: &Sender<Update>) -> Result<()> {
+    let text = extract::extract_document(&path, formatting)?;
     if text.trim().is_empty() {
         bail!(
             "{} contains no readable text",

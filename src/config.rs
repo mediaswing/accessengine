@@ -121,6 +121,43 @@ where
     })
 }
 
+/// Whether the formatting in a Word document is read out along with its words.
+///
+/// Off by default, and deliberately: most documents are formatted for the eye
+/// and announcing all of it turns a letter into a stream of interruptions. It
+/// earns its place on the documents where the formatting *is* the meaning — a
+/// contract with one clause in red, a form whose deadline is the only bold
+/// thing on the page — which is exactly the case someone who cannot see the
+/// page has no other way to learn about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Formatting {
+    #[default]
+    Ignore,
+    Announce,
+}
+
+impl Formatting {
+    pub const ALL: [Self; 2] = [Self::Ignore, Self::Announce];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ignore => "Words only",
+            Self::Announce => "Words and formatting",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Ignore => "Read the text and nothing else.",
+            Self::Announce => {
+                "Also say where bold, italic, underline, strikethrough, colour and \
+                 highlighting start and end. Word documents only."
+            }
+        }
+    }
+}
+
 /// What the Apply button does. The two things the app can do with a document
 /// are one choice, not two buttons that look alike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -157,6 +194,8 @@ pub struct Config {
 
     /// What the Apply button does.
     pub action: Action,
+    /// Whether a Word document's formatting is read out with its words.
+    pub formatting: Formatting,
     /// Audio format used when the action is [`Action::SaveAudio`].
     pub save_format: AudioFormat,
 
@@ -191,6 +230,7 @@ impl Default for Config {
         Self {
             engine: EnginePreference::System,
             action: Action::ReadAloud,
+            formatting: Formatting::Ignore,
             save_format: AudioFormat::Wav,
             elevenlabs_voice_id: String::new(),
             elevenlabs_voice_name: String::new(),

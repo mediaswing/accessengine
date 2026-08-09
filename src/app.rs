@@ -14,7 +14,7 @@
 
 use crate::apikey::{self, KeySource};
 use crate::audio::{self, AudioFormat, Playback};
-use crate::config::{Action, Config, DEFAULT_VISION_PROMPT, EnginePreference};
+use crate::config::{Action, Config, DEFAULT_VISION_PROMPT, EnginePreference, Formatting};
 use crate::extract::{
     DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS,
 };
@@ -140,6 +140,7 @@ impl Pane {
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum Field {
     File,
+    Formatting,
     Engine,
     Voice,
     Action,
@@ -522,7 +523,10 @@ impl SpeechApp {
                 path,
                 config: Box::new(self.config.clone()),
             },
-            _ => Job::ReadDocument(path),
+            _ => Job::ReadDocument {
+                path,
+                formatting: self.config.formatting,
+            },
         };
         self.start(ctx, job);
     }
@@ -1337,6 +1341,69 @@ impl SpeechApp {
                     "Loading voices…".to_string()
                 }
             })
+    }
+
+    /// Whether a Word document's formatting is read out along with its words.
+    ///
+    /// Shown for every file rather than only for a `.docx`, so it does not
+    /// appear and vanish as files are opened — a control that moves is a
+    /// control nobody can find twice, and Tab order that changes underneath
+    /// someone is worse still. It is disabled, with a reason, when the open
+    /// file has no formatting to read.
+    fn formatting_field(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let caption = Self::caption(ui, "What to read");
+        let mut chosen = self.config.formatting;
+        // Nothing else this app opens carries formatting: a `.txt` has none, a
+        // CSV is already announced as a table, and an image comes back as
+        // whatever the vision model wrote.
+        let applies = self.file_kind.is_none_or(|kind| kind == FileKind::Docx);
+
+        let combo = ui
+            .add_enabled_ui(applies, |ui| {
+                egui::ComboBox::from_id_salt("formatting")
+                    .width(FORM_WIDTH)
+                    .selected_text(self.config.formatting.label())
+                    .show_ui(ui, |ui| {
+                        for option in Formatting::ALL {
+                            ui.selectable_value(&mut chosen, option, option.label())
+                                .on_hover_text(option.description());
+                        }
+                    })
+                    .response
+            })
+            .inner;
+        let combo = combo.on_hover_text(if applies {
+            self.config.formatting.description().to_string()
+        } else {
+            format!(
+                "Only Word documents carry formatting; a {} has none.",
+                self.file_kind.map(FileKind::label).unwrap_or("file")
+            )
+        });
+        let _ = caption.labelled_by(combo.id);
+        self.take_focus(Field::Formatting, &combo);
+
+        if chosen != self.config.formatting {
+            self.config.formatting = chosen;
+            self.config_dirty = true;
+            self.cached = None;
+            // The text on screen was extracted under the old setting, so the
+            // choice would otherwise do nothing until the file was opened
+            // again — which looks exactly like a broken control.
+            if self.file_kind == Some(FileKind::Docx)
+                && self.busy.is_none()
+                && let Some(path) = self.file.clone()
+            {
+                self.start(
+                    &ctx,
+                    Job::ReadDocument {
+                        path,
+                        formatting: chosen,
+                    },
+                );
+            }
+        }
     }
 
     fn action_field(&mut self, ui: &mut egui::Ui) {
@@ -2510,6 +2577,7 @@ impl eframe::App for SpeechApp {
                         ui.vertical(|ui| {
                             ui.set_max_width(FORM_WIDTH);
                             self.file_field(ui);
+                            self.formatting_field(ui);
                             self.engine_field(ui);
                             self.voice_field(ui);
                             self.action_field(ui);
