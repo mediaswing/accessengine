@@ -140,33 +140,6 @@ pub fn ps_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-/// Held for the duration of any test that launches a real `powershell.exe`.
-///
-/// `cargo test` runs tests in parallel, and several tests in this crate do
-/// that. Windows PowerShell 5.1's own module loading is not safe against
-/// several of its own processes doing that at once: this app has
-/// independently hit both `CouldNotAutoloadMatchingModule` (autoloading a
-/// command's module races a shared, on-disk module-analysis cache) and a
-/// `TypeData ... already present` failure (from working around the first by
-/// importing the module explicitly) on the same CI runner, from the same
-/// handful of tests launching close together. Neither is a bug in the script
-/// being tested — production code never launches PowerShell concurrently
-/// with itself — so the fix belongs here, serialising the tests, rather than
-/// in the scripts.
-///
-/// Not gated to `target_os = "windows"`: the macOS system-voice tests share
-/// this lock too, purely so `renders_real_speech_to_wav_and_mp3` and
-/// `speaking_spawns_a_killable_process` — which are `cfg`'d to run on both
-/// platforms — don't need a second, platform-specific code path. There is no
-/// evidence macOS's `say`/`security` need it; the lock is just as free to
-/// take as to skip.
-#[cfg(test)]
-pub(crate) fn serialize_powershell_tests() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{create_scratch_file, ps_quote};
