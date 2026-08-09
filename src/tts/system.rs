@@ -225,8 +225,14 @@ mod platform {
     use std::process::{Child, Stdio};
 
     pub fn list_voices() -> Result<Vec<Voice>> {
+        // `OutputEncoding` is pinned to UTF-8 first: `[Console]::Out` otherwise
+        // defaults to the system's legacy OEM code page whenever the process
+        // has no real console attached — true here, since PowerShell always
+        // runs with `CREATE_NO_WINDOW` — which silently mangles any voice
+        // name or culture that isn't plain ASCII.
         let script = "\
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
 foreach ($voice in $synth.GetInstalledVoices()) {

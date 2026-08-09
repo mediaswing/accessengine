@@ -16,13 +16,26 @@ const RELEASES_LATEST: &str =
 /// A release newer than the one currently running.
 pub struct Available {
     pub version: String,
-    pub url: String,
+    /// The release's notes, as written to the GitHub release body — shown to
+    /// the user as the changelog.
+    pub notes: String,
+    /// Where "Download Release" goes: the zip built for this platform, or
+    /// the release page itself if no matching asset was found there.
+    pub download_url: String,
 }
 
 #[derive(Deserialize)]
 struct Release {
     tag_name: String,
     html_url: String,
+    body: Option<String>,
+    assets: Vec<Asset>,
+}
+
+#[derive(Deserialize)]
+struct Asset {
+    name: String,
+    browser_download_url: String,
 }
 
 /// Checks GitHub's latest published release against the version this binary
@@ -62,9 +75,37 @@ pub fn check() -> Result<Option<Available>> {
     Ok(
         is_newer(latest, env!("CARGO_PKG_VERSION")).then(|| Available {
             version: latest.to_string(),
-            url: release.html_url,
+            notes: release.body.unwrap_or_default(),
+            download_url: pick_download_url(
+                &release.assets,
+                platform_asset_prefix(),
+                &release.html_url,
+            ),
         }),
     )
+}
+
+/// The prefix `release.yml` gives the zip it builds for this platform, or
+/// `None` on a platform the workflow does not build for (there is no
+/// download to point at, so the release page is as close as it gets).
+fn platform_asset_prefix() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some("accessengine-macos")
+    } else if cfg!(target_os = "windows") {
+        Some("accessengine-windows")
+    } else {
+        None
+    }
+}
+
+/// The direct download for this platform's build, falling back to the
+/// release page itself when there is no asset to match against — an
+/// unrecognized platform, or a release published without the usual zips.
+fn pick_download_url(assets: &[Asset], platform_prefix: Option<&str>, html_url: &str) -> String {
+    platform_prefix
+        .and_then(|prefix| assets.iter().find(|asset| asset.name.starts_with(prefix)))
+        .map(|asset| asset.browser_download_url.clone())
+        .unwrap_or_else(|| html_url.to_string())
 }
 
 /// Compares two version strings, tolerantly: a tag that doesn't parse as
@@ -82,7 +123,52 @@ fn is_newer(latest: &str, current: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_newer;
+    use super::{Asset, is_newer, pick_download_url};
+
+    fn asset(name: &str) -> Asset {
+        Asset {
+            name: name.to_string(),
+            browser_download_url: format!("https://example.com/{name}"),
+        }
+    }
+
+    #[test]
+    fn the_asset_matching_this_platform_is_preferred() {
+        let assets = vec![
+            asset("accessengine-macos-aarch64.zip"),
+            asset("accessengine-windows-x86_64.zip"),
+        ];
+        assert_eq!(
+            pick_download_url(
+                &assets,
+                Some("accessengine-windows"),
+                "https://example.com/release"
+            ),
+            "https://example.com/accessengine-windows-x86_64.zip"
+        );
+    }
+
+    #[test]
+    fn the_release_page_is_used_when_no_asset_matches() {
+        let assets = vec![asset("accessengine-macos-aarch64.zip")];
+        assert_eq!(
+            pick_download_url(
+                &assets,
+                Some("accessengine-windows"),
+                "https://example.com/release"
+            ),
+            "https://example.com/release"
+        );
+    }
+
+    #[test]
+    fn the_release_page_is_used_on_an_unrecognized_platform() {
+        let assets = vec![asset("accessengine-macos-aarch64.zip")];
+        assert_eq!(
+            pick_download_url(&assets, None, "https://example.com/release"),
+            "https://example.com/release"
+        );
+    }
 
     #[test]
     fn a_higher_version_is_newer() {

@@ -261,7 +261,22 @@ use crate::sysexec::ps_quote;
 
 #[cfg(target_os = "windows")]
 fn read() -> Result<Option<String>> {
-    let path = credential_path()?;
+    read_at(&credential_path()?)
+}
+
+/// The path is a parameter so the round-trip test can use a scratch file
+/// instead of the one holding the user's real key.
+///
+/// Both `InputEncoding` and `OutputEncoding` are pinned to UTF-8 before
+/// touching the console streams. Left alone, `[Console]::In`/`[Console]::Out`
+/// default to the system's legacy OEM code page whenever the process has no
+/// real console attached — exactly the case here, since PowerShell is always
+/// launched with `CREATE_NO_WINDOW` — so any non-ASCII character in the key
+/// comes back as the wrong character, or several. That doesn't fail loudly:
+/// `verify_stored` reads a mismatched key back and reports "the key was not
+/// stored correctly", which is confusing when DPAPI actually stored it fine.
+#[cfg(target_os = "windows")]
+fn read_at(path: &std::path::Path) -> Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -270,6 +285,7 @@ fn read() -> Result<Option<String>> {
     let script = format!(
         "\
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
 $blob = (Get-Content -LiteralPath {} -Raw).Trim()
 $secure = ConvertTo-SecureString -String $blob
 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
@@ -289,10 +305,19 @@ finally {{ [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }}",
 /// Encrypts the key with DPAPI and writes it, replacing any previous value.
 #[cfg(target_os = "windows")]
 pub fn store(key: &str) -> Result<()> {
-    let path = credential_path()?;
+    store_at(&credential_path()?, key)?;
+    verify_stored(key)
+}
+
+/// See [`read_at`] for why `InputEncoding` is set before the key is read off
+/// the console stream — without it, a non-ASCII character sent over stdin
+/// arrives as the wrong character.
+#[cfg(target_os = "windows")]
+fn store_at(path: &std::path::Path, key: &str) -> Result<()> {
     let script = format!(
         "\
 $ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [Text.Encoding]::UTF8
 $plain = [Console]::In.ReadToEnd().Trim()
 $secure = ConvertTo-SecureString -String $plain -AsPlainText -Force
 ConvertFrom-SecureString -SecureString $secure | Set-Content -LiteralPath {} -Encoding ASCII",
@@ -306,7 +331,7 @@ ConvertFrom-SecureString -SecureString $secure | Set-Content -LiteralPath {} -En
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    verify_stored(key)
+    Ok(())
 }
 
 /// Removes the stored key. Succeeds if there was nothing to remove.
@@ -376,6 +401,55 @@ mod tests {
             read_back.expect("reading back should succeed").as_deref(),
             Some(key),
             "the key did not survive the round trip"
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    fn scratch_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
+    #[test]
+    fn a_stored_key_reads_back_unchanged() {
+        let path = scratch_path("accessengine-keychain-test-ascii.dpapi");
+        let key = "sk_test_0123456789abcdef";
+
+        store_at(&path, key).expect("the key should store");
+        let read_back = read_at(&path);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            read_back.expect("reading back should succeed").as_deref(),
+            Some(key),
+            "the key did not survive the round trip"
+        );
+    }
+
+    /// The bug this exists for: `[Console]::In`/`[Console]::Out` default to
+    /// the system's legacy OEM code page rather than UTF-8 whenever the
+    /// process has no real console attached, which silently mangled any
+    /// non-ASCII character sent across either stream. Real ElevenLabs keys
+    /// are plain ASCII, but a key pasted from a formatted web page can carry
+    /// stray Unicode (curly quotes, a non-breaking space in the middle), and
+    /// this is the case that caught it: a key that round-trips correctly only
+    /// if the console streams are read and written as UTF-8.
+    #[test]
+    fn a_key_with_non_ascii_characters_reads_back_unchanged() {
+        let path = scratch_path("accessengine-keychain-test-unicode.dpapi");
+        let key = "sk_café_日本語_0123456789";
+
+        store_at(&path, key).expect("the key should store");
+        let read_back = read_at(&path);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            read_back.expect("reading back should succeed").as_deref(),
+            Some(key),
+            "a non-ASCII key did not survive the round trip"
         );
     }
 }

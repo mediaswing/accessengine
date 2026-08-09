@@ -2386,6 +2386,51 @@ impl SpeechApp {
             }
         }
     }
+
+    /// Shown once, right after the startup check finds a newer release: its
+    /// changelog, with a way to grab it or wave it off for this session.
+    fn update_dialog(&mut self, ctx: &egui::Context) {
+        let Some(available) = &self.update_available else {
+            return;
+        };
+        let mut decision: Option<bool> = None;
+
+        egui::Modal::new(egui::Id::new("update_available")).show(ctx, |ui| {
+            ui.set_max_width(560.0);
+            ui.heading(format!("Version {} is available", available.version));
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical()
+                .max_height(280.0)
+                .show(ui, |ui| {
+                    ui.add(egui::Label::new(&available.notes).wrap());
+                });
+            ui.add_space(10.0);
+
+            if ui
+                .add(
+                    egui::Button::new("Download Release")
+                        .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+                )
+                .clicked()
+            {
+                decision = Some(true);
+            }
+            if ui
+                .add(egui::Button::new("Not Right Now").min_size(egui::vec2(240.0, CONTROL_HEIGHT)))
+                .clicked()
+            {
+                decision = Some(false);
+            }
+        });
+
+        let Some(download) = decision else {
+            return;
+        };
+        if download {
+            ctx.open_url(egui::OpenUrl::same_tab(available.download_url.clone()));
+        }
+        self.update_available = None;
+    }
 }
 
 /// True for a file the Audio Player can open, which is what decides where a
@@ -2433,13 +2478,6 @@ impl eframe::App for SpeechApp {
         egui::Panel::top(egui::Id::new("header")).show(ui, |ui| {
             ui.add_space(8.0);
             ui.heading("Speech Output Engine");
-            if let Some(available) = &self.update_available {
-                ui.add_space(2.0);
-                ui.hyperlink_to(
-                    format!("Version {} is available", available.version),
-                    &available.url,
-                );
-            }
             ui.add_space(8.0);
         });
 
@@ -2488,6 +2526,7 @@ impl eframe::App for SpeechApp {
         self.api_key_dialog_window(&ctx);
         self.reset_dialog(&ctx);
         self.prompt_dialog(&ctx);
+        self.update_dialog(&ctx);
 
         if self.config_dirty {
             self.config_dirty = false;
