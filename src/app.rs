@@ -231,6 +231,9 @@ pub struct SpeechApp {
     log: Vec<String>,
     show_log: bool,
 
+    /// Whether the "reset settings" confirmation is open. Kept apart from
+    /// [`Prompt`], whose answers all end in a job being started.
+    confirm_reset: bool,
     prompt: Option<Prompt>,
     /// Re-run after the user resolves a [`Prompt`].
     deferred: Option<Job>,
@@ -290,6 +293,7 @@ impl SpeechApp {
             status: None,
             log: Vec::new(),
             show_log: false,
+            confirm_reset: false,
             prompt: None,
             deferred: None,
             pane: Pane::Read,
@@ -2117,6 +2121,27 @@ impl SpeechApp {
         ui.separator();
         ui.add(
             egui::Label::new(
+                "Puts every setting on this page — and the engine, voice and action on the \
+                 Read a File page — back to how the app arrives. Your dictionary and your \
+                 API key are not touched.",
+            )
+            .wrap(),
+        );
+        ui.add_space(8.0);
+        if ui
+            .add(
+                egui::Button::new("Reset All Settings To Defaults")
+                    .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
+            )
+            .clicked()
+        {
+            self.confirm_reset = true;
+        }
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add(
+            egui::Label::new(
                 "If something goes wrong, this copies a record of what the app did this \
                  session — the files it read, the models it called and what they answered — \
                  ready to paste into a bug report. It contains no part of your documents and \
@@ -2163,6 +2188,78 @@ impl SpeechApp {
                 .wrap(),
             );
         }
+    }
+
+    /// Confirms before putting the settings back to their defaults.
+    ///
+    /// Asking first because the damage is invisible: a reset takes back a
+    /// deliberately chosen voice, speaking rate and vision model all at once,
+    /// and none of it announces itself — the next thing the user hears is a
+    /// different voice reading at a different speed, with nothing to say why.
+    fn reset_dialog(&mut self, ctx: &egui::Context) {
+        if !self.confirm_reset {
+            return;
+        }
+        let mut decision: Option<bool> = None;
+
+        egui::Modal::new(egui::Id::new("confirm_reset")).show(ctx, |ui| {
+            ui.set_max_width(560.0);
+            ui.heading("Reset Settings");
+            ui.add_space(6.0);
+            ui.add(
+                egui::Label::new(
+                    "This puts the speech engine, voice, speaking rate, action, audio format, \
+                     vision model and image prompt back to their original values.",
+                )
+                .wrap(),
+            );
+            ui.add_space(6.0);
+            // Said plainly, because "reset" is exactly the word that makes
+            // someone worry about the list of replacements they built up.
+            ui.add(
+                egui::Label::new(
+                    "Your dictionary is kept, and your ElevenLabs API key is kept. This cannot \
+                     be undone.",
+                )
+                .wrap(),
+            );
+            ui.add_space(10.0);
+
+            if ui
+                .add(
+                    egui::Button::new("Reset Settings").min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+                )
+                .clicked()
+            {
+                decision = Some(true);
+            }
+            if ui
+                .add(egui::Button::new("Cancel").min_size(egui::vec2(240.0, CONTROL_HEIGHT)))
+                .clicked()
+            {
+                decision = Some(false);
+            }
+        });
+
+        let Some(confirmed) = decision else {
+            return;
+        };
+        self.confirm_reset = false;
+        if !confirmed {
+            self.set_status("Settings left as they were.", Tone::Info);
+            return;
+        }
+
+        self.config.reset_to_defaults();
+        // The engine and voice have both just changed, so anything rendered
+        // under the old ones is no longer what Apply would produce.
+        self.cached = None;
+        self.config_dirty = true;
+        crate::log::line("settings reset to defaults");
+        self.set_status(
+            "Settings reset. Your dictionary and API key were kept.",
+            Tone::Success,
+        );
     }
 
     fn prompt_dialog(&mut self, ctx: &egui::Context) {
@@ -2389,6 +2486,7 @@ impl eframe::App for SpeechApp {
         });
 
         self.api_key_dialog_window(&ctx);
+        self.reset_dialog(&ctx);
         self.prompt_dialog(&ctx);
 
         if self.config_dirty {

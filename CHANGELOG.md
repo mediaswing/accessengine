@@ -7,6 +7,13 @@ rather than for someone reading the diff.
 
 ### Added
 
+- **A reset button.** **Settings** now has **Reset All Settings To Defaults**,
+  which puts the speech engine, voice, speaking rate, action, audio format,
+  vision model and image prompt back to how the app arrives — useful if a
+  setting has been changed to something that no longer works and it is not
+  obvious which one. It asks first, and says plainly what it will and will not
+  touch: your dictionary is kept, and so is your ElevenLabs API key.
+
 - **A diagnostics log, and a button to copy it.** The app now keeps a record of
   what it did during each session — the files it opened, the vision models it
   called and what they answered, how long each step took. **Settings** has a

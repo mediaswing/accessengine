@@ -280,6 +280,21 @@ impl Config {
         serde_json::from_str(&text).unwrap_or_default()
     }
 
+    /// Puts every setting back to its default, keeping what the user wrote.
+    ///
+    /// The dictionary is the exception, and the only one: every other field
+    /// here is a preference that takes seconds to set again, whereas a list of
+    /// replacements is built up a word at a time over months of use. A "reset
+    /// settings" button that quietly threw it away would be a far worse bug
+    /// than any setting it put right.
+    pub fn reset_to_defaults(&mut self) {
+        let dictionary = std::mem::take(&mut self.dictionary);
+        *self = Self {
+            dictionary,
+            ..Self::default()
+        };
+    }
+
     pub fn save(&self) -> Result<()> {
         let path = Self::path().context("could not locate a config directory")?;
         if let Some(parent) = path.parent() {
@@ -333,6 +348,32 @@ mod tests {
         assert_eq!(config.engine, EnginePreference::ElevenLabs);
         assert_eq!(config.system_rate, 210);
         assert_eq!(config.elevenlabs_voice_name, "Rachel");
+    }
+
+    /// A reset gives back the defaults — and must not take the one thing on
+    /// the config that took the user any effort to make.
+    #[test]
+    fn resetting_restores_defaults_but_keeps_the_dictionary() {
+        let mut config = Config {
+            system_rate: 300,
+            ollama_model: "minicpm-v:8b".to_string(),
+            ollama_prompt: "Just read the numbers out.".to_string(),
+            engine: EnginePreference::ElevenLabs,
+            dictionary: vec![Replacement {
+                from: "Dr".to_string(),
+                to: "Doctor".to_string(),
+                whole_word: true,
+            }],
+            ..Config::default()
+        };
+        config.reset_to_defaults();
+
+        assert_eq!(config.system_rate, 175);
+        assert_eq!(config.ollama_model, DEFAULT_VISION_MODEL);
+        assert_eq!(config.ollama_prompt, DEFAULT_VISION_PROMPT);
+        assert_eq!(config.engine, EnginePreference::System);
+        assert_eq!(config.dictionary.len(), 1, "the dictionary must survive");
+        assert_eq!(config.dictionary[0].from, "Dr");
     }
 
     /// The prompt that answered a photograph of a city square with the words
