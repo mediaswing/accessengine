@@ -3,6 +3,26 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.2.7] - 2026-08-09
+
+### Fixed
+
+- **Prices and other quoted values in a CSV were read out with their quote
+  marks.** A spreadsheet that writes `"Technology", "£50.28"` — with a space
+  after the comma — had the quotes treated as part of the value instead of as
+  punctuation around it, so they were spoken. Worse and less visible: a value
+  that was not recognised as quoted no longer protected what was inside it, so
+  a cell like `"London, England"` was split into two columns and every value
+  after it on that row was read out under the wrong heading. Both are fixed,
+  and a quote mark used to mean inches — `5" bore` — is still read as one.
+
+- **A CSV whose lines end in a comma announced a column that wasn't there.**
+  Every row finished with "Column 3: empty", which is the last thing you hear
+  about each row and tells you nothing about any of them. Trailing empty cells
+  that no heading covers are no longer read out. A cell that is empty *under* a
+  heading is still announced, since that is missing data, and a genuine extra
+  value is still read rather than quietly skipped.
+
 ## [1.2.6] - 2026-08-09
 
 ### Changed
