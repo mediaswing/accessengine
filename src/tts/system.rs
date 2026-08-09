@@ -426,6 +426,7 @@ Amélie              fr_CA    # Bonjour! Je m'appelle Amélie.
     #[test]
     #[cfg(target_os = "macos")]
     fn the_real_system_reports_voices() {
+        let _serial = crate::sysexec::serialize_powershell_tests();
         let voices = super::list_voices().expect("macOS should have voices installed");
         assert!(!voices.is_empty());
         assert!(voices.iter().all(|v| !v.id.is_empty()));
@@ -435,6 +436,7 @@ Amélie              fr_CA    # Bonjour! Je m'appelle Amélie.
     #[test]
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn renders_real_speech_to_wav_and_mp3() {
+        let _serial = crate::sysexec::serialize_powershell_tests();
         let wav = std::env::temp_dir().join("accessengine-system-tts-test.wav");
         super::write_wav(
             "Testing the speech output engine, one two three.",
@@ -478,6 +480,7 @@ Amélie              fr_CA    # Bonjour! Je m'appelle Amélie.
         if cfg!(target_os = "windows") && std::env::var_os("CI").is_some() {
             return;
         }
+        let _serial = crate::sysexec::serialize_powershell_tests();
         let mut child = super::speak("Testing.", "", 250).expect("speech should start");
         assert!(
             child.try_wait().unwrap().is_none(),
