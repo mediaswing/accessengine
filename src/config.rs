@@ -196,6 +196,12 @@ pub struct Config {
     pub action: Action,
     /// Whether a Word document's formatting is read out with its words.
     pub formatting: Formatting,
+    /// Whether finishing or failing plays a sound. On by default: the app is
+    /// built for people who cannot see the status line change colour, and a
+    /// cue is the fastest way to know an action landed. Off is here because a
+    /// sound nobody can silence is its own accessibility problem — plenty of
+    /// people run this alongside a screen reader that is already talking.
+    pub sound_effects: bool,
     /// Audio format used when the action is [`Action::SaveAudio`].
     pub save_format: AudioFormat,
 
@@ -231,6 +237,7 @@ impl Default for Config {
             engine: EnginePreference::System,
             action: Action::ReadAloud,
             formatting: Formatting::Ignore,
+            sound_effects: true,
             save_format: AudioFormat::Wav,
             elevenlabs_voice_id: String::new(),
             elevenlabs_voice_name: String::new(),

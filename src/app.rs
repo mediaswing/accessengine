@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How the status line should read.
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -49,7 +49,28 @@ impl Tone {
             Self::Error => "Problem: ",
         }
     }
+
+    /// The sound this outcome makes, if it makes one.
+    ///
+    /// `Info` deliberately makes none. It is the tone used for "reading…" and
+    /// the other running commentary, and a document read aloud in three parts
+    /// would otherwise chime through its own narration.
+    fn sound(self) -> Option<&'static [u8]> {
+        match self {
+            Self::Info => None,
+            Self::Success => Some(SUCCESS_SOUND),
+            Self::Error => Some(ERROR_SOUND),
+        }
+    }
 }
+
+/// The two cues, built into the binary so the app has no files to lose.
+///
+/// Both are CC0 recordings from freesound.org, trimmed of their silence and
+/// levelled to the same loudness so that neither is the startling one — see
+/// `assets/sounds/CREDITS.txt`.
+const SUCCESS_SOUND: &[u8] = include_bytes!("../assets/sounds/success.wav");
+const ERROR_SOUND: &[u8] = include_bytes!("../assets/sounds/error.wav");
 
 /// Which engine the current settings actually resolve to.
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -229,6 +250,15 @@ pub struct SpeechApp {
     audio_file: Option<PathBuf>,
 
     status: Option<(String, Tone)>,
+    /// The success or failure sound currently playing, held only because
+    /// dropping it would cut the sound off mid-note.
+    cue: Option<Playback>,
+    /// When the last one started, so a cue cannot be retriggered faster than
+    /// it can be heard. Every caller of [`SpeechApp::set_status`] today is an
+    /// event handler, but a status set from drawing code instead would turn a
+    /// helpful sound into sixty a second, and that failure is loud, obvious to
+    /// the user and invisible in a test.
+    cue_at: Option<Instant>,
     log: Vec<String>,
     show_log: bool,
 
@@ -292,6 +322,8 @@ impl SpeechApp {
             cached: None,
             audio_file: None,
             status: None,
+            cue: None,
+            cue_at: None,
             log: Vec::new(),
             show_log: false,
             confirm_reset: false,
@@ -410,6 +442,38 @@ impl SpeechApp {
 
     fn set_status(&mut self, message: impl Into<String>, tone: Tone) {
         self.status = Some((message.into(), tone));
+        self.play_cue(tone);
+    }
+
+    /// Sounds the cue for an outcome, if there is one for it and the user
+    /// wants it.
+    ///
+    /// Hung off `set_status` rather than off each of the three dozen places an
+    /// action can finish, because that is the one thing every one of them
+    /// already does. Anything that reports an outcome gets the sound for free,
+    /// and — the part worth having — anything added later cannot forget it.
+    fn play_cue(&mut self, tone: Tone) {
+        let Some(sound) = tone.sound() else {
+            return;
+        };
+        if !self.config.sound_effects {
+            return;
+        }
+        // See `cue_at`. Two cues inside this window is a bug somewhere else;
+        // dropping the second is the quietest possible way to survive it.
+        const GAP: Duration = Duration::from_millis(250);
+        if self.cue_at.is_some_and(|at| at.elapsed() < GAP) {
+            return;
+        }
+        self.cue_at = Some(Instant::now());
+        // A cue is decoration. Failing to open an output device for one is not
+        // worth a word to the user, who is at this moment being told something
+        // that actually matters — but it goes in the log, because "the sounds
+        // stopped working" is otherwise unanswerable.
+        match Playback::play_cue(sound) {
+            Ok(playback) => self.cue = Some(playback),
+            Err(error) => crate::log::line(format!("sound: the cue could not play — {error:#}")),
+        }
     }
 
     fn save_config(&mut self) {
@@ -2092,6 +2156,26 @@ impl SpeechApp {
 
         ui.add_space(12.0);
         ui.separator();
+        let sounds = ui
+            .checkbox(
+                &mut self.config.sound_effects,
+                "Play a sound when an action finishes or fails",
+            )
+            .on_hover_text(
+                "A short chime for success and a lower tone for a problem, so you do not \
+                 have to watch the status line to know which happened.",
+            );
+        if sounds.changed() {
+            edited = true;
+            // The confirmation of turning them on is the sound itself, which
+            // is also the only way to find out they are audible at all.
+            if self.config.sound_effects {
+                self.play_cue(Tone::Success);
+            }
+        }
+
+        ui.add_space(12.0);
+        ui.separator();
         ui.add(
             egui::Label::new(
                 "Images are read by a vision model running on this computer through Ollama. \
@@ -2612,5 +2696,63 @@ impl eframe::App for SpeechApp {
                     });
                 });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cues are decoded at the moment they are played, and a cue that
+    /// fails to decode is deliberately swallowed into the log rather than
+    /// reported — so a bad file here would be silent in the most literal way,
+    /// and nobody would find out from using the app.
+    #[test]
+    fn both_cues_decode_to_audible_sound() {
+        for (name, bytes) in [("success", SUCCESS_SOUND), ("error", ERROR_SOUND)] {
+            let decoder = rodio::Decoder::builder()
+                .with_data(std::io::Cursor::new(bytes))
+                .with_byte_len(bytes.len() as u64)
+                .build()
+                .unwrap_or_else(|error| panic!("the {name} cue should decode: {error}"));
+
+            let samples: Vec<f32> =
+                rodio::Source::take_duration(decoder, std::time::Duration::from_secs(5)).collect();
+            let peak = samples.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+
+            assert!(!samples.is_empty(), "the {name} cue decoded to nothing");
+            assert!(peak > 0.1, "the {name} cue is silent or nearly so: {peak}");
+        }
+    }
+
+    /// A cue is feedback, so it has to be over before it becomes an
+    /// interruption — and it must not still be sounding when the next action
+    /// reports its own outcome.
+    #[test]
+    fn neither_cue_outstays_its_welcome() {
+        for (name, bytes) in [("success", SUCCESS_SOUND), ("error", ERROR_SOUND)] {
+            let decoder = rodio::Decoder::builder()
+                .with_data(std::io::Cursor::new(bytes))
+                .with_byte_len(bytes.len() as u64)
+                .build()
+                .unwrap();
+            let length = rodio::Source::total_duration(&decoder)
+                .unwrap_or_else(|| panic!("the {name} cue should report a duration"));
+            assert!(
+                length < std::time::Duration::from_secs(3),
+                "the {name} cue runs for {length:?}"
+            );
+        }
+    }
+
+    /// Running commentary — "reading part 2 of 5" — is set with `Info`, and a
+    /// document read in parts would chime through its own narration if that
+    /// tone had a sound.
+    #[test]
+    fn only_finishing_and_failing_make_a_sound() {
+        assert!(Tone::Info.sound().is_none());
+        assert!(Tone::Success.sound().is_some());
+        assert!(Tone::Error.sound().is_some());
+        assert_ne!(Tone::Success.sound(), Tone::Error.sound());
     }
 }

@@ -213,6 +213,23 @@ impl Playback {
         Self::start(decoder)
     }
 
+    /// Starts a short sound effect built into the binary.
+    ///
+    /// Deliberately its own output device rather than a second source on the
+    /// player already running: a cue has to be able to sound *over* a document
+    /// being read aloud, since "that failed" is worth knowing before the
+    /// reading ends, and it must not disturb a player the user can pause and
+    /// rewind. Sharing one would make the cue part of what Stop stops and what
+    /// the transport reports the position of.
+    pub fn play_cue(wav: &'static [u8]) -> Result<Self> {
+        let decoder = rodio::Decoder::builder()
+            .with_data(Cursor::new(wav))
+            .with_byte_len(wav.len() as u64)
+            .build()
+            .context("could not decode the sound effect")?;
+        Self::start(decoder)
+    }
+
     /// Starts playing an audio file from disk.
     pub fn play_file(path: &Path) -> Result<Self> {
         let file = std::fs::File::open(path)
@@ -478,6 +495,30 @@ mod tests {
 
     /// The whole transport, on a real output device.
     ///
+    /// A cue on a real output device, which is the only thing the decode
+    /// tests in `app` cannot cover: the sounds are built into the binary and
+    /// played through their own sink, and a failure to open one is swallowed
+    /// into the log on purpose so it can never interrupt what the user is
+    /// being told. Skipped where there is no audio hardware, as below.
+    #[test]
+    fn a_cue_plays_on_a_real_device_and_finishes_by_itself() {
+        const CUE: &[u8] = include_bytes!("../assets/sounds/error.wav");
+
+        let Ok(mut cue) = Playback::play_cue(CUE) else {
+            eprintln!("no audio output device; skipping the cue test");
+            return;
+        };
+        assert!(!cue.is_finished(), "the cue was over before it started");
+        // The error cue is 0.4s long. A full second and it has certainly had
+        // its chance, so a cue still going is one that would talk over the
+        // next thing the app says.
+        std::thread::sleep(Duration::from_secs(1));
+        assert!(
+            cue.is_finished(),
+            "the cue was still playing a second later"
+        );
+    }
+
     /// Skipped where there is no audio hardware — CI runners have none — since
     /// the point of this test is the device path, and a machine that cannot
     /// play sound has nothing to say about whether Pause works.

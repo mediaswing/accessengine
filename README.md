@@ -27,7 +27,8 @@ This is the point of the app rather than a feature of it.
 - **The focused control is obvious** — a heavy accent-coloured outline, not a
   faint one-pixel ring.
 - **Colour is never the only signal.** Status messages are prefixed with
-  "Done:" or "Problem:" as well as coloured.
+  "Done:" or "Problem:" as well as coloured, and — unless you turn it off —
+  finishing and failing each make their own sound.
 - **Contrast is designed, not inherited.** Every text colour in `src/theme.rs`
   is written down as a pair with the surface it sits on, and clears 4.5:1 in
   both the light and dark themes. The app follows your system appearance.
@@ -49,6 +50,9 @@ This is the point of the app rather than a feature of it.
   one this app saved, or an audiobook chapter from anywhere else — with play,
   pause, stop and a ten-second rewind for the sentence you missed. Drop a file
   anywhere on the window and it lands there.
+- **A sound when something finishes or fails.** A short chime for success, a
+  lower tone for a problem, so you know which happened without watching the
+  status line. Turn it off under **Settings**.
 - **A dictionary of word replacements** — see below.
 - **Reads images** (`.jpg`, `.png`, and `.heic`/`.heif` on macOS) through a
   local [Ollama](https://ollama.com) vision model. Nothing is uploaded anywhere.
@@ -262,4 +266,6 @@ signature, rather than `cfg` scattered through the app.
 ## Licence
 
 MIT. See [LICENSE](LICENSE). The bundled Ubuntu Bold font is under the Ubuntu
-Font Licence 1.0; see `assets/fonts/`.
+Font Licence 1.0; see `assets/fonts/`. The two sound effects are CC0 recordings
+from freesound.org, edited for length and loudness; see `assets/sounds/` for
+what they are and who made them.
