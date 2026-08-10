@@ -493,16 +493,34 @@ mod tests {
         }
     }
 
-    /// The whole transport, on a real output device.
+    /// Held for as long as a test has an output device open.
     ///
-    /// A cue on a real output device, which is the only thing the decode
-    /// tests in `app` cannot cover: the sounds are built into the binary and
-    /// played through their own sink, and a failure to open one is swallowed
-    /// into the log on purpose so it can never interrupt what the user is
-    /// being told. Skipped where there is no audio hardware, as below.
+    /// Windows will not have two of these at once from two test threads: the
+    /// run dies with `STATUS_ACCESS_VIOLATION` — a native crash, no panic, no
+    /// failing test — the moment a second one is opened while the first is
+    /// still up. It survived for as long as exactly one test in the suite
+    /// opened a device, and broke the first time a second one did.
+    ///
+    /// The poisoning is ignored deliberately. A panic in one of these tests
+    /// should fail that test, not turn every other one into an unrelated
+    /// "poisoned mutex" failure that hides it.
+    static DEVICE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn device_lock() -> std::sync::MutexGuard<'static, ()> {
+        DEVICE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A cue on a real output device, which is the one thing the decode tests
+    /// in `app` cannot cover: the sounds are built into the binary and played
+    /// through their own sink, and a failure to open one is swallowed into the
+    /// log on purpose so it can never interrupt what the user is being told.
+    /// Skipped where there is no audio hardware, as below.
     #[test]
     fn a_cue_plays_on_a_real_device_and_finishes_by_itself() {
         const CUE: &[u8] = include_bytes!("../assets/sounds/error.wav");
+        let _device = device_lock();
 
         let Ok(mut cue) = Playback::play_cue(CUE) else {
             eprintln!("no audio output device; skipping the cue test");
@@ -519,11 +537,14 @@ mod tests {
         );
     }
 
+    /// The whole transport, on a real output device.
+    ///
     /// Skipped where there is no audio hardware — CI runners have none — since
     /// the point of this test is the device path, and a machine that cannot
     /// play sound has nothing to say about whether Pause works.
     #[test]
     fn the_transport_pauses_rewinds_and_stops_a_real_file() {
+        let _device = device_lock();
         let path = std::env::temp_dir().join("soe-transport-test.wav");
         write_wav(&path, &tone(1, 22_050, 20.0)).unwrap();
 
