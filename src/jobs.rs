@@ -114,6 +114,10 @@ pub enum Update {
     /// The voice list could not be fetched; the UI shows this next to the
     /// picker rather than retrying forever.
     ElevenLabsVoicesFailed(String),
+    /// ElevenLabs turned the key down. Its own message rather than an
+    /// [`Update::Error`] because it is the one failure the UI does something
+    /// about — see [`tts::elevenlabs::KeyRejected`] — instead of only saying.
+    ApiKeyRejected,
     /// MP3 for playback.
     Mp3Ready(Arc<Vec<u8>>),
     Saved(PathBuf),
@@ -137,6 +141,17 @@ fn cancelled(cancel: &Cancel) -> bool {
     cancel.load(Ordering::Relaxed)
 }
 
+/// True for the failure that means the saved key is no good.
+///
+/// The whole chain is searched, not just the outermost error: a rejection that
+/// happened while synthesising part 3 of 5 arrives wrapped in the context that
+/// says so, and it is still a rejection.
+fn is_key_rejection(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|e| e.is::<tts::elevenlabs::KeyRejected>())
+}
+
 /// Runs `job` on a new thread. The thread always sends [`Update::Finished`],
 /// so the UI can clear its busy state in exactly one place.
 pub fn spawn(job: Job, tx: Sender<Update>, cancel: Cancel, repaint: impl Fn() + Send + 'static) {
@@ -144,7 +159,11 @@ pub fn spawn(job: Job, tx: Sender<Update>, cancel: Cancel, repaint: impl Fn() + 
         if let Err(error) = run(job, &tx, &cancel) {
             // A cancellation is the user's own doing, not something to report.
             if !cancelled(&cancel) {
-                let _ = tx.send(Update::Error(format!("{error:#}")));
+                let _ = tx.send(if is_key_rejection(&error) {
+                    Update::ApiKeyRejected
+                } else {
+                    Update::Error(format!("{error:#}"))
+                });
             }
         }
         let _ = tx.send(Update::Finished);
@@ -165,6 +184,11 @@ fn run(job: Job, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
             match tts::elevenlabs::list_voices(&key) {
                 Ok(voices) => {
                     let _ = tx.send(Update::ElevenLabsVoices(voices));
+                }
+                // A key the account no longer honours is not a voice-picker
+                // problem, so it does not go in the voice picker.
+                Err(error) if is_key_rejection(&error) => {
+                    let _ = tx.send(Update::ApiKeyRejected);
                 }
                 Err(error) => {
                     let _ = tx.send(Update::ElevenLabsVoicesFailed(format!("{error:#}")));
@@ -534,6 +558,29 @@ mod tests {
         // The MP3 must decode, and the scratch WAV must not be left behind.
         assert!(audio::decode_mp3(&bytes).is_ok());
         assert!(!temp.exists(), "the temporary WAV was not cleaned up");
+    }
+
+    /// A rejected key is thrown away and asked for again, so this test is the
+    /// difference between "your key is wrong" and "your wifi is off" — and it
+    /// has to survive the context a failure picks up on its way up, or a key
+    /// turned down mid-document would be kept.
+    #[test]
+    fn only_a_rejected_key_reads_as_a_rejected_key() {
+        use anyhow::Context as _;
+
+        let rejected: anyhow::Error = tts::elevenlabs::KeyRejected.into();
+        assert!(is_key_rejection(&rejected));
+
+        let wrapped = Err::<(), _>(rejected)
+            .context("reading part 3 of 5")
+            .unwrap_err();
+        assert!(is_key_rejection(&wrapped));
+
+        // Every other failure leaves the key alone, however it is worded.
+        let offline = anyhow::anyhow!("could not reach ElevenLabs");
+        assert!(!is_key_rejection(&offline));
+        let lookalike = anyhow::anyhow!("ElevenLabs rejected that API key");
+        assert!(!is_key_rejection(&lookalike));
     }
 
     #[test]

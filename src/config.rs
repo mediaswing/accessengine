@@ -227,7 +227,7 @@ pub struct Config {
 
     /// Directory the last save went to, so the dialog reopens somewhere useful.
     pub last_save_dir: Option<PathBuf>,
-    /// Directory the Audio Player last opened a file from.
+    /// Directory the audio player last opened a file from.
     pub last_audio_dir: Option<PathBuf>,
 }
 

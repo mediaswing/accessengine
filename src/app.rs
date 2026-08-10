@@ -72,6 +72,11 @@ impl Tone {
 const SUCCESS_SOUND: &[u8] = include_bytes!("../assets/sounds/success.wav");
 const ERROR_SOUND: &[u8] = include_bytes!("../assets/sounds/error.wav");
 
+/// Where an ElevenLabs key is created. Linked from the dialog that asks for
+/// one, because "paste the key from your account" assumes you know where in
+/// that account it lives.
+const ELEVENLABS_KEYS_URL: &str = "https://elevenlabs.io/app/settings/api-keys";
+
 /// Which engine the current settings actually resolve to.
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ActiveEngine {
@@ -128,7 +133,7 @@ impl Pane {
     fn label(self) -> &'static str {
         match self {
             Self::Read => "📄  Read a File",
-            Self::Player => "🔊  Audio Player",
+            Self::Player => "🔊  Audio player",
             Self::Dictionary => "📖  Dictionary",
             Self::Settings => "⚙  Settings",
             Self::Shortcuts => "？  Shortcuts",
@@ -192,10 +197,10 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ),
     (
         "{C}1 … {C}5",
-        "Go to Read, Audio Player, Dictionary, Settings or Shortcuts",
+        "Go to Read, Audio player, Dictionary, Settings or Shortcuts",
     ),
-    ("{C}P", "Audio Player: play, or pause if already playing"),
-    ("{C}R", "Audio Player: skip back ten seconds"),
+    ("{C}P", "Audio player: play, or pause if already playing"),
+    ("{C}R", "Audio player: skip back ten seconds"),
     ("↑ ↓", "Move along the list of panes, once it has focus"),
     ("Tab / Shift+Tab", "Move between controls"),
     ("Space or Return", "Operate the focused control"),
@@ -238,13 +243,13 @@ pub struct SpeechApp {
     /// so two things can never talk over each other and a single Stop always
     /// stops the right one.
     playback: Option<Playback>,
-    /// True when `playback` is a file opened in the Audio Player rather than a
+    /// True when `playback` is a file opened in the audio player rather than a
     /// document being read aloud. The two want different words in the status
     /// line and different buttons enabled.
     playing_audio_file: bool,
     cached: Option<CachedRender>,
 
-    /// The file loaded into the Audio Player, which is deliberately separate
+    /// The file loaded into the audio player, which is deliberately separate
     /// from the document in the Read pane: auditioning a saved recording
     /// should not throw away the document you just extracted.
     audio_file: Option<PathBuf>,
@@ -277,6 +282,13 @@ pub struct SpeechApp {
     /// rather than every frame — which would trap focus in its only field.
     dialog_opened: bool,
     key_input: String,
+    /// A key was just entered and is being tried against ElevenLabs, so the
+    /// answer to that attempt is worth a word and a sound — where the same
+    /// voice list loading by itself, at launch or on switching engines, is not.
+    checking_key: bool,
+    /// The last key was refused and thrown away, so the dialog can say why it
+    /// is asking again.
+    key_rejected: bool,
     /// A control to hand the keyboard to on the next frame.
     focus: Option<Field>,
     /// A pane whose tab should take the keyboard on the next frame, after the
@@ -333,6 +345,8 @@ impl SpeechApp {
             show_api_key: false,
             dialog_opened: false,
             key_input: String::new(),
+            checking_key: false,
+            key_rejected: false,
             // The keyboard starts on the first control, so a user who never
             // touches the mouse does not have to Tab in from nowhere.
             focus: Some(Field::File),
@@ -443,6 +457,20 @@ impl SpeechApp {
     fn set_status(&mut self, message: impl Into<String>, tone: Tone) {
         self.status = Some((message.into(), tone));
         self.play_cue(tone);
+    }
+
+    /// The same, without the sound.
+    ///
+    /// For the audio player, and only for it. Everywhere else the cue is the
+    /// point: it says an action you started and stopped watching has finished.
+    /// In the player the sound *is* the output — a chime as a recording is
+    /// loaded, or a chime landing on the last words of one, is the app talking
+    /// over the thing it was asked to play.
+    ///
+    /// Failures there still make their noise. "That file would not open" is
+    /// worth interrupting for; "that file opened" is not.
+    fn set_status_quietly(&mut self, message: impl Into<String>, tone: Tone) {
+        self.status = Some((message.into(), tone));
     }
 
     /// Sounds the cue for an outcome, if there is one for it and the user
@@ -731,7 +759,7 @@ impl SpeechApp {
         self.config.last_audio_dir = path.parent().map(Path::to_path_buf);
         self.config_dirty = true;
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        self.set_status(format!("Loaded {name}. Press Play."), Tone::Success);
+        self.set_status_quietly(format!("Loaded {name}. Press Play."), Tone::Success);
         self.audio_file = Some(path);
         self.focus = Some(Field::Play);
     }
@@ -901,6 +929,54 @@ impl SpeechApp {
         self.dialog_opened = true;
     }
 
+    /// Throws away a key ElevenLabs has refused, and asks for another one.
+    ///
+    /// A refused key is worth nothing: every request made with it fails the
+    /// same way, and until now the only route back to the dialog was to switch
+    /// the engine to System voices and back again to make the app notice. So
+    /// the key goes, the dialog opens where it left off, and the sound says
+    /// which way it went.
+    ///
+    /// Only an actual refusal gets here — see `jobs::is_key_rejection`. A key
+    /// that could not be checked because the network was down is left alone;
+    /// deleting someone's key because their wifi dropped would be its own bug.
+    fn forget_rejected_key(&mut self) {
+        self.checking_key = false;
+        self.elevenlabs_voices = VoiceList::default();
+
+        // A key from the environment is not this app's to delete, and clearing
+        // the file would not stop it being loaded again at the next launch.
+        if self.key_source == KeySource::Env {
+            self.set_status(
+                format!(
+                    "ElevenLabs rejected the key in {}. Unset it, or replace it with one that \
+                     works.",
+                    apikey::ENV_VAR
+                ),
+                Tone::Error,
+            );
+            return;
+        }
+
+        if let Err(error) = apikey::clear() {
+            // Worth logging, not worth saying: the key is out of use either
+            // way, since it is gone from memory and never read again this
+            // session, and the user is already being told the bigger thing.
+            crate::log::line(format!(
+                "api key: the rejected key could not be removed — {error:#}"
+            ));
+        }
+        self.api_key = None;
+        self.key_source = KeySource::None;
+        self.key_rejected = true;
+        self.set_status(
+            "ElevenLabs rejected that API key, so it has been removed. Enter another, or \
+             choose System voices.",
+            Tone::Error,
+        );
+        self.open_api_key_dialog();
+    }
+
     // -------------------------------------------------------------- updates
 
     fn drain_updates(&mut self, ctx: &egui::Context) {
@@ -954,6 +1030,11 @@ impl SpeechApp {
                         error: None,
                         loaded: true,
                     };
+                    // The voice list is the key check, so this is the moment a
+                    // key the user just typed is known to be good.
+                    if std::mem::take(&mut self.checking_key) {
+                        self.set_status("API key accepted.", Tone::Success);
+                    }
                 }
                 Update::Mp3Ready(mp3) => {
                     self.cached = Some(CachedRender {
@@ -976,12 +1057,23 @@ impl SpeechApp {
                 // soon as the setup job sends `Finished`.
                 Update::SetupComplete(message) => self.set_status(message, Tone::Success),
                 Update::ElevenLabsVoicesFailed(message) => {
+                    // Not a rejection — the key may be perfectly good and the
+                    // network not — so the key stays and the failure stays by
+                    // the picker. A check the user asked for by entering a key
+                    // is still owed an answer, out loud.
+                    if std::mem::take(&mut self.checking_key) {
+                        self.set_status(
+                            format!("The key was saved but could not be checked: {message}"),
+                            Tone::Error,
+                        );
+                    }
                     self.elevenlabs_voices = VoiceList {
                         voices: Vec::new(),
                         error: Some(message),
                         loaded: true,
                     };
                 }
+                Update::ApiKeyRejected => self.forget_rejected_key(),
                 Update::Error(message) => {
                     crate::log::line(format!("failed: {message}"));
                     self.set_status(message, Tone::Error);
@@ -1006,12 +1098,13 @@ impl SpeechApp {
             self.playback = None;
             self.playing_audio_file = false;
             if matches!(self.status, Some((_, Tone::Info))) {
-                let done = if was_a_file {
-                    "Finished playing."
+                if was_a_file {
+                    // No chime on the end of a recording: it arrives over the
+                    // last word, and the file running out is not news.
+                    self.set_status_quietly("Finished playing.", Tone::Success);
                 } else {
-                    "Finished reading."
-                };
-                self.set_status(done, Tone::Success);
+                    self.set_status("Finished reading.", Tone::Success);
+                }
             }
         }
     }
@@ -1525,7 +1618,7 @@ impl SpeechApp {
 
         // While speech is playing the same button stops it: one full-width
         // control in one place, whatever state the app is in. A file playing in
-        // the Audio Player is not this pane's business, and has its own Stop.
+        // the audio player is not this pane's business, and has its own Stop.
         if self.is_playing() && !self.playing_audio_file {
             let stop = ui.add(
                 egui::Button::new(RichText::new("⏹  Stop Reading").size(17.0))
@@ -1710,10 +1803,15 @@ impl SpeechApp {
         self.show_api_key = false;
         self.dialog_opened = false;
         self.key_input.clear();
+        // The rejection notice explains why the dialog opened by itself, so it
+        // goes when the dialog does. Opening it again later — to change a
+        // working key — should not still be reading someone their last mistake.
+        self.key_rejected = false;
         self.config_dirty = true;
     }
 
     fn api_key_dialog(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         ui.heading("ElevenLabs API Key");
         ui.add_space(6.0);
 
@@ -1747,6 +1845,17 @@ impl SpeechApp {
                 }
             }
             KeySource::None => {
+                // Shown once, at the top, when the last key came back rejected
+                // — so the dialog reopening explains itself rather than looking
+                // like it never closed.
+                if self.key_rejected {
+                    ui.colored_label(
+                        crate::theme::palette(ui.visuals()).bad,
+                        "ElevenLabs turned the last key down, so it has been removed. \
+                         Check the whole key was copied, then paste it again.",
+                    );
+                    ui.add_space(8.0);
+                }
                 ui.add(
                     egui::Label::new(format!(
                         "Paste the key from your ElevenLabs account. It is kept {}, in a file only \
@@ -1757,6 +1866,24 @@ impl SpeechApp {
                     .wrap(),
                 );
                 ui.add_space(8.0);
+
+                // A button rather than a bare link, so it is the same size and
+                // in the same Tab order as everything else here — and it says
+                // where it goes, since "click here" is no use read aloud.
+                if ui
+                    .add(
+                        egui::Button::new("🌐  Get a Key From ElevenLabs…")
+                            .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
+                    )
+                    .on_hover_text(format!(
+                        "Opens {ELEVENLABS_KEYS_URL} in your browser. Sign in, copy the key, \
+                         then paste it below."
+                    ))
+                    .clicked()
+                {
+                    ctx.open_url(egui::OpenUrl::same_tab(ELEVENLABS_KEYS_URL));
+                }
+                ui.add_space(10.0);
 
                 let caption = ui.label("API key");
                 let entry = ui.add(
@@ -1786,9 +1913,20 @@ impl SpeechApp {
                             self.api_key = Some(key);
                             self.key_source = KeySource::Stored;
                             self.elevenlabs_voices = VoiceList::default();
-                            self.set_status("API key saved.", Tone::Success);
                             self.close_dialog();
                             self.focus = Some(Field::Voice);
+                            // Deliberately `Info`, which makes no sound: a key
+                            // is written to disk long before anyone knows it is
+                            // any good, and a success chime here would be
+                            // celebrating a key ElevenLabs is about to refuse.
+                            // The sound belongs to the answer, below.
+                            self.set_status("API key saved. Checking it…", Tone::Info);
+                            self.checking_key = true;
+                            // Asked for here rather than left to the voice
+                            // picker to notice, which only happens when the
+                            // Read pane is the one on screen — the key can be
+                            // entered from any of them.
+                            self.load_elevenlabs_voices(&ctx);
                             return;
                         }
                         Err(error) => self.set_status(format!("{error:#}"), Tone::Error),
@@ -1925,7 +2063,7 @@ impl SpeechApp {
         }
     }
 
-    /// The Audio Player: choose a file, then play, pause, stop or skip back.
+    /// The audio player: choose a file, then play, pause, stop or skip back.
     ///
     /// The four transport buttons are always present and always in the same
     /// place, greyed out rather than hidden when they don't apply — a control
@@ -1935,7 +2073,7 @@ impl SpeechApp {
     fn player_pane(&mut self, ui: &mut egui::Ui) {
         const HALF: f32 = (FORM_WIDTH - 10.0) / 2.0;
 
-        ui.heading("Audio Player");
+        ui.heading("Audio player");
         ui.add_space(6.0);
         ui.add(
             egui::Label::new(
@@ -2103,6 +2241,17 @@ impl SpeechApp {
             None => format!("{state} {}", audio::spoken_time(position)),
         };
         ui.label(RichText::new(text).size(15.0));
+
+        // The time left, on its own line and in the largest type on the pane,
+        // because "how much longer" is the question a listener actually has and
+        // working it out from two other numbers is not an answer. Only shown
+        // when the length is known: audio stitched from several ElevenLabs
+        // responses often reports none, and a countdown from nowhere would be
+        // worse than no countdown.
+        if let Some(total) = duration {
+            let left = audio::spoken_time(audio::time_left(position, total));
+            ui.label(RichText::new(format!("{left} left")).size(17.0).strong());
+        }
 
         if let Some(total) = duration.filter(|d| !d.is_zero()) {
             let fraction = (position.as_secs_f32() / total.as_secs_f32()).clamp(0.0, 1.0);
@@ -2584,7 +2733,7 @@ impl SpeechApp {
     }
 }
 
-/// True for a file the Audio Player can open, which is what decides where a
+/// True for a file the audio player can open, which is what decides where a
 /// dropped file goes.
 fn is_playable(path: &Path) -> bool {
     path.extension()

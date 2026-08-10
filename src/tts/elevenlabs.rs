@@ -25,6 +25,24 @@ const CONTEXT_CHARS: usize = 300;
 /// format the app needs since WAV saves are decoded from it.
 const OUTPUT_FORMAT: &str = "mp3_44100_128";
 
+/// The one ElevenLabs failure the app *acts* on rather than only reports: the
+/// key is wrong, so it is thrown away and asked for again instead of being kept
+/// to fail every later request in the same way.
+///
+/// A type rather than a matched-on message, because the message is written for
+/// the person reading it and rewording it must never quietly change what the
+/// app does with the key.
+#[derive(Debug)]
+pub struct KeyRejected;
+
+impl std::fmt::Display for KeyRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ElevenLabs rejected that API key")
+    }
+}
+
+impl std::error::Error for KeyRejected {}
+
 fn client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(180))
@@ -60,7 +78,7 @@ pub fn list_voices(api_key: &str) -> Result<Vec<Voice>> {
         .context("could not reach ElevenLabs")?;
 
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        bail!("ElevenLabs rejected that API key");
+        return Err(KeyRejected.into());
     }
     let response = check(response)?;
 
@@ -122,7 +140,7 @@ fn check(response: reqwest::blocking::Response) -> Result<reqwest::blocking::Res
         .unwrap_or_else(|| body.chars().take(200).collect());
 
     match status {
-        reqwest::StatusCode::UNAUTHORIZED => bail!("ElevenLabs rejected that API key"),
+        reqwest::StatusCode::UNAUTHORIZED => Err(KeyRejected.into()),
         reqwest::StatusCode::TOO_MANY_REQUESTS => {
             bail!("ElevenLabs is rate limiting this key; try again shortly")
         }

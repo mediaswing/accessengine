@@ -172,7 +172,7 @@ pub fn save(path: &Path, pcm: &Pcm, format: AudioFormat) -> Result<()> {
     }
 }
 
-/// The extensions the Audio Player will open. rodio is built here with only the
+/// The extensions the audio player will open. rodio is built here with only the
 /// MP3 and WAV decoders, so offering more would be offering files it cannot play.
 pub const PLAYABLE_EXTENSIONS: &[&str] = &["mp3", "wav", "wave"];
 
@@ -356,6 +356,16 @@ pub fn spoken_time(time: Duration) -> String {
     }
 }
 
+/// How long is left of a file that has reached `position` out of `total`.
+///
+/// Saturating rather than subtracting: a decoder's estimated length and its
+/// reported position come from different places and the position can cross it
+/// by a few milliseconds at the very end, which as a plain subtraction would
+/// underflow and show a countdown of several hundred thousand years.
+pub fn time_left(position: Duration, total: Duration) -> Duration {
+    total.saturating_sub(position)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,6 +433,25 @@ mod tests {
         let back = read_wav(&path).unwrap();
         std::fs::remove_file(&path).ok();
         assert_eq!(back.samples.len(), decoded.samples.len());
+    }
+
+    /// The countdown under the transport, worked out without an output device
+    /// — the arithmetic is the part that can be wrong.
+    #[test]
+    fn the_countdown_runs_down_to_nothing_and_stops_there() {
+        let left = |position, total| {
+            spoken_time(time_left(
+                Duration::from_secs(position),
+                Duration::from_secs(total),
+            ))
+        };
+        assert_eq!(left(0, 180), "3 minutes");
+        assert_eq!(left(60, 180), "2 minutes");
+        assert_eq!(left(179, 180), "1 second");
+        assert_eq!(left(180, 180), "0 seconds");
+        // A position past the decoder's estimate reads as finished rather than
+        // wrapping round to a countdown of geological length.
+        assert_eq!(left(181, 180), "0 seconds");
     }
 
     #[test]
@@ -574,6 +603,14 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         let held = playback.position();
         assert!(held > Duration::ZERO, "the position never advanced");
+        // The countdown the player shows comes off this same pair of numbers,
+        // so a file half a second into twenty seconds has most of itself left.
+        let total = playback.duration().expect("the length should be known");
+        let left = time_left(held, total);
+        assert!(
+            left > Duration::from_secs(18) && left < total,
+            "a file paused at {held:?} of {total:?} reported {left:?} left"
+        );
         std::thread::sleep(Duration::from_millis(300));
         assert_eq!(playback.position(), held, "a paused file kept moving");
 

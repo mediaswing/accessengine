@@ -44,15 +44,18 @@ This is the point of the app rather than a feature of it.
   readable text is kept — no style names, no stray tab stops, and character
   references like `&amp;` and `&#233;` come through as `&` and `é`.
 - **Two speech engines.** The voices built into your operating system, or
-  ElevenLabs. Choosing ElevenLabs asks for an API key there and then.
+  ElevenLabs. Choosing ElevenLabs asks for an API key there and then, with a
+  link to where ElevenLabs keeps them, and checks the key as soon as you paste
+  it. A key ElevenLabs turns down is removed rather than kept.
 - **Reads aloud, or saves to WAV or MP3.** One dropdown, not two buttons.
-- **Plays audio files back.** The **Audio Player** pane takes any WAV or MP3 —
+- **Plays audio files back.** The **Audio player** pane takes any WAV or MP3 —
   one this app saved, or an audiobook chapter from anywhere else — with play,
-  pause, stop and a ten-second rewind for the sentence you missed. Drop a file
-  anywhere on the window and it lands there.
+  pause, stop, a ten-second rewind for the sentence you missed, and a countdown
+  of how much is left. Drop a file anywhere on the window and it lands there.
 - **A sound when something finishes or fails.** A short chime for success, a
   lower tone for a problem, so you know which happened without watching the
-  status line. Turn it off under **Settings**.
+  status line. The audio player stays quiet, since there the sound is the point.
+  Turn the rest off under **Settings**.
 - **A dictionary of word replacements** — see below.
 - **Reads images** (`.jpg`, `.png`, and `.heic`/`.heif` on macOS) through a
   local [Ollama](https://ollama.com) vision model. Nothing is uploaded anywhere.
@@ -85,9 +88,9 @@ the voice.
 | <kbd>⌘O</kbd> | Choose a file — a document, or an audio file in the player |
 | <kbd>⌘Return</kbd> | Apply — run the chosen action |
 | <kbd>⌘.</kbd> or <kbd>Esc</kbd> | Stop reading or playing, or cancel what is running |
-| <kbd>⌘1</kbd> … <kbd>⌘5</kbd> | Go to Read, Audio Player, Dictionary, Settings or Shortcuts |
-| <kbd>⌘P</kbd> | Audio Player: play, or pause if already playing |
-| <kbd>⌘R</kbd> | Audio Player: skip back ten seconds |
+| <kbd>⌘1</kbd> … <kbd>⌘5</kbd> | Go to Read, Audio player, Dictionary, Settings or Shortcuts |
+| <kbd>⌘P</kbd> | Audio player: play, or pause if already playing |
+| <kbd>⌘R</kbd> | Audio player: skip back ten seconds |
 | <kbd>↑</kbd> <kbd>↓</kbd> | Move along the list of panes, once it has focus |
 | <kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> | Move between controls |
 | <kbd>Space</kbd> or <kbd>Return</kbd> | Operate the focused control |
