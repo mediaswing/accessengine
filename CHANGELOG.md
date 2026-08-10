@@ -3,6 +3,48 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.5.0] - 2026-08-10
+
+### Added
+
+- **The audio player shows how much is left.** A countdown under the transport
+  buttons — "2 minutes 55 seconds left" — on its own line and in the largest
+  type on the pane. The position and the length were both already there, but
+  working out the answer from two other numbers is not an answer, and "how much
+  longer" is the question a listener actually has. It appears whenever the
+  length is known, which is every file you can open from disk.
+
+- **A link to where ElevenLabs keeps your key.** The dialog that asks for one
+  now has a button that opens the right page of your ElevenLabs account. "Paste
+  the key from your account" was only useful advice if you already knew where in
+  that account to look.
+
+### Changed
+
+- **A key is checked as you enter it, and the sound tells you the answer.**
+  Saving a key used to chime immediately — a sound celebrating a key that had
+  been written to disk and not yet shown to anyone. The key is now tried against
+  ElevenLabs straight away: the success sound means accepted, the failure sound
+  means refused. If it simply could not be checked — no network, ElevenLabs
+  down — it says so and keeps the key, since that is not the key's fault.
+
+- **A key ElevenLabs turns down is removed, and asked for again.** A refused key
+  is worth nothing; every request made with it fails the same way. Until now the
+  only route back to the dialog was to switch the engine to System voices and
+  back again to make the app notice, which is not a thing anyone should have to
+  discover. The key is now deleted and the dialog reopens with a line saying
+  why. A key set in `ELEVENLABS_API_KEY` is reported but never deleted — that
+  one is yours, not the app's.
+
+- **The audio player stays quiet.** The chime that says an action finished was
+  also playing when a recording was loaded, and again as one reached its end —
+  landing over the last words of the very thing the app had been asked to play.
+  In the player the sound *is* the output, so it makes none of its own. Failures
+  there still make their noise: "that file would not open" is worth interrupting
+  for, "that file opened" is not. Everywhere else the sounds are unchanged.
+
+- **The pane is called "Audio player"**, not "Audio Player".
+
 ## [1.3.0] - 2026-08-10
 
 ### Added
