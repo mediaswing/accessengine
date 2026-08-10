@@ -3,6 +3,26 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.3.0] - 2026-08-10
+
+### Added
+
+- **Finishing and failing now make a sound.** A short chime when an action
+  succeeds, a lower tone when something goes wrong — so you know which happened
+  without watching the status line change colour. It plays over a document
+  being read aloud rather than waiting for it to end, because "that failed" is
+  worth knowing at the time.
+
+  Only outcomes make a sound. Progress messages — "reading part 2 of 5" — stay
+  silent, or a long document would chime through its own narration. There is a
+  checkbox under **Settings** to turn the sounds off, and ticking it plays the
+  success sound so you can hear that it worked.
+
+  The two recordings are CC0 from freesound.org. Both were trimmed of silence,
+  levelled to match each other and faded at both ends; as published, the
+  failure sound was about 11 dB quieter than the success one, which would have
+  made the sound telling you something went wrong the one you strained to hear.
+
 ## [1.2.8] - 2026-08-10
 
 ### Added
