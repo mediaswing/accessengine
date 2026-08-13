@@ -3,6 +3,48 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.6.0] - 2026-08-13
+
+### Added
+
+- **It describes video.** Open an `.mp4`, `.mov`, `.m4v`, `.avi`, `.mkv` or
+  `.webm` and the app takes still frames out of it, reads each one with the same
+  vision model that reads your images, and writes the answers up as a single
+  continuous description of what happens. From there it is ordinary text: read
+  it aloud, or save it as a WAV or MP3 like anything else. Nothing is uploaded
+  anywhere. It needs ffmpeg, and the app offers to install it the first time you
+  open a video, the same way it offers Ollama.
+
+  Frames are taken wherever the picture changes enough to be a new shot, plus
+  one every half minute so a long unbroken take is not described by its opening
+  frame alone. That matters more than it sounds: every frame is a separate call
+  to the vision model, which can take the better part of a minute on a computer
+  with no graphics card, so a ten-minute lecture on one slide costs a handful of
+  frames while a fast-cut trailer of the same length costs many. Three settings
+  decide it — how much change counts as a new shot, how long before a frame is
+  taken anyway, and the most frames one video may use — and each says what it
+  means in time rather than in numbers.
+
+  The write-up is done by the vision model itself unless you name a text model
+  in **Settings**, so this needs no second download to work. If it fails, or
+  comes back as a stub, you get each frame described in turn under the time it
+  appears rather than an error — and that form is the more trustworthy of the
+  two, since every sentence in it came from a frame.
+
+- **A sound while you wait.** A short tone as work begins, and a quiet tick
+  every fifteen seconds while it carries on, so a job that is taking a while and
+  a job that has stuck no longer sound the same — which for a video can be the
+  difference between a minute and forty. Neither plays over a document being
+  read aloud, and the audio player stays silent throughout. The tick has its own
+  switch under **Settings**, since it is the one sound that reports nothing new.
+
+### Changed
+
+- **The progress bar can be read.** It is taller, and the percentage is written
+  across the middle of it in yellow rather than tucked against the left edge.
+  Before, the bar was shorter than the text inside it, so the number was clipped
+  top and bottom whatever the size of your display.
+
 ## [1.5.0] - 2026-08-10
 
 ### Added
