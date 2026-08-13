@@ -266,6 +266,13 @@ pub struct Description {
     pub truncated: bool,
 }
 
+/// How much context the narration pass asks for.
+///
+/// Larger than the vision call because its input is larger: forty frame
+/// descriptions is a few thousand tokens of prompt before the model writes a
+/// word, and a narration cut off halfway is the failure this guards against.
+const NARRATION_CONTEXT_TOKENS: u32 = 16384;
+
 /// Sends one base64-encoded image to a vision model and returns its answer.
 pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<Description> {
     crate::log::line(format!(
@@ -273,17 +280,48 @@ pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<D
         image_base64.len() / 1024,
         prompt.chars().count()
     ));
-
-    // Vision models on CPU are slow; ten minutes is generous but finite.
-    let response = client(Duration::from_secs(600))?
-        .post(format!("{HOST}/api/generate"))
-        .json(&serde_json::json!({
+    generate(
+        model,
+        serde_json::json!({
             "model": model,
             "prompt": prompt,
             "images": [image_base64],
             "stream": false,
             "options": { "num_ctx": VISION_CONTEXT_TOKENS },
-        }))
+        }),
+        "reading the image",
+    )
+}
+
+/// Asks a model to rewrite the frame descriptions as continuous narration.
+///
+/// No image goes with this one, which is why it can be answered by a text model
+/// as easily as by the vision model that produced the descriptions — see
+/// [`crate::config::Config::narration_model`].
+pub fn narrate(model: &str, request: &str) -> Result<Description> {
+    crate::log::line(format!(
+        "ollama: asking {model} to narrate {} characters of frame descriptions (num_ctx {NARRATION_CONTEXT_TOKENS})",
+        request.chars().count()
+    ));
+    generate(
+        model,
+        serde_json::json!({
+            "model": model,
+            "prompt": request,
+            "stream": false,
+            "options": { "num_ctx": NARRATION_CONTEXT_TOKENS },
+        }),
+        "narrating the video",
+    )
+}
+
+/// The one call both of the above are: post to `/api/generate`, then read the
+/// answer and the reasons it might not be one.
+fn generate(model: &str, body: serde_json::Value, doing: &str) -> Result<Description> {
+    // Models on CPU are slow; ten minutes is generous but finite.
+    let response = client(Duration::from_secs(600))?
+        .post(format!("{HOST}/api/generate"))
+        .json(&body)
         .send()
         .context("could not reach the Ollama server")?;
 
@@ -293,16 +331,16 @@ pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<D
         .context("the Ollama server returned an unexpected response")?;
     if let Some(error) = body.error {
         crate::log::line(format!("ollama: failed — {error}"));
-        bail!("{}", explain_failure(model, &error));
+        bail!("{}", explain_failure(model, &error, doing));
     }
     if !status.is_success() {
         crate::log::line(format!("ollama: HTTP {status}"));
-        bail!("Ollama returned HTTP {status} while reading the image");
+        bail!("Ollama returned HTTP {status} while {doing}");
     }
 
     let answer = body.response.trim();
     crate::log::line(format!(
-        "ollama: answered in {} characters — done_reason {}, image and prompt cost {} tokens, answer took {} tokens",
+        "ollama: answered in {} characters — done_reason {}, prompt cost {} tokens, answer took {} tokens",
         answer.chars().count(),
         body.done_reason.as_deref().unwrap_or("none given"),
         describe_count(body.prompt_eval_count),
@@ -368,7 +406,7 @@ pub fn explain_truncation(model: &str) -> String {
 /// be loaded, because Ollama dropped the runner it was built for. Reported raw
 /// it reads as a crash — `llama-server process has terminated: exit status 1` —
 /// when in fact the fix is one dropdown away, so it is spelled out instead.
-fn explain_failure(model: &str, error: &str) -> String {
+fn explain_failure(model: &str, error: &str, doing: &str) -> String {
     if error.contains("unknown model architecture") {
         return format!(
             "“{model}” cannot be run by the version of Ollama on this computer. It was \
@@ -385,7 +423,7 @@ fn explain_failure(model: &str, error: &str) -> String {
              Ollama said: {error}"
         );
     }
-    format!("Ollama could not read the image: {error}")
+    format!("Ollama failed while {doing}: {error}")
 }
 
 /// What the app would run to install Ollama, or `None` if this machine has no
@@ -515,7 +553,7 @@ mod tests {
         // Verbatim from Ollama 0.32 asked to load llama3.2-vision.
         let raw = "llama-server process has terminated: exit status 1: error loading model: \
                    unknown model architecture: 'mllama'";
-        let message = explain_failure("llama3.2-vision", raw);
+        let message = explain_failure("llama3.2-vision", raw, "reading the image");
 
         assert!(message.contains("llama3.2-vision"));
         assert!(message.contains("Settings"), "no way out is offered");
@@ -526,8 +564,21 @@ mod tests {
 
     #[test]
     fn an_unrecognised_error_is_passed_through_intact() {
-        let message = explain_failure("qwen2.5vl:3b", "the image could not be decoded");
+        let message = explain_failure(
+            "qwen2.5vl:3b",
+            "the image could not be decoded",
+            "reading the image",
+        );
         assert!(message.contains("the image could not be decoded"));
+    }
+
+    /// The same failures reach the narration pass, where a message about
+    /// reading an image would be describing something that never happened.
+    #[test]
+    fn a_failure_says_which_step_it_happened_in() {
+        let message = explain_failure("llama3.2", "context canceled", "narrating the video");
+        assert!(message.contains("narrating the video"), "{message}");
+        assert!(!message.contains("image"), "{message}");
     }
 
     #[test]

@@ -26,6 +26,23 @@ pub const FORM_WIDTH: f32 = 460.0;
 /// once the surrounding item spacing is counted.
 pub const CONTROL_HEIGHT: f32 = 34.0;
 
+/// Height of the progress bar under a running job. Tall enough to hold the
+/// percentage written across it: egui clips that text to the bar, so a bar
+/// shorter than the line it contains shows a percentage with its head and feet
+/// cut off.
+pub const PROGRESS_HEIGHT: f32 = 24.0;
+
+/// The percentage across the progress bar, and the outline drawn under it.
+///
+/// The same yellow on both themes, because the surface behind it is the bar
+/// rather than the page. It needs the outline because that surface is two
+/// surfaces: the text sits over the empty track while the job is less than half
+/// done and over the filled part after that, and no single colour is legible on
+/// both the white track of the light theme and the blue fill. Outlined, the
+/// yellow clears 4.5:1 on either.
+pub const PROGRESS_TEXT: Color32 = Color32::from_rgb(255, 209, 74);
+pub const PROGRESS_TEXT_OUTLINE: Color32 = Color32::from_rgb(10, 12, 16);
+
 /// The colours that change meaning between light and dark. Held as a struct so
 /// a call site asks for "the error colour" and gets one that is legible on the
 /// surface it is actually drawing on.

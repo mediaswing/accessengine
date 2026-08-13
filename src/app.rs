@@ -16,10 +16,10 @@ use crate::apikey::{self, KeySource};
 use crate::audio::{self, AudioFormat, Playback};
 use crate::config::{Action, Config, DEFAULT_VISION_PROMPT, EnginePreference, Formatting};
 use crate::extract::{
-    DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS,
+    DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS, VIDEO_EXTENSIONS,
 };
 use crate::jobs::{self, Cancel, Job, Update};
-use crate::theme::{CONTROL_HEIGHT, FORM_WIDTH};
+use crate::theme::{self, CONTROL_HEIGHT, FORM_WIDTH, PROGRESS_HEIGHT};
 use crate::tts::{self, Voice};
 use crate::update;
 use egui::{Key, Modifiers, RichText};
@@ -64,13 +64,48 @@ impl Tone {
     }
 }
 
-/// The two cues, built into the binary so the app has no files to lose.
+/// The three cues, built into the binary so the app has no files to lose.
 ///
-/// Both are CC0 recordings from freesound.org, trimmed of their silence and
-/// levelled to the same loudness so that neither is the startling one — see
+/// All are CC0 recordings from freesound.org, trimmed of their silence and
+/// levelled to the same loudness so that none is the startling one — see
 /// `assets/sounds/CREDITS.txt`.
 const SUCCESS_SOUND: &[u8] = include_bytes!("../assets/sounds/success.wav");
 const ERROR_SOUND: &[u8] = include_bytes!("../assets/sounds/error.wav");
+/// Sounded once as a job starts, so that pressing Apply is answered by
+/// something other than a spinner appearing somewhere you may not be looking.
+/// It is the opening bracket to the success or failure cue that closes the job.
+const PROGRESS_SOUND: &[u8] = include_bytes!("../assets/sounds/progress.wav");
+
+/// Sounded every [`TICK_EVERY`] while a job runs: "still working".
+///
+/// The one place the app makes a sound that reports nothing new, which is why
+/// it is cut from the same recording as [`PROGRESS_SOUND`] but a fifth of the
+/// length and around 11 dB quieter. A job here can run for forty minutes — a
+/// video is a vision-model call per frame — and the alternative to this is a
+/// user who cannot see the progress bar having no way to tell a long job from a
+/// hung one. It has its own setting because it is also the cue most likely to
+/// wear thin.
+const TICK_SOUND: &[u8] = include_bytes!("../assets/sounds/tick.wav");
+
+/// How long a sound holds the floor against the next one. See
+/// [`SpeechApp::sound`].
+const CUE_GAP: Duration = Duration::from_millis(250);
+
+/// Whether a sound, having played, makes the next one wait for it.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum ClaimsTheGap {
+    Yes,
+    /// The tick, which yields to everything.
+    No,
+}
+
+/// How often the tick sounds while a job runs.
+///
+/// Long enough not to nag, short enough that the silence between two of them is
+/// never long enough to worry about. Fifteen seconds also happens to be about
+/// one frame of video on a machine with no graphics card, so a video job ticks
+/// roughly once per frame described.
+const TICK_EVERY: Duration = Duration::from_secs(15);
 
 /// Where an ElevenLabs key is created. Linked from the dialog that asks for
 /// one, because "paste the key from your account" assumes you know where in
@@ -105,6 +140,7 @@ struct CachedRender {
 /// A question the app needs answered before it can carry on reading an image.
 enum Prompt {
     InstallOllama,
+    InstallFfmpeg,
     PullModel(String),
 }
 
@@ -222,6 +258,85 @@ fn shortcut_text(raw: &str) -> String {
     )
 }
 
+/// A rough seconds-per-frame for a vision model with no GPU behind it, used
+/// only to turn a frame count into the wait it implies.
+///
+/// Deliberately pessimistic. The number is there so that dragging the cap to
+/// its maximum says "around 50 minutes" rather than nothing at all, and a
+/// guess that runs long is a guess that disappoints nobody.
+const SECONDS_PER_FRAME_ESTIMATE: u64 = 15;
+
+/// How a scene threshold reads in words, since the number itself means nothing
+/// outside ffmpeg.
+fn describe_sensitivity(threshold: f32) -> &'static str {
+    match threshold {
+        t if t < 0.2 => "Very sensitive — takes a frame on camera movement, not just cuts",
+        t if t < 0.35 => "Sensitive — catches pans and gradual changes",
+        t if t < 0.55 => "Balanced — roughly one frame per shot",
+        t if t < 0.8 => "Selective — only clear cuts between shots",
+        _ => "Very selective — only a complete change of picture",
+    }
+}
+
+/// Whether a sound arriving `since` after the last one can be heard as itself
+/// rather than as a collision. `None` means nothing has sounded yet.
+fn cue_is_clear(since: Option<Duration>) -> bool {
+    since.is_none_or(|elapsed| elapsed >= CUE_GAP)
+}
+
+/// Who holds the floor once a sound has played.
+///
+/// Pulled out of [`SpeechApp::sound`] so the rule can be checked without an app
+/// and an output device, because the rule is not obvious and the cost of it
+/// silently inverting is a success chime that goes missing once in a while —
+/// the hardest kind of bug to be told about.
+fn floor_after(
+    previous: Option<Instant>,
+    played: Instant,
+    claims: ClaimsTheGap,
+) -> Option<Instant> {
+    match claims {
+        ClaimsTheGap::Yes => Some(played),
+        ClaimsTheGap::No => previous,
+    }
+}
+
+/// Writes the percentage across the middle of a progress bar.
+///
+/// Painted here rather than left to `ProgressBar::show_percentage`, which puts
+/// it against the left edge in the selection colour — white on both themes, so
+/// on the white track of the light theme the first tenth of every job is a
+/// percentage nobody can read. Centred, it is also where the eye already is.
+///
+/// The outline underneath is what makes one colour work over both the empty
+/// track and the filled part; see [`crate::theme::PROGRESS_TEXT`].
+fn percentage_across(ui: &egui::Ui, bar: egui::Rect, progress: f32) {
+    let text = format!("{}%", (progress * 100.0).round() as u32);
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let painter = ui.painter().with_clip_rect(bar);
+    for offset in [
+        egui::vec2(-1.0, -1.0),
+        egui::vec2(1.0, -1.0),
+        egui::vec2(-1.0, 1.0),
+        egui::vec2(1.0, 1.0),
+    ] {
+        painter.text(
+            bar.center() + offset,
+            egui::Align2::CENTER_CENTER,
+            &text,
+            font.clone(),
+            theme::PROGRESS_TEXT_OUTLINE,
+        );
+    }
+    painter.text(
+        bar.center(),
+        egui::Align2::CENTER_CENTER,
+        &text,
+        font,
+        theme::PROGRESS_TEXT,
+    );
+}
+
 pub struct SpeechApp {
     config: Config,
     api_key: Option<String>,
@@ -264,6 +379,9 @@ pub struct SpeechApp {
     /// helpful sound into sixty a second, and that failure is loud, obvious to
     /// the user and invisible in a test.
     cue_at: Option<Instant>,
+    /// When the running job last ticked, or `None` when nothing is running.
+    /// See [`TICK_SOUND`].
+    tick_at: Option<Instant>,
     log: Vec<String>,
     show_log: bool,
 
@@ -336,6 +454,7 @@ impl SpeechApp {
             status: None,
             cue: None,
             cue_at: None,
+            tick_at: None,
             log: Vec::new(),
             show_log: false,
             confirm_reset: false,
@@ -484,16 +603,32 @@ impl SpeechApp {
         let Some(sound) = tone.sound() else {
             return;
         };
+        self.play_sound(sound);
+    }
+
+    /// Sounds one of the built-in cues, subject to the setting and the gap.
+    fn play_sound(&mut self, sound: &'static [u8]) {
+        self.sound(sound, ClaimsTheGap::Yes);
+    }
+
+    /// Two cues inside [`CUE_GAP`] would talk over each other whichever two
+    /// they are, so the second is dropped. `claims` is which of the two a sound
+    /// is: an announcement waits for the one before it and makes the next one
+    /// wait, while the tick only ever waits.
+    ///
+    /// The asymmetry is the whole point. Ticking every fifteen seconds means a
+    /// tick lands within a quarter-second of the success chime roughly one job
+    /// in sixty — and if the tick claimed the gap, that job would be the one
+    /// where the sound saying "finished" went missing, swallowed by a sound
+    /// that says nothing at all.
+    fn sound(&mut self, sound: &'static [u8], claims: ClaimsTheGap) {
         if !self.config.sound_effects {
             return;
         }
-        // See `cue_at`. Two cues inside this window is a bug somewhere else;
-        // dropping the second is the quietest possible way to survive it.
-        const GAP: Duration = Duration::from_millis(250);
-        if self.cue_at.is_some_and(|at| at.elapsed() < GAP) {
+        if !cue_is_clear(self.cue_at.map(|at| at.elapsed())) {
             return;
         }
-        self.cue_at = Some(Instant::now());
+        self.cue_at = floor_after(self.cue_at, Instant::now(), claims);
         // A cue is decoration. Failing to open an output device for one is not
         // worth a word to the user, who is at this moment being told something
         // that actually matters — but it goes in the log, because "the sounds
@@ -502,6 +637,31 @@ impl SpeechApp {
             Ok(playback) => self.cue = Some(playback),
             Err(error) => crate::log::line(format!("sound: the cue could not play — {error:#}")),
         }
+    }
+
+    /// Sounds the "still working" tick when one is due.
+    ///
+    /// Called every frame from [`SpeechApp::update`], which already repaints on
+    /// a timer while a job runs, so no separate clock is needed — the check is
+    /// two comparisons and costs nothing on the frames it does not fire.
+    fn tick_while_busy(&mut self) {
+        if self.busy.is_none() || !self.config.progress_tick {
+            return;
+        }
+        // Never over speech. A tick is "the app has not forgotten you", which
+        // is worth nothing at all while the app is talking — and a document
+        // being read aloud is exactly when an interruption is least welcome.
+        if self.is_playing() {
+            return;
+        }
+        let due = self.tick_at.is_none_or(|last| last.elapsed() >= TICK_EVERY);
+        if !due {
+            return;
+        }
+        // The clock advances even if the sound below is dropped for landing on
+        // top of a cue: a tick skipped is a tick skipped, not one owed.
+        self.tick_at = Some(Instant::now());
+        self.sound(TICK_SOUND, ClaimsTheGap::No);
     }
 
     fn save_config(&mut self) {
@@ -524,6 +684,10 @@ impl SpeechApp {
             cancellable: job.is_cancellable(),
         });
         self.status = None;
+        self.play_sound(PROGRESS_SOUND);
+        // Counted from the start tone, so the first tick lands a full interval
+        // later rather than immediately on top of it.
+        self.tick_at = Some(Instant::now());
 
         let ctx = ctx.clone();
         jobs::spawn(job, self.tx.clone(), cancel, move || ctx.request_repaint());
@@ -569,7 +733,7 @@ impl SpeechApp {
             return;
         }
         if let Some(path) = rfd::FileDialog::new()
-            .set_title("Choose a document or image to read")
+            .set_title("Choose a document, image or video to read")
             .add_filter(
                 "All supported files",
                 &[
@@ -577,6 +741,7 @@ impl SpeechApp {
                     DOC_EXTENSIONS,
                     TABLE_EXTENSIONS,
                     IMAGE_EXTENSIONS,
+                    VIDEO_EXTENSIONS,
                 ]
                 .concat(),
             )
@@ -584,6 +749,7 @@ impl SpeechApp {
             .add_filter("Word documents", DOC_EXTENSIONS)
             .add_filter("Tables", TABLE_EXTENSIONS)
             .add_filter("Images", IMAGE_EXTENSIONS)
+            .add_filter("Video", VIDEO_EXTENSIONS)
             .pick_file()
         {
             self.open_file(ctx, path);
@@ -612,6 +778,10 @@ impl SpeechApp {
 
         let job = match kind {
             FileKind::Image => Job::ReadImage {
+                path,
+                config: Box::new(self.config.clone()),
+            },
+            FileKind::Video => Job::ReadVideo {
                 path,
                 config: Box::new(self.config.clone()),
             },
@@ -1047,6 +1217,9 @@ impl SpeechApp {
                     crate::log::line(format!("saved {}", path.display()));
                     self.set_status(format!("Saved to {}", path.display()), Tone::Success);
                 }
+                Update::NeedsFfmpegInstall => {
+                    self.prompt = Some(Prompt::InstallFfmpeg);
+                }
                 Update::NeedsOllamaInstall => {
                     self.prompt = Some(Prompt::InstallOllama);
                 }
@@ -1083,6 +1256,7 @@ impl SpeechApp {
                 }
                 Update::Finished => {
                     self.busy = None;
+                    self.tick_at = None;
                     if let Some(job) = self.deferred.take() {
                         self.start(ctx, job);
                     }
@@ -1660,12 +1834,12 @@ impl SpeechApp {
                 ui.label(&label);
             });
             if let Some(progress) = busy.progress {
-                ui.add(
+                let bar = ui.add(
                     egui::ProgressBar::new(progress)
                         .desired_width(FORM_WIDTH)
-                        .desired_height(10.0)
-                        .show_percentage(),
+                        .desired_height(PROGRESS_HEIGHT),
                 );
+                percentage_across(ui, bar.rect, progress);
             }
             if cancellable
                 && ui
@@ -2308,11 +2482,12 @@ impl SpeechApp {
         let sounds = ui
             .checkbox(
                 &mut self.config.sound_effects,
-                "Play a sound when an action finishes or fails",
+                "Play a sound when an action starts, finishes or fails",
             )
             .on_hover_text(
-                "A short chime for success and a lower tone for a problem, so you do not \
-                 have to watch the status line to know which happened.",
+                "A short tone as the work begins, a chime for success and a lower tone for \
+                 a problem, so you do not have to watch the status line to know what \
+                 happened.",
             );
         if sounds.changed() {
             edited = true;
@@ -2322,6 +2497,32 @@ impl SpeechApp {
                 self.play_cue(Tone::Success);
             }
         }
+
+        // Indented under the setting it depends on, and disabled with it: with
+        // sounds off there is nothing for this to be a choice about.
+        ui.indent("tick_setting", |ui| {
+            let tick = ui
+                .add_enabled(
+                    self.config.sound_effects,
+                    egui::Checkbox::new(
+                        &mut self.config.progress_tick,
+                        "Keep ticking while it works",
+                    ),
+                )
+                .on_hover_text(
+                    "A quiet sound every fifteen seconds while something is running, so a \
+                     long job can be told from a stuck one without watching the screen. It \
+                     never plays over a document being read aloud.",
+                );
+            if tick.changed() {
+                edited = true;
+                // Same reasoning as the sound above: the answer to "what does
+                // that sound like?" is the sound.
+                if self.config.progress_tick {
+                    self.sound(TICK_SOUND, ClaimsTheGap::No);
+                }
+            }
+        });
 
         ui.add_space(12.0);
         ui.separator();
@@ -2417,6 +2618,10 @@ impl SpeechApp {
             self.config_dirty = true;
         }
 
+        if self.video_settings(ui) {
+            self.config_dirty = true;
+        }
+
         ui.add_space(12.0);
         ui.separator();
         ui.add(
@@ -2488,6 +2693,162 @@ impl SpeechApp {
                 .wrap(),
             );
         }
+    }
+
+    /// The video half of the Settings pane. Returns whether anything changed.
+    ///
+    /// Its own function because the settings pane was already long, and because
+    /// these controls are unlike the rest of the app's: everything else here
+    /// changes how something sounds, and these change how long the user waits.
+    /// The numbers are all worded in those terms.
+    fn video_settings(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut edited = false;
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add(
+            egui::Label::new(
+                "Video is described by taking still frames out of it and reading each one with \
+                 the same vision model. Nothing is uploaded anywhere — but every frame is a \
+                 separate call to the model, so these settings decide how long a video takes \
+                 as much as how thorough it is.",
+            )
+            .wrap(),
+        );
+        ui.add_space(6.0);
+
+        let narrate = ui
+            .checkbox(
+                &mut self.config.video_narrate,
+                "Join the frames into a single description",
+            )
+            .on_hover_text(
+                "On, a model rewrites the frame descriptions as one continuous piece of \
+                 narration. Off, you get each frame described in turn under the time it \
+                 appears, which is slower to listen to but says exactly where everything \
+                 came from.",
+            );
+        edited |= narrate.changed();
+
+        if self.config.video_narrate {
+            let caption = ui.label("Model that writes the description");
+            let narrator = ui.add(
+                egui::TextEdit::singleline(&mut self.config.narration_model)
+                    .hint_text(format!(
+                        "empty — use {}, the vision model",
+                        self.config.ollama_model
+                    ))
+                    .desired_width(FORM_WIDTH),
+            );
+            let narrator = narrator.on_hover_text(
+                "Left empty, the vision model writes it, which needs no further download. \
+                 A text model named here will usually write better prose, at the cost of \
+                 downloading it.",
+            );
+            let _ = caption.labelled_by(narrator.id);
+            edited |= narrator.changed();
+        }
+
+        ui.add_space(6.0);
+        let caption = ui.label("How much of the picture must change for a new frame");
+        ui.spacing_mut().slider_width = FORM_WIDTH;
+        let scene = ui.add_sized(
+            [FORM_WIDTH, CONTROL_HEIGHT],
+            egui::Slider::new(&mut self.config.video_scene_threshold, 0.05..=1.0)
+                .show_value(false)
+                .clamping(egui::SliderClamping::Always),
+        );
+        let scene = scene.on_hover_text(
+            "Low takes a frame whenever the camera moves, which describes more and takes \
+             longer. High takes one only at a clear cut between shots.",
+        );
+        let _ = caption.labelled_by(scene.id);
+        edited |= scene.changed();
+        ui.label(
+            RichText::new(describe_sensitivity(self.config.video_scene_threshold))
+                .color(crate::theme::palette(ui.visuals()).muted),
+        );
+
+        ui.add_space(6.0);
+        let caption = ui.label("Take a frame anyway after this long");
+        let interval = ui.add_sized(
+            [FORM_WIDTH, CONTROL_HEIGHT],
+            egui::Slider::new(&mut self.config.video_interval_secs, 5..=300)
+                .show_value(false)
+                .clamping(egui::SliderClamping::Always),
+        );
+        let interval = interval.on_hover_text(
+            "A long shot that never cuts would otherwise be described by its opening \
+             frame alone.",
+        );
+        let _ = caption.labelled_by(interval.id);
+        edited |= interval.changed();
+        ui.label(
+            RichText::new(format!(
+                "Every {}",
+                audio::spoken_time(Duration::from_secs(self.config.video_interval_secs as u64))
+            ))
+            .color(crate::theme::palette(ui.visuals()).muted),
+        );
+
+        ui.add_space(6.0);
+        let caption = ui.label("Most frames to describe from one video");
+        let cap = ui.add_sized(
+            [FORM_WIDTH, CONTROL_HEIGHT],
+            egui::Slider::new(
+                &mut self.config.video_max_frames,
+                1..=crate::config::MAX_FRAMES_LIMIT,
+            )
+            .show_value(false)
+            .clamping(egui::SliderClamping::Always),
+        );
+        let cap = cap.on_hover_text(
+            "The stop that keeps a long or busy video from taking the rest of the day. \
+             Frames past this are not described.",
+        );
+        let _ = caption.labelled_by(cap.id);
+        edited |= cap.changed();
+        ui.label(
+            RichText::new(format!(
+                "At most {} frames — around {} on a computer with no graphics card",
+                self.config.video_max_frames,
+                audio::spoken_time(Duration::from_secs(
+                    self.config.video_max_frames as u64 * SECONDS_PER_FRAME_ESTIMATE
+                ))
+            ))
+            .color(crate::theme::palette(ui.visuals()).muted),
+        );
+
+        ui.add_space(6.0);
+        let caption = ui.label("Prompt sent with each frame");
+        let frame_prompt = ui.add(
+            egui::TextEdit::multiline(&mut self.config.video_frame_prompt)
+                .desired_rows(3)
+                .desired_width(FORM_WIDTH),
+        );
+        let _ = caption.labelled_by(frame_prompt.id);
+        edited |= frame_prompt.changed();
+
+        if self.config.video_narrate {
+            ui.add_space(6.0);
+            let caption = ui.label("Prompt that joins the frames together");
+            let narration_prompt = ui.add(
+                egui::TextEdit::multiline(&mut self.config.video_narration_prompt)
+                    .desired_rows(3)
+                    .desired_width(FORM_WIDTH),
+            );
+            let _ = caption.labelled_by(narration_prompt.id);
+            edited |= narration_prompt.changed();
+        }
+
+        if ui.button("Reset Video Prompts To Defaults").clicked() {
+            self.config.video_frame_prompt = crate::config::DEFAULT_FRAME_PROMPT.to_string();
+            self.config.video_narration_prompt =
+                crate::config::DEFAULT_NARRATION_PROMPT.to_string();
+            self.config_dirty = true;
+        }
+
+        edited
     }
 
     /// Confirms before putting the settings back to their defaults.
@@ -2569,9 +2930,17 @@ impl SpeechApp {
         let busy = self.busy.is_some();
         let mut decision: Option<Option<Job>> = None;
 
+        // The dialog is about whatever the user just opened, which is the only
+        // reason any of it is being asked.
+        let heading = if self.file_kind == Some(FileKind::Video) {
+            "Reading Video"
+        } else {
+            "Reading Images"
+        };
+
         egui::Modal::new(egui::Id::new("ollama_prompt")).show(ctx, |ui| {
             ui.set_max_width(560.0);
-            ui.heading("Reading Images");
+            ui.heading(heading);
             ui.add_space(6.0);
             match prompt {
                 Prompt::InstallOllama => {
@@ -2599,6 +2968,64 @@ impl SpeechApp {
                     } else {
                         ui.add(egui::Label::new(crate::ollama::MANUAL_INSTALL_ADVICE).wrap());
                         ui.hyperlink_to("Download Ollama", "https://ollama.com/download");
+                        if cfg!(target_os = "macos") {
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new(format!(
+                                    "This asks for your Mac's password, then runs: {}",
+                                    crate::homebrew::INSTALL_COMMAND
+                                ))
+                                .monospace(),
+                            );
+                            ui.add_space(8.0);
+                            if ui
+                                .add_enabled(
+                                    !busy,
+                                    egui::Button::new("Install Homebrew")
+                                        .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+                                )
+                                .clicked()
+                            {
+                                decision = Some(Some(Job::InstallHomebrew));
+                            }
+                        }
+                        ui.add_space(8.0);
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new("Not Now")
+                                .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+                        )
+                        .clicked()
+                    {
+                        decision = Some(None);
+                    }
+                }
+                Prompt::InstallFfmpeg => {
+                    ui.add(
+                        egui::Label::new(
+                            "Describing a video means taking still frames out of it first, \
+                             which needs ffmpeg. It is not installed yet.",
+                        )
+                        .wrap(),
+                    );
+                    ui.add_space(8.0);
+                    if let Some(installer) = crate::ffmpeg::install_command() {
+                        ui.label(RichText::new(format!("This runs: {installer}")).monospace());
+                        ui.add_space(8.0);
+                        if ui
+                            .add_enabled(
+                                !busy,
+                                egui::Button::new("Install ffmpeg")
+                                    .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+                            )
+                            .clicked()
+                        {
+                            decision = Some(Some(Job::InstallFfmpeg));
+                        }
+                    } else {
+                        ui.add(egui::Label::new(crate::ffmpeg::MANUAL_INSTALL_ADVICE).wrap());
+                        ui.hyperlink_to("Download ffmpeg", crate::ffmpeg::DOWNLOAD_URL);
                         if cfg!(target_os = "macos") {
                             ui.add_space(8.0);
                             ui.label(
@@ -2671,18 +3098,32 @@ impl SpeechApp {
         self.prompt = None;
         match choice {
             Some(job) => {
-                // Once setup finishes, pick the image back up where we left off.
-                if let (Some(path), Some(FileKind::Image)) = (self.file.clone(), self.file_kind) {
-                    self.deferred = Some(Job::ReadImage {
-                        path,
-                        config: Box::new(self.config.clone()),
-                    });
+                // Once setup finishes, pick the file back up where we left off.
+                match (self.file.clone(), self.file_kind) {
+                    (Some(path), Some(FileKind::Image)) => {
+                        self.deferred = Some(Job::ReadImage {
+                            path,
+                            config: Box::new(self.config.clone()),
+                        });
+                    }
+                    (Some(path), Some(FileKind::Video)) => {
+                        self.deferred = Some(Job::ReadVideo {
+                            path,
+                            config: Box::new(self.config.clone()),
+                        });
+                    }
+                    _ => {}
                 }
                 self.start(ctx, job);
             }
             None => {
+                let what = if self.file_kind == Some(FileKind::Video) {
+                    "Video not read."
+                } else {
+                    "Image not read."
+                };
                 self.deferred = None;
-                self.set_status("Image not read.", Tone::Info);
+                self.set_status(what, Tone::Info);
             }
         }
     }
@@ -2774,6 +3215,8 @@ impl eframe::App for SpeechApp {
         if self.busy.is_some() || self.is_playing() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
+        // Which is also the clock the tick runs on.
+        self.tick_while_busy();
 
         egui::Panel::top(egui::Id::new("header")).show(ui, |ui| {
             ui.add_space(8.0);
@@ -2852,13 +3295,20 @@ impl eframe::App for SpeechApp {
 mod tests {
     use super::*;
 
+    /// The three of them, by the name they are credited under.
+    const CUES: [(&str, &[u8]); 3] = [
+        ("success", SUCCESS_SOUND),
+        ("error", ERROR_SOUND),
+        ("progress", PROGRESS_SOUND),
+    ];
+
     /// The cues are decoded at the moment they are played, and a cue that
     /// fails to decode is deliberately swallowed into the log rather than
     /// reported — so a bad file here would be silent in the most literal way,
     /// and nobody would find out from using the app.
     #[test]
-    fn both_cues_decode_to_audible_sound() {
-        for (name, bytes) in [("success", SUCCESS_SOUND), ("error", ERROR_SOUND)] {
+    fn every_cue_decodes_to_audible_sound() {
+        for (name, bytes) in CUES {
             let decoder = rodio::Decoder::builder()
                 .with_data(std::io::Cursor::new(bytes))
                 .with_byte_len(bytes.len() as u64)
@@ -2878,8 +3328,8 @@ mod tests {
     /// interruption — and it must not still be sounding when the next action
     /// reports its own outcome.
     #[test]
-    fn neither_cue_outstays_its_welcome() {
-        for (name, bytes) in [("success", SUCCESS_SOUND), ("error", ERROR_SOUND)] {
+    fn no_cue_outstays_its_welcome() {
+        for (name, bytes) in CUES {
             let decoder = rodio::Decoder::builder()
                 .with_data(std::io::Cursor::new(bytes))
                 .with_byte_len(bytes.len() as u64)
@@ -2896,12 +3346,119 @@ mod tests {
 
     /// Running commentary — "reading part 2 of 5" — is set with `Info`, and a
     /// document read in parts would chime through its own narration if that
-    /// tone had a sound.
+    /// tone had a sound. Starting a job does make one, but it hangs off
+    /// [`SpeechApp::start`] rather than off a tone, for that reason.
     #[test]
     fn only_finishing_and_failing_make_a_sound() {
         assert!(Tone::Info.sound().is_none());
         assert!(Tone::Success.sound().is_some());
         assert!(Tone::Error.sound().is_some());
         assert_ne!(Tone::Success.sound(), Tone::Error.sound());
+    }
+
+    /// Cues that a listener has to tell apart the moment they sound, so no two
+    /// of them — the tick included — may be the same recording.
+    #[test]
+    fn no_two_cues_are_the_same_sound() {
+        let all: Vec<(&str, &[u8])> = CUES
+            .iter()
+            .copied()
+            .chain(std::iter::once(("tick", TICK_SOUND)))
+            .collect();
+        for (i, (name, bytes)) in all.iter().enumerate() {
+            for (other, other_bytes) in &all[i + 1..] {
+                assert_ne!(bytes, other_bytes, "{name} and {other} are the same cue");
+            }
+        }
+    }
+
+    /// The tick is the one sound here that reports nothing, and it may play a
+    /// hundred times in a single job. Both of its properties are therefore the
+    /// opposite of the other three's, and both are worth holding onto: quiet
+    /// enough to sit under the app, and short enough to be over long before the
+    /// next one is due.
+    #[test]
+    fn the_tick_is_quieter_and_shorter_than_the_cues_it_runs_between() {
+        let measure = |bytes: &'static [u8]| {
+            let decoder = rodio::Decoder::builder()
+                .with_data(std::io::Cursor::new(bytes))
+                .with_byte_len(bytes.len() as u64)
+                .build()
+                .expect("the tick should decode");
+            let length =
+                rodio::Source::total_duration(&decoder).expect("the tick should report a duration");
+            let samples: Vec<f32> = decoder.collect();
+            let peak = samples.iter().fold(0.0f32, |peak, s| peak.max(s.abs()));
+            (length, peak)
+        };
+
+        let (length, peak) = measure(TICK_SOUND);
+        assert!(peak > 0.01, "the tick is inaudible: {peak}");
+        assert!(
+            length < Duration::from_millis(500),
+            "the tick runs {length:?}"
+        );
+        // Well inside the gap between two of them, or they would overlap.
+        assert!(length * 10 < TICK_EVERY);
+
+        for (name, cue) in CUES {
+            let (cue_length, cue_peak) = measure(cue);
+            assert!(
+                peak < cue_peak / 2.0,
+                "the tick ({peak}) is not clearly quieter than the {name} cue ({cue_peak})"
+            );
+            assert!(
+                length < cue_length,
+                "the tick ({length:?}) is not shorter than the {name} cue ({cue_length:?})"
+            );
+        }
+    }
+
+    /// Two sounds inside the gap collide, so the second is dropped.
+    #[test]
+    fn a_sound_landing_on_top_of_another_is_dropped() {
+        assert!(cue_is_clear(None), "the first sound of all must be heard");
+        assert!(!cue_is_clear(Some(Duration::ZERO)));
+        assert!(!cue_is_clear(Some(CUE_GAP / 2)));
+        assert!(cue_is_clear(Some(CUE_GAP)));
+        assert!(cue_is_clear(Some(CUE_GAP * 2)));
+    }
+
+    /// The tick yields to the cues and never the other way round.
+    ///
+    /// Ticking every fifteen seconds puts a tick within a quarter-second of the
+    /// success chime about one job in sixty. If this inverted, that job would
+    /// lose the sound that says "finished" — replaced by one that says nothing
+    /// — and it would happen rarely enough to look like imagination.
+    #[test]
+    fn the_tick_never_makes_a_cue_wait() {
+        let earlier = Instant::now();
+        let later = earlier + Duration::from_secs(1);
+
+        // An announcement takes the floor, so the next sound waits for it.
+        assert_eq!(
+            floor_after(Some(earlier), later, ClaimsTheGap::Yes),
+            Some(later)
+        );
+        assert_eq!(floor_after(None, later, ClaimsTheGap::Yes), Some(later));
+
+        // A tick leaves it exactly as it found it, whether or not one was held.
+        assert_eq!(
+            floor_after(Some(earlier), later, ClaimsTheGap::No),
+            Some(earlier),
+            "a tick pushed the gap forward and would swallow the next cue"
+        );
+        assert_eq!(floor_after(None, later, ClaimsTheGap::No), None);
+    }
+
+    /// The interval is the difference between reassurance and nagging, and the
+    /// tick has to be over before the next one starts however it is edited.
+    #[test]
+    fn the_tick_interval_is_a_sane_one() {
+        assert!(TICK_EVERY >= Duration::from_secs(5), "too often to bear");
+        assert!(
+            TICK_EVERY <= Duration::from_secs(60),
+            "long enough that a working job sounds like a stuck one"
+        );
     }
 }

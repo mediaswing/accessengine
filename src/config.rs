@@ -202,6 +202,11 @@ pub struct Config {
     /// sound nobody can silence is its own accessibility problem — plenty of
     /// people run this alongside a screen reader that is already talking.
     pub sound_effects: bool,
+    /// Whether a running job keeps making a quiet sound while it runs. Its own
+    /// setting rather than part of `sound_effects`: it is the one cue that
+    /// reports nothing new, so it is the one somebody might want gone while
+    /// keeping the rest. Ignored entirely when `sound_effects` is off.
+    pub progress_tick: bool,
     /// Audio format used when the action is [`Action::SaveAudio`].
     pub save_format: AudioFormat,
 
@@ -225,6 +230,30 @@ pub struct Config {
     #[serde(deserialize_with = "deserialize_vision_prompt")]
     pub ollama_prompt: String,
 
+    /// What each still taken from a video is asked about. Shorter than the
+    /// image prompt on purpose: this answer is one of dozens that will be
+    /// joined together, so a frame that opens with its own preamble makes a
+    /// narration that says "this image shows" forty times.
+    pub video_frame_prompt: String,
+    /// Whether the frame descriptions are rewritten as continuous narration
+    /// before they are spoken. Off leaves the labelled list, which is the
+    /// honest raw material — nothing in it came from anywhere but a frame.
+    pub video_narrate: bool,
+    /// The instruction for that rewrite.
+    pub video_narration_prompt: String,
+    /// Text model used for the rewrite. Empty means "use the vision model",
+    /// which is the default because it is already downloaded and vision models
+    /// answer text-only prompts perfectly well. Naming a dedicated text model
+    /// here buys better prose at the cost of another multi-gigabyte download.
+    pub narration_model: String,
+    /// How different a frame must be from the one before it to count as a new
+    /// shot, 0.0 to 1.0. See [`crate::ffmpeg::Sampling`].
+    pub video_scene_threshold: f32,
+    /// Take a frame anyway if this many seconds have passed without one.
+    pub video_interval_secs: u32,
+    /// The most frames one video may be described from.
+    pub video_max_frames: usize,
+
     /// Directory the last save went to, so the dialog reopens somewhere useful.
     pub last_save_dir: Option<PathBuf>,
     /// Directory the audio player last opened a file from.
@@ -238,6 +267,7 @@ impl Default for Config {
             action: Action::ReadAloud,
             formatting: Formatting::Ignore,
             sound_effects: true,
+            progress_tick: true,
             save_format: AudioFormat::Wav,
             elevenlabs_voice_id: String::new(),
             elevenlabs_voice_name: String::new(),
@@ -247,6 +277,13 @@ impl Default for Config {
             dictionary: Vec::new(),
             ollama_model: DEFAULT_VISION_MODEL.to_string(),
             ollama_prompt: DEFAULT_VISION_PROMPT.to_string(),
+            video_frame_prompt: DEFAULT_FRAME_PROMPT.to_string(),
+            video_narrate: true,
+            video_narration_prompt: DEFAULT_NARRATION_PROMPT.to_string(),
+            narration_model: String::new(),
+            video_scene_threshold: DEFAULT_SCENE_THRESHOLD,
+            video_interval_secs: DEFAULT_INTERVAL_SECS,
+            video_max_frames: DEFAULT_MAX_FRAMES,
             last_save_dir: None,
             last_audio_dir: None,
         }
@@ -311,7 +348,73 @@ where
     )
 }
 
+/// What each still taken from a video is asked.
+///
+/// "One or two sentences" is the load-bearing part. The image prompt asks for
+/// two or three plus a full transcription of any text, which is right for a
+/// photograph the user chose to open and wrong forty times over for frames that
+/// will be joined together — a video of a conference talk would otherwise
+/// return the same slide transcribed in full at every cut.
+pub const DEFAULT_FRAME_PROMPT: &str = "\
+This is a single frame from a video. Describe what it shows in one or two plain sentences: \
+where it is, who or what is in it, and what they appear to be doing. If words appear on \
+screen, give them exactly as written. Do not begin with a phrase like \"this image shows\" — \
+describe the scene directly. Your answer will be read aloud, so write plain sentences with \
+no headings, bullet points, markdown, asterisks or code blocks.";
+
+/// The instruction for turning those frames into narration.
+///
+/// The middle sentence is the one that matters. A model given a list of stills
+/// will happily write the story that connects them — a person who appears in
+/// frame one and frame nine is described as having "waited there all afternoon"
+/// — and a description track that invents what happened between the frames is
+/// worse than useless to someone who cannot check it against the picture.
+pub const DEFAULT_NARRATION_PROMPT: &str = "\
+Below are descriptions of still frames taken from a video, in order, each labelled with when \
+it appears. Write a single flowing description of the video for someone who cannot see it. \
+Describe only what the frames actually show: do not invent events, dialogue or explanations \
+for what happened between them, and where the frames do not say what connects two moments, \
+simply move on to the next. Mention the timings only where they matter. Your answer will be \
+read aloud, so write plain sentences with no headings, bullet points, markdown, asterisks or \
+code blocks.";
+
+/// ffmpeg's scene score for an ordinary cut. Lower catches camera movement and
+/// costs vision calls for it; higher misses everything but hard cuts.
+pub const DEFAULT_SCENE_THRESHOLD: f32 = 0.4;
+/// Seconds without a frame before one is taken regardless.
+pub const DEFAULT_INTERVAL_SECS: u32 = 30;
+/// Frames per video by default.
+pub const DEFAULT_MAX_FRAMES: usize = 40;
+/// The most a user may raise [`Config::video_max_frames`] to.
+///
+/// A cap on the cap, because this number is minutes of the user's life: at a
+/// minute a frame on a machine with no GPU, 200 is already most of an
+/// afternoon, and a config file with a stray zero in it should not be able to
+/// commit them to a week.
+pub const MAX_FRAMES_LIMIT: usize = 200;
+
 impl Config {
+    /// Which frames to take out of a video, with the saved numbers held to
+    /// ranges ffmpeg and the user's patience can both survive.
+    pub fn video_sampling(&self) -> crate::ffmpeg::Sampling {
+        crate::ffmpeg::Sampling {
+            scene_threshold: self.video_scene_threshold.clamp(0.05, 1.0),
+            floor: std::time::Duration::from_secs(self.video_interval_secs.clamp(1, 3600) as u64),
+            max_frames: self.video_max_frames.clamp(1, MAX_FRAMES_LIMIT),
+        }
+    }
+
+    /// The model that rewrites the frames as narration: whichever text model
+    /// was named, or the vision model that described them.
+    pub fn narration_model(&self) -> &str {
+        let named = self.narration_model.trim();
+        if named.is_empty() {
+            self.ollama_model.trim()
+        } else {
+            named
+        }
+    }
+
     pub fn path() -> Option<PathBuf> {
         let dirs = directories::ProjectDirs::from("io", "accessengine", "accessengine")?;
         Some(dirs.config_dir().join("config.json"))
@@ -462,5 +565,76 @@ mod tests {
         let saved = r#"{ "ollama_model": "minicpm-v:8b" }"#;
         let config: Config = serde_json::from_str(saved).unwrap();
         assert_eq!(config.ollama_model, "minicpm-v:8b");
+    }
+
+    /// A config written by an older version has none of the video settings in
+    /// it, and must come back with working ones rather than zeroes — a scene
+    /// threshold of 0 would take every frame in the video.
+    #[test]
+    fn a_config_from_before_video_gets_working_video_settings() {
+        let saved = r#"{ "ollama_model": "qwen2.5vl:3b" }"#;
+        let config: Config = serde_json::from_str(saved).unwrap();
+
+        assert_eq!(config.video_scene_threshold, DEFAULT_SCENE_THRESHOLD);
+        assert_eq!(config.video_interval_secs, DEFAULT_INTERVAL_SECS);
+        assert_eq!(config.video_max_frames, DEFAULT_MAX_FRAMES);
+        assert!(config.video_narrate);
+        assert!(!config.video_frame_prompt.is_empty());
+        assert!(!config.video_narration_prompt.is_empty());
+    }
+
+    /// The sampling is what a video costs in time, so nonsense in the file must
+    /// not become nonsense in the job.
+    #[test]
+    fn saved_sampling_numbers_are_held_to_survivable_ranges() {
+        let absurd: Config = serde_json::from_str(
+            r#"{ "video_scene_threshold": 0.0, "video_interval_secs": 0, "video_max_frames": 100000 }"#,
+        )
+        .unwrap();
+        let sampling = absurd.video_sampling();
+
+        // A threshold of zero selects every frame; a floor of zero does too.
+        assert!(sampling.scene_threshold >= 0.05);
+        assert!(sampling.floor >= std::time::Duration::from_secs(1));
+        assert_eq!(sampling.max_frames, MAX_FRAMES_LIMIT);
+
+        // And the ordinary case passes through untouched.
+        let sane = Config::default().video_sampling();
+        assert_eq!(sane.scene_threshold, DEFAULT_SCENE_THRESHOLD);
+        assert_eq!(sane.max_frames, DEFAULT_MAX_FRAMES);
+    }
+
+    /// Left empty, the narration is written by the model that is already
+    /// downloaded — which is the only reason this feature needs no second
+    /// multi-gigabyte download to work at all.
+    #[test]
+    fn the_vision_model_writes_the_narration_unless_another_is_named() {
+        let mut config = Config {
+            ollama_model: "qwen2.5vl:3b".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(config.narration_model(), "qwen2.5vl:3b");
+
+        // Whitespace is not a model name.
+        config.narration_model = "   ".to_string();
+        assert_eq!(config.narration_model(), "qwen2.5vl:3b");
+
+        config.narration_model = "llama3.2".to_string();
+        assert_eq!(config.narration_model(), "llama3.2");
+    }
+
+    /// Both video prompts are read aloud, so both carry the instruction that
+    /// keeps Markdown out of a synthesiser's mouth.
+    #[test]
+    fn the_video_prompts_ask_for_speakable_text() {
+        for prompt in [DEFAULT_FRAME_PROMPT, DEFAULT_NARRATION_PROMPT] {
+            assert!(prompt.contains("read aloud"), "{prompt}");
+            assert!(prompt.contains("markdown"), "{prompt}");
+        }
+        // The frame prompt has to keep each answer short: it is one of dozens.
+        assert!(DEFAULT_FRAME_PROMPT.contains("one or two"));
+        // And the narration prompt has to forbid the invented connective
+        // tissue that makes a description track untrustworthy.
+        assert!(DEFAULT_NARRATION_PROMPT.contains("do not invent"));
     }
 }

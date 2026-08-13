@@ -42,11 +42,15 @@ pub enum Job {
     },
     /// Read an image, arranging Ollama first if it needs arranging.
     ReadImage { path: PathBuf, config: Box<Config> },
+    /// Describe a video, arranging ffmpeg and Ollama first if they need it.
+    ReadVideo { path: PathBuf, config: Box<Config> },
     /// Runs Homebrew's own installer, answering the password it asks for with
     /// a macOS dialog.
     InstallHomebrew,
     /// `brew install ollama`.
     InstallOllama,
+    /// `brew install ffmpeg`, or winget's equivalent.
+    InstallFfmpeg,
     /// Download a vision model.
     PullModel(String),
     /// Fetch the voice list for a key.
@@ -78,8 +82,13 @@ impl Job {
                 "Looking at {}…",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ),
+            Self::ReadVideo { path, .. } => format!(
+                "Watching {}…",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ),
             Self::InstallHomebrew => "Installing Homebrew…".to_string(),
             Self::InstallOllama => "Installing Ollama…".to_string(),
+            Self::InstallFfmpeg => "Installing ffmpeg…".to_string(),
             Self::PullModel(model) => format!("Downloading {model}…"),
             Self::LoadElevenLabsVoices(_) => "Loading ElevenLabs voices…".to_string(),
             Self::Synthesize { .. } => "Synthesising speech…".to_string(),
@@ -90,10 +99,13 @@ impl Job {
         }
     }
 
-    /// Whether the Cancel button should appear. Interrupting a Homebrew or
-    /// Ollama install halfway would leave a mess, so neither is cancellable.
+    /// Whether the Cancel button should appear. Interrupting an install
+    /// halfway would leave a mess, so none of them is cancellable.
     pub fn is_cancellable(&self) -> bool {
-        !matches!(self, Self::InstallHomebrew | Self::InstallOllama)
+        !matches!(
+            self,
+            Self::InstallHomebrew | Self::InstallOllama | Self::InstallFfmpeg
+        )
     }
 }
 
@@ -123,6 +135,8 @@ pub enum Update {
     Saved(PathBuf),
     /// The image needs Ollama and it isn't installed.
     NeedsOllamaInstall,
+    /// The video needs ffmpeg and it isn't installed.
+    NeedsFfmpegInstall,
     /// Ollama is there but the vision model isn't.
     NeedsModel(String),
     /// A setup step finished; the UI can retry whatever was blocked. Carries
@@ -175,8 +189,10 @@ fn run(job: Job, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
     match job {
         Job::ReadDocument { path, formatting } => read_document(path, formatting, tx),
         Job::ReadImage { path, config } => read_image(path, &config, tx, cancel),
+        Job::ReadVideo { path, config } => read_video(path, &config, tx, cancel),
         Job::InstallHomebrew => install_homebrew(tx),
         Job::InstallOllama => install_ollama(tx),
+        Job::InstallFfmpeg => install_ffmpeg(tx),
         Job::PullModel(model) => pull_model(model, tx, cancel),
         Job::LoadElevenLabsVoices(key) => {
             // Reported on its own channel so a failure is attached to the
@@ -322,6 +338,212 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
     Ok(())
 }
 
+/// How the progress bar is divided between the three stages of reading a video.
+///
+/// The middle one is nearly all of it because it is nearly all of the time:
+/// pulling the frames out takes seconds and describing them takes a minute
+/// each. A bar that gave the stages equal thirds would sit at 33% for an hour.
+const EXTRACT_SHARE: f32 = 0.10;
+const DESCRIBE_SHARE: f32 = 0.80;
+
+/// A directory of extracted frames, removed when the job leaves this function
+/// by any route — including a failure partway through, which would otherwise
+/// leave several hundred megabytes of stills in the temporary directory.
+struct FrameDir(PathBuf);
+
+impl Drop for FrameDir {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            crate::log::line(format!(
+                "video: could not clean up {} — {error}",
+                self.0.display()
+            ));
+        }
+    }
+}
+
+/// Reading a video: ffmpeg for the frames, a vision model for each of them, and
+/// then a model to join what came back into something worth listening to.
+///
+/// The expensive part is the loop, and it is expensive per frame rather than
+/// per video — which is why [`crate::ffmpeg::Sampling`] exists, why the status
+/// line counts frames rather than saying "working…", and why cancelling is
+/// checked between every one.
+fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let _ = tx.send(Update::Status("Checking for ffmpeg…".into()));
+    if crate::ffmpeg::status() == crate::ffmpeg::Status::NotInstalled {
+        let _ = tx.send(Update::NeedsFfmpegInstall);
+        return Ok(());
+    }
+
+    let _ = tx.send(Update::Status("Checking for Ollama…".into()));
+    match ollama::status() {
+        ollama::Status::NotInstalled => {
+            let _ = tx.send(Update::NeedsOllamaInstall);
+            return Ok(());
+        }
+        ollama::Status::NotRunning => {
+            let _ = tx.send(Update::Status("Starting Ollama…".into()));
+            ollama::ensure_running()?;
+        }
+        ollama::Status::Running => {}
+    }
+
+    let model = config.ollama_model.trim();
+    if model.is_empty() {
+        bail!("no Ollama vision model is configured");
+    }
+    let installed = ollama::installed_models()?;
+    if !ollama::has_model(&installed, model) {
+        let _ = tx.send(Update::NeedsModel(model.to_string()));
+        return Ok(());
+    }
+    // Asked for before any frames are described, not after: a missing narration
+    // model discovered at the end would throw away an hour of inference.
+    let narrator = config.narration_model().to_string();
+    if config.video_narrate && !ollama::has_model(&installed, &narrator) {
+        let _ = tx.send(Update::NeedsModel(narrator));
+        return Ok(());
+    }
+
+    if cancelled(cancel) {
+        return Ok(());
+    }
+
+    let length = crate::ffmpeg::duration(&path);
+    let _ = tx.send(Update::Status(format!("Taking frames out of {name}…")));
+    let _ = tx.send(Update::Progress(0.0));
+
+    let dir = FrameDir(std::env::temp_dir().join(format!(
+        "accessengine-frames-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    )));
+    std::fs::create_dir_all(&dir.0)
+        .with_context(|| format!("could not create {}", dir.0.display()))?;
+
+    let log = tx.clone();
+    let frames = crate::ffmpeg::extract_frames(
+        &path,
+        config.video_sampling(),
+        &dir.0,
+        cancel,
+        move |line| {
+            let _ = log.send(Update::Log(line));
+        },
+    )?;
+    if cancelled(cancel) {
+        return Ok(());
+    }
+    let _ = tx.send(Update::Progress(EXTRACT_SHARE));
+
+    let total = frames.len();
+    let _ = tx.send(Update::Log(match length {
+        Some(length) => format!(
+            "{name} runs for {} — describing {total} frames from it",
+            audio::spoken_time(length)
+        ),
+        None => format!("describing {total} frames from {name}"),
+    }));
+
+    let mut described: Vec<(std::time::Duration, String)> = Vec::with_capacity(total);
+    for (index, frame) in frames.iter().enumerate() {
+        if cancelled(cancel) {
+            return Ok(());
+        }
+        let _ = tx.send(Update::Status(format!(
+            "Describing frame {} of {total} — {}…",
+            index + 1,
+            extract::video::moment(frame.at).to_lowercase()
+        )));
+
+        let encoded = extract::image::encode_for_ollama(&frame.path)?;
+        let answer = ollama::describe_image(model, &config.video_frame_prompt, &encoded.base64)?;
+        if answer.truncated {
+            let _ = tx.send(Update::Log(format!(
+                "frame {} was cut off before {model} finished describing it",
+                index + 1
+            )));
+        }
+        // A frame the model had nothing to say about is one frame lost, not a
+        // failed video, so it is dropped rather than retried — a retry here
+        // costs another minute and buys one sentence out of dozens.
+        let text = extract::tidy(&answer.text);
+        if text.is_empty() {
+            let _ = tx.send(Update::Log(format!(
+                "{model} had nothing to say about frame {}",
+                index + 1
+            )));
+        } else {
+            described.push((frame.at, text));
+        }
+
+        let done = (index + 1) as f32 / total as f32;
+        let _ = tx.send(Update::Progress(EXTRACT_SHARE + DESCRIBE_SHARE * done));
+    }
+
+    if cancelled(cancel) {
+        return Ok(());
+    }
+    let transcript = extract::video::transcript(&described);
+    if transcript.is_empty() {
+        bail!("{model} could not describe any of the {total} frames taken from {name}");
+    }
+
+    let mut note = format!(
+        "video read by {model} · {} of {total} frames described",
+        described.len()
+    );
+    let mut text = transcript.clone();
+
+    if config.video_narrate {
+        let _ = tx.send(Update::Status(format!(
+            "Asking {narrator} to write the description…"
+        )));
+        let request =
+            extract::video::narration_request(&config.video_narration_prompt, &transcript);
+        // The narration is a rewrite of text the app already has. If it fails,
+        // or comes back as a stub, the frame-by-frame account is still a full
+        // description of the video — so this never costs the user the job.
+        match ollama::narrate(&narrator, &request) {
+            Ok(narration) if extract::video::narration_is_usable(&narration.text, &transcript) => {
+                text = extract::tidy(&narration.text);
+                note = format!(
+                    "video read by {model} from {} of {total} frames, described by {narrator}",
+                    described.len()
+                );
+            }
+            Ok(_) => {
+                let _ = tx.send(Update::Log(format!(
+                    "{narrator} did not return a usable description; \
+                     falling back to the frame-by-frame account"
+                )));
+                note.push_str(" · frame by frame");
+            }
+            Err(error) => {
+                let _ = tx.send(Update::Log(format!(
+                    "{narrator} could not write the description ({error:#}); \
+                     falling back to the frame-by-frame account"
+                )));
+                note.push_str(" · frame by frame");
+            }
+        }
+    }
+
+    let _ = tx.send(Update::Progress(1.0));
+    let _ = tx.send(Update::TextReady { text, note });
+    Ok(())
+}
+
 fn install_homebrew(tx: &Sender<Update>) -> Result<()> {
     let log = tx.clone();
     crate::homebrew::install(move |line| {
@@ -346,6 +568,22 @@ fn install_ollama(tx: &Sender<Update>) -> Result<()> {
     let _ = tx.send(Update::Status("Starting Ollama…".into()));
     ollama::ensure_running()?;
     let _ = tx.send(Update::SetupComplete("Ollama is ready.".into()));
+    Ok(())
+}
+
+fn install_ffmpeg(tx: &Sender<Update>) -> Result<()> {
+    if crate::ffmpeg::install_command().is_none() {
+        bail!(
+            "ffmpeg cannot be installed automatically on this computer. \
+             Download it from {} instead.",
+            crate::ffmpeg::DOWNLOAD_URL
+        );
+    }
+    let log = tx.clone();
+    crate::ffmpeg::install(move |line| {
+        let _ = log.send(Update::Log(line));
+    })?;
+    let _ = tx.send(Update::SetupComplete("ffmpeg is ready.".into()));
     Ok(())
 }
 
@@ -590,5 +828,141 @@ mod tests {
         // System voices are spoken directly by the UI, so queueing them here is
         // a programming error rather than something to silently ignore.
         assert!(synthesize(system_engine(), "hello".into(), &tx, &cancel).is_err());
+    }
+
+    /// The whole video path, for real: ffmpeg takes the frames, the vision
+    /// model describes each one, and a model writes them up.
+    ///
+    /// Ignored by default, and not because it is unimportant — it is the only
+    /// test that runs the feature as the user does. It is ignored because it
+    /// needs Ollama with a vision model pulled, and because vision inference on
+    /// a laptop takes minutes, which is not a cost to put on every `cargo test`.
+    ///
+    /// Run it with:
+    ///     cargo test read_a_real_video -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs ffmpeg, a running Ollama and minutes of inference"]
+    fn read_a_real_video_end_to_end() {
+        let Some(binary) = crate::ffmpeg::binary_path() else {
+            eprintln!("no ffmpeg; skipping");
+            return;
+        };
+        // `main` does this before the first HTTPS request; a test has no main.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let dir = std::env::temp_dir().join("soe-video-job-test");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let video = dir.join("clip.mp4");
+
+        // Two distinguishable shots, so the transcript should have two entries
+        // that do not read identically.
+        let made = std::process::Command::new(&binary)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=640x480:rate=10:duration=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "smptebars=size=640x480:rate=10:duration=2",
+                "-filter_complex",
+                "[0:v][1:v]concat=n=2:v=1:a=0[out]",
+                "-map",
+                "[out]",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&video)
+            .status()
+            .expect("ffmpeg should run");
+        assert!(made.success());
+
+        // Both ways out: the narration, and the frame-by-frame account it
+        // falls back to. The second is not a lesser path — it is what every
+        // user with a model too small to narrate will actually hear.
+        for narrate in [true, false] {
+            let (tx, rx) = channel();
+            let cancel: Cancel = Arc::new(AtomicBool::new(false));
+            let config = Config {
+                video_max_frames: 2,
+                video_narrate: narrate,
+                ..Default::default()
+            };
+            let result = read_video(video.clone(), &config, &tx, &cancel);
+            drop(tx);
+
+            let updates: Vec<Update> = rx.into_iter().collect();
+            result.expect("the video should be readable");
+
+            for update in &updates {
+                if let Update::Log(line) = update {
+                    eprintln!("log: {line}");
+                }
+            }
+            let progress: Vec<f32> = updates
+                .iter()
+                .filter_map(|u| match u {
+                    Update::Progress(fraction) => Some(*fraction),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                progress.windows(2).all(|pair| pair[1] >= pair[0]),
+                "the progress bar went backwards: {progress:?}"
+            );
+            assert_eq!(progress.last(), Some(&1.0), "the bar never reached the end");
+
+            let ready = updates.iter().find_map(|u| match u {
+                Update::TextReady { text, note } => Some((text.clone(), note.clone())),
+                _ => None,
+            });
+            let (text, note) = ready.expect("the job should have produced text");
+            eprintln!("\n=== narrate: {narrate} ===\nnote: {note}\n\n{text}\n");
+            assert!(
+                text.chars().count() > 80,
+                "the description is too short to be one: {text}"
+            );
+            // Spoken output: the prompts forbid Markdown, and this is where
+            // that is actually put to the test rather than asserted about the
+            // prompt.
+            assert!(!text.contains("**"), "markdown reached the speech: {text}");
+            assert!(
+                !text.contains("```"),
+                "a code fence reached the speech: {text}"
+            );
+
+            // The unnarrated form is the transcript, which must carry both
+            // frames and say when each of them happens.
+            if !narrate {
+                assert!(text.contains("At the start"), "no opening frame: {text}");
+                assert!(
+                    text.contains(" in: "),
+                    "nothing labelled with a time: {text}"
+                );
+            }
+        }
+
+        // The frames are temporary, and nothing may outlive the job that made
+        // them — including when it fails partway through.
+        let leftovers: Vec<PathBuf> = std::fs::read_dir(std::env::temp_dir())
+            .expect("the temporary directory should be readable")
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|name| name.starts_with("accessengine-frames-"))
+            })
+            .collect();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            leftovers.is_empty(),
+            "extracted frames were left behind: {leftovers:?}"
+        );
     }
 }

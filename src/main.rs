@@ -1,9 +1,10 @@
 //! accessengine — the Speech Output Engine.
 //!
-//! Opens a `.txt`, `.docx` or image file and either reads it aloud or saves the
-//! speech as a WAV or MP3. Speech comes from the voices built into macOS and
-//! Windows, or from ElevenLabs when an API key is available. Images are turned
-//! into text by a vision model running locally through Ollama.
+//! Opens a `.txt`, `.docx`, image or video file and either reads it aloud or
+//! saves the speech as a WAV or MP3. Speech comes from the voices built into
+//! macOS and Windows, or from ElevenLabs when an API key is available. Images
+//! are turned into text by a vision model running locally through Ollama, and
+//! video by taking stills with ffmpeg and reading each of them the same way.
 //!
 //! The whole app is one form of full-width controls that can be driven entirely
 //! from the keyboard; see [`app`] for why it is shaped that way.
@@ -17,6 +18,7 @@ mod audio;
 mod config;
 mod dictionary;
 mod extract;
+mod ffmpeg;
 mod geocode;
 mod homebrew;
 mod jobs;

@@ -8,7 +8,8 @@ Choose a file, choose a voice, choose what to do with it, press **Apply**. That
 is the whole app. Speech comes from the voices already built into macOS and
 Windows, so it works with no account and no setup; add an ElevenLabs API key and
 you get their voices instead. Images work too: hand it a photo or a screenshot
-and a vision model running on your own machine reads the text out of it.
+and a vision model running on your own machine reads the text out of it — and so
+does video, which is taken apart into stills and described a frame at a time.
 
 The window is two panes. The list on the left — **Read a File**, **Audio
 Player**, **Dictionary**, **Settings**, **Shortcuts** — chooses what the
@@ -28,7 +29,7 @@ This is the point of the app rather than a feature of it.
   faint one-pixel ring.
 - **Colour is never the only signal.** Status messages are prefixed with
   "Done:" or "Problem:" as well as coloured, and — unless you turn it off —
-  finishing and failing each make their own sound.
+  starting, finishing and failing each make their own sound.
 - **Contrast is designed, not inherited.** Every text colour in `src/theme.rs`
   is written down as a pair with the surface it sits on, and clears 4.5:1 in
   both the light and dark themes. The app follows your system appearance.
@@ -52,16 +53,27 @@ This is the point of the app rather than a feature of it.
   one this app saved, or an audiobook chapter from anywhere else — with play,
   pause, stop, a ten-second rewind for the sentence you missed, and a countdown
   of how much is left. Drop a file anywhere on the window and it lands there.
-- **A sound when something finishes or fails.** A short chime for success, a
-  lower tone for a problem, so you know which happened without watching the
-  status line. The audio player stays quiet, since there the sound is the point.
-  Turn the rest off under **Settings**.
+- **A sound when something starts, finishes or fails.** A short tone as the work
+  begins, a chime for success, a lower tone for a problem, so you know what
+  happened without watching the status line. While the work runs there is a
+  quiet tick every fifteen seconds — a long job and a stuck one sound different
+  — which has its own switch, since it is the one sound that reports nothing
+  new. Neither ever plays over a document being read aloud, and the audio player
+  stays quiet throughout, since there the sound is the point. All of it is
+  under **Settings**.
 - **A dictionary of word replacements** — see below.
 - **Reads images** (`.jpg`, `.png`, and `.heic`/`.heif` on macOS) through a
   local [Ollama](https://ollama.com) vision model. Nothing is uploaded anywhere.
-- **Offers to install Ollama** — with Homebrew on macOS, winget on Windows — the
-  first time you open an image without it. It never installs anything without
-  asking, and it shows you the command it would run.
+- **Describes video** (`.mp4`, `.mov`, `.m4v`, `.avi`, `.mkv`, `.webm`). Stills
+  are taken wherever the picture changes enough to be a new shot, plus one every
+  half minute so a long unbroken take is not described by its opening frame
+  alone. Each still goes to the same vision model, and the answers are then
+  written up as one continuous description. Nothing is uploaded anywhere. From
+  there it is an ordinary piece of text: read it aloud, or save it as WAV or MP3
+  like anything else.
+- **Offers to install Ollama and ffmpeg** — with Homebrew on macOS, winget on
+  Windows — the first time you open a file that needs one. It never installs
+  anything without asking, and it shows you the command it would run.
 
 ## The dictionary
 
@@ -104,7 +116,8 @@ the voice.
 macOS or Windows. The speech engines are `say` on macOS and `System.Speech`
 (SAPI 5) through PowerShell on Windows; both ship with the operating system.
 HEIC photos are converted with `sips`, which is macOS-only — on Windows, save
-them as JPEG or PNG first.
+them as JPEG or PNG first. Video needs [ffmpeg](https://ffmpeg.org); the app
+offers to install it when you open one.
 
 You need [Rust](https://rustup.rs) 1.88 or newer to build. There are no C
 toolchain surprises on Windows: the TLS stack is `ring` rather than the default
@@ -197,6 +210,40 @@ happens the app retries once with a plain question rather than reporting
 failure, and says so in the log — which is what makes a 1.7B model like
 `moondream` usable here as well as the larger ones.
 
+## Describing video
+
+A video is read the same way as an image, several dozen times over. ffmpeg takes
+stills out of it, each still goes to the vision model, and a model then rewrites
+the answers as one continuous description. The first time you open a video the
+app offers to install ffmpeg if it is missing, the same way it offers Ollama.
+
+**The cost is per frame, not per video.** On a machine with no graphics card a
+single frame can take the better part of a minute, so which frames get taken is
+the setting that matters. Three controls under **Settings** decide it:
+
+- **How much of the picture must change for a new frame.** ffmpeg scores how
+  different each frame is from the one before it; anything at or above this
+  counts as a new shot. Low takes a frame when the camera merely moves, which
+  describes more and takes longer. High takes one only at a clear cut.
+- **Take a frame anyway after this long.** A slow pan across a landscape never
+  trips a cut, and without this it would be described by its opening frame
+  alone. Thirty seconds by default.
+- **Most frames to describe from one video.** The stop that keeps a long or busy
+  video from taking the rest of the day. Forty by default, two hundred at most.
+
+So a ten-minute lecture on one slide costs a handful of frames, and a fast-cut
+trailer of the same length costs many — which is the right way round.
+
+The write-up is done by the vision model itself unless you name a text model in
+**Settings**, so nothing further has to be downloaded to use this at all. A
+dedicated text model usually writes better prose; a 3B vision model doing both
+jobs will sometimes lose a frame or two out of the middle. If the write-up fails
+or comes back as a stub, you get the frame-by-frame account instead — each
+description under the time it appears — rather than an error, and the log says
+which you got. That account is also what you get with the write-up turned off,
+and it is the more trustworthy of the two: every sentence in it came from a
+frame, where a joined-up narration is a model's account of what connects them.
+
 ## Security
 
 The app runs other programs and opens files it did not write, so both are
@@ -249,10 +296,11 @@ Output Engine.
 | `src/theme.rs` | Fonts, the contrast-checked palette, and the form metrics |
 | `src/dictionary.rs` | Word replacement |
 | `src/jobs.rs` | Background work and the messages it sends back |
-| `src/extract/` | `.txt`, `.docx` and image → text |
+| `src/extract/` | `.txt`, `.docx`, image and video → text |
 | `src/tts/` | The ElevenLabs and system-voice engines, and text chunking |
 | `src/audio.rs` | PCM, WAV/MP3 encoding, playback and the transport |
 | `src/ollama.rs` | Detecting, installing and calling Ollama |
+| `src/ffmpeg.rs` | Detecting and installing ffmpeg, and taking frames out of video |
 | `src/apikey.rs` | API key storage |
 | `src/sysexec.rs` | Locating system programs, and staging files for them |
 | `src/config.rs` | Everything else, as JSON |
@@ -269,6 +317,6 @@ signature, rather than `cfg` scattered through the app.
 ## Licence
 
 MIT. See [LICENSE](LICENSE). The bundled Ubuntu Bold font is under the Ubuntu
-Font Licence 1.0; see `assets/fonts/`. The two sound effects are CC0 recordings
+Font Licence 1.0; see `assets/fonts/`. The four sound effects are CC0 recordings
 from freesound.org, edited for length and loudness; see `assets/sounds/` for
 what they are and who made them.
