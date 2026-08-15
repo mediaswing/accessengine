@@ -19,11 +19,6 @@
 use crate::extract;
 use std::path::PathBuf;
 
-/// The verb Explorer shows in the right-click menu, and the registry key it
-/// lives under.
-const VERB: &str = "SpeakToFile";
-const VERB_LABEL: &str = "Speak to file";
-
 /// Extensions the right-click entry covers.
 ///
 /// Deliberately not [`extract::IMAGE_EXTENSIONS`] or [`extract::VIDEO_EXTENSIONS`]:
@@ -31,6 +26,7 @@ const VERB_LABEL: &str = "Speak to file";
 /// has no progress bar or cancel button to show for it. Built from the same
 /// lists the Open dialog uses, so this can never cover a file type
 /// [`extract::extract_document`] doesn't actually handle.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn extensions() -> Vec<&'static str> {
     [
         extract::TEXT_EXTENSIONS,
@@ -51,10 +47,17 @@ pub use imp::{install, is_installed, uninstall};
 
 #[cfg(target_os = "windows")]
 mod imp {
-    use super::{VERB, VERB_LABEL, extensions, install_path};
+    use super::{extensions, install_path};
     use anyhow::{Context, Result};
     use std::path::{Path, PathBuf};
     use winreg::HKCU;
+
+    /// The verb Explorer shows in the right-click menu, and the registry key
+    /// it lives under. Defined here rather than beside [`extensions`] so the
+    /// platforms without a registry are not left holding two unused
+    /// constants.
+    const VERB: &str = "SpeakToFile";
+    const VERB_LABEL: &str = "Speak to file";
 
     /// `SystemFileAssociations` is the key Explorer offers precisely for
     /// adding a verb to a file type without becoming its default handler —
