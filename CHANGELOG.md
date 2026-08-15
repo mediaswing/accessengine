@@ -3,6 +3,39 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.7.0] - 2026-08-15
+
+### Added
+
+- **A right-click "Speak to file" entry, on Windows.** Turn it on once in
+  **Settings** and every text, Word and CSV file gets a **Speak to file** option
+  in Explorer's right-click menu. Choosing it reads the file, speaks it with
+  whatever engine, voice and rate you last saved, and writes the audio next to
+  the original — as a WAV or an MP3, whichever you save as — without opening a
+  window at all. Run it twice on the same file and the second result is
+  numbered rather than written over the first.
+
+  Because the app is a single portable `.exe` that most people run out of
+  `Downloads` and delete afterwards, turning this on also copies the app into
+  its own settings folder and points the right-click entry at that copy, so
+  deleting the download later doesn't break it. **Settings** says where the
+  copy lives. Nothing needs an admin prompt, and nothing outside your own
+  Windows account is touched.
+
+  Images and video are deliberately left out: they go through Ollama and
+  ffmpeg and can run for anything up to the better part of an hour, which is
+  not something to start from a menu with no progress bar and no way to cancel.
+  Open those in the app as before.
+
+### Fixed
+
+- **A video frame the vision model was cut off describing no longer reaches
+  the description.** If the answer for a frame arrived truncated after only a
+  word or two, that fragment was written into the account you hear as though it
+  were a real description of the frame. Photos already rejected the same
+  failure; video now drops it too, and says so in the log, exactly as it does
+  for a frame the model had nothing to say about.
+
 ## [1.6.0] - 2026-08-13
 
 ### Added
