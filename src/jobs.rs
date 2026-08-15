@@ -737,6 +737,116 @@ fn save(
     Ok(())
 }
 
+/// Resolves which engine to speak with from settings alone.
+///
+/// The free-standing version of what the GUI works out interactively — see
+/// `SpeechApp::active_engine`/`job_engine` in `app.rs`, which also has to
+/// decide *what to do about it* when the choice can't be honoured (open the
+/// API key dialog, grey out a button). This just needs a reason, for
+/// [`speak_to_file`] and anything else with no UI to fall back on.
+pub fn resolve_engine(config: &Config, api_key: Option<&str>) -> Result<Engine> {
+    match config.engine {
+        crate::config::EnginePreference::ElevenLabs => {
+            let api_key = api_key
+                .map(str::to_string)
+                .context("ElevenLabs is selected but no API key is saved")?;
+            Ok(Engine::ElevenLabs {
+                api_key,
+                voice_id: config.elevenlabs_voice_id.clone(),
+                model_id: config.elevenlabs_model_id.clone(),
+            })
+        }
+        crate::config::EnginePreference::System => {
+            if !tts::system::SUPPORTED {
+                bail!("{}", tts::system::UNSUPPORTED_MESSAGE);
+            }
+            Ok(Engine::System {
+                voice: config.system_voice.clone(),
+                rate: config.system_rate,
+            })
+        }
+    }
+}
+
+/// `path`, or the first `path (2)`, `path (3)`, … that doesn't already exist.
+///
+/// So running [`speak_to_file`] twice on the same source never overwrites the
+/// audio from the first run.
+fn unique_path(path: &std::path::Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let extension = path.extension().map(|e| e.to_string_lossy().to_string());
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new(""));
+
+    (2..)
+        .map(|n| {
+            let name = match &extension {
+                Some(extension) => format!("{stem} ({n}).{extension}"),
+                None => format!("{stem} ({n})"),
+            };
+            parent.join(name)
+        })
+        .find(|candidate| !candidate.exists())
+        .expect("an unbounded count of names always finds one that doesn't exist")
+}
+
+/// Reads `path` and writes the speech next to it, using whatever settings are
+/// already saved. The pipeline behind the Windows right-click "Speak to file"
+/// entry — see [`crate::context_menu`] — which has no window to drive the
+/// interactive Read pane through, so this drives the same pieces directly.
+///
+/// Limited to the file kinds that need no setup of their own. `Image` and
+/// `Video` go through Ollama/ffmpeg, can run for minutes, and may need to
+/// prompt about installing something first — none of which a headless run
+/// can do, so those are refused here with a message pointing back at the GUI.
+pub fn speak_to_file(
+    path: &std::path::Path,
+    config: &Config,
+    api_key: Option<&str>,
+) -> Result<PathBuf> {
+    let name = || path.file_name().unwrap_or_default().to_string_lossy();
+    match FileKind::from_path(path) {
+        Some(FileKind::Text) | Some(FileKind::Docx) | Some(FileKind::Csv) => {}
+        Some(FileKind::Image) | Some(FileKind::Video) => bail!(
+            "{} needs Ollama to read, which can take a while and may need setup — open it in \
+             accessengine instead of using the right-click menu",
+            name()
+        ),
+        None => bail!("{} is not a file type accessengine can read", name()),
+    }
+
+    let text = extract::extract_document(path, config.formatting)?;
+    if text.trim().is_empty() {
+        bail!("{} contains no readable text", name());
+    }
+    let (text, _) = crate::dictionary::apply(&text, &config.dictionary);
+
+    let engine = resolve_engine(config, api_key)?;
+    let format = config.save_format;
+    let destination = unique_path(&path.with_extension(format.extension()));
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cancel: Cancel = Arc::new(AtomicBool::new(false));
+    save(
+        engine,
+        text,
+        destination.clone(),
+        format,
+        None,
+        &tx,
+        &cancel,
+    )?;
+    drop(tx);
+    for _ in rx {}
+
+    Ok(destination)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -838,6 +948,120 @@ mod tests {
         // System voices are spoken directly by the UI, so queueing them here is
         // a programming error rather than something to silently ignore.
         assert!(synthesize(system_engine(), "hello".into(), &tx, &cancel).is_err());
+    }
+
+    #[test]
+    fn unique_path_leaves_a_free_name_alone() {
+        let path = std::env::temp_dir().join("soe-unique-path-test-does-not-exist.wav");
+        assert_eq!(unique_path(&path), path);
+    }
+
+    /// The bug this exists to prevent: a second "Speak to file" on the same
+    /// source overwriting the first result instead of sitting beside it.
+    #[test]
+    fn unique_path_numbers_around_existing_files() {
+        let dir = std::env::temp_dir().join("soe-unique-path-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clip.wav");
+        std::fs::write(&path, b"one").unwrap();
+        std::fs::write(dir.join("clip (2).wav"), b"two").unwrap();
+
+        let next = unique_path(&path);
+
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(next, dir.join("clip (3).wav"));
+    }
+
+    #[test]
+    fn unique_path_numbers_a_file_with_no_extension() {
+        let dir = std::env::temp_dir().join("soe-unique-path-test-no-ext");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clip");
+        std::fs::write(&path, b"one").unwrap();
+
+        let next = unique_path(&path);
+
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(next, dir.join("clip (2)"));
+    }
+
+    #[test]
+    fn resolve_engine_picks_system_voices_when_that_is_what_is_saved() {
+        let config = Config {
+            engine: crate::config::EnginePreference::System,
+            system_voice: "Some Voice".to_string(),
+            system_rate: 200,
+            ..Default::default()
+        };
+        match resolve_engine(&config, None) {
+            Ok(Engine::System { voice, rate }) => {
+                assert_eq!(voice, "Some Voice");
+                assert_eq!(rate, 200);
+            }
+            other => panic!("expected a system engine, got {}", describe(&other)),
+        }
+    }
+
+    #[test]
+    fn resolve_engine_needs_a_key_for_elevenlabs() {
+        let config = Config {
+            engine: crate::config::EnginePreference::ElevenLabs,
+            ..Default::default()
+        };
+        // No key on hand, same as a headless run with none saved — this must
+        // fail with a reason rather than build a request with an empty key.
+        assert!(resolve_engine(&config, None).is_err());
+
+        match resolve_engine(&config, Some("sk-test")) {
+            Ok(Engine::ElevenLabs { api_key, .. }) => assert_eq!(api_key, "sk-test"),
+            other => panic!("expected an ElevenLabs engine, got {}", describe(&other)),
+        }
+    }
+
+    fn describe(result: &Result<Engine>) -> String {
+        match result {
+            Ok(Engine::System { .. }) => "a system engine".to_string(),
+            Ok(Engine::ElevenLabs { .. }) => "an ElevenLabs engine".to_string(),
+            Err(error) => format!("an error ({error:#})"),
+        }
+    }
+
+    /// The headless pipeline end to end: a real text file, read, spoken with a
+    /// system voice, and written next to the source.
+    ///
+    /// Ignored by default — it speaks for real, which is slow and, on a CI
+    /// runner with no audio stack configured, not guaranteed to work. Run it
+    /// with:
+    ///     cargo test speak_to_file_writes -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs a working system voice"]
+    fn speak_to_file_writes_audio_next_to_the_source() {
+        if !tts::system::SUPPORTED {
+            eprintln!("no system voice on this platform; skipping");
+            return;
+        }
+        let dir = std::env::temp_dir().join("soe-speak-to-file-test");
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("note.txt");
+        std::fs::write(&source, "A short note, read aloud and saved.").unwrap();
+
+        let config = Config {
+            engine: crate::config::EnginePreference::System,
+            save_format: AudioFormat::Wav,
+            ..Default::default()
+        };
+        let result = speak_to_file(&source, &config, None);
+
+        let saved = result.expect("the headless pipeline should succeed");
+        assert_eq!(saved, dir.join("note.wav"));
+        let pcm = audio::read_wav(&saved).expect("the saved WAV should be readable");
+        assert!(!pcm.samples.is_empty());
+
+        // Run again on the same source: the first result must survive.
+        let second = speak_to_file(&source, &config, None).expect("a second run should succeed");
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(second, dir.join("note (2).wav"));
     }
 
     /// The whole video path, for real: ffmpeg takes the frames, the vision

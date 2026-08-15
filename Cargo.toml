@@ -41,3 +41,6 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 [profile.release]
 lto = "thin"
 strip = true
+
+[target."cfg(windows)".dependencies]
+winreg = "0.56.0"

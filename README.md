@@ -74,6 +74,10 @@ This is the point of the app rather than a feature of it.
 - **Offers to install Ollama and ffmpeg** — with Homebrew on macOS, winget on
   Windows — the first time you open a file that needs one. It never installs
   anything without asking, and it shows you the command it would run.
+- **A right-click "Speak to file" entry, on Windows.** Turn it on once in
+  **Settings** and any text, Word or CSV file gets a **Speak to file** option
+  in Explorer's right-click menu — no window opens, the audio just appears
+  next to the file, using whatever engine and voice you last used.
 
 ## The dictionary
 
@@ -243,6 +247,32 @@ description under the time it appears — rather than an error, and the log says
 which you got. That account is also what you get with the write-up turned off,
 and it is the more trustworthy of the two: every sentence in it came from a
 frame, where a joined-up narration is a model's account of what connects them.
+
+## Right-click "Speak to file" (Windows)
+
+Turning this on in **Settings** adds a **Speak to file** entry to the
+right-click menu in Explorer for text, Word and CSV files — the file kinds
+that read in a second or two, with no separate setup. Choosing it reads the
+file, speaks it with whatever engine, voice and rate are currently saved, and
+writes the audio next to the source (as WAV or MP3, whichever **Settings**
+has you saving as) — no window opens. Running it twice on the same file never
+overwrites the first result; the second is numbered, like Windows does for a
+duplicate download.
+
+Images and video stay in the app itself: they go through Ollama and ffmpeg,
+can take anywhere from seconds to the better part of an hour, and the app
+would have nothing to show for that time with no window open — no progress
+bar, no way to cancel.
+
+The app ships as a single portable `.exe`, usually run straight out of
+`Downloads` and often deleted afterwards. So turning this on also copies the
+app into its own settings folder and points the right-click entry at *that*
+copy, not wherever it happened to be launched from — deleting the original
+afterwards doesn't break it. Everything here is written to
+`HKEY_CURRENT_USER`, so no admin prompt appears, and nothing outside your own
+Windows account is touched. **Settings** shows exactly where the copy lives,
+and turning the entry back off removes the right-click menu changes (the
+copy itself is left in place).
 
 ## Security
 

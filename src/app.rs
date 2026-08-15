@@ -415,6 +415,10 @@ pub struct SpeechApp {
     /// Set by any control that changes `config`; written out at end of frame
     /// so a slider drag doesn't rewrite the file on every pixel.
     config_dirty: bool,
+    /// Whether the Windows right-click "Speak to file" entry is registered.
+    /// Read from the registry once at startup and after each toggle, rather
+    /// than every frame — see [`crate::context_menu`].
+    context_menu_installed: bool,
 
     tx: Sender<Update>,
     rx: Receiver<Update>,
@@ -471,6 +475,7 @@ impl SpeechApp {
             focus: Some(Field::File),
             focus_tab: None,
             config_dirty: false,
+            context_menu_installed: crate::context_menu::is_installed(),
             tx,
             rx,
             update_available: None,
@@ -2523,6 +2528,64 @@ impl SpeechApp {
                 }
             }
         });
+
+        if cfg!(target_os = "windows") {
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add(
+                egui::Label::new(
+                    "Right-click a text, Word or CSV file in Explorer to speak it straight to \
+                     an audio file, using whatever engine and voice are set on the Read a File \
+                     page. Enabling this copies the app into your settings folder, so the \
+                     right-click entry keeps working even if this copy is deleted later.",
+                )
+                .wrap(),
+            );
+            ui.add_space(6.0);
+
+            let muted = crate::theme::palette(ui.visuals()).muted;
+            let status = if self.context_menu_installed {
+                match crate::context_menu::install_path() {
+                    Some(path) => {
+                        format!("Installed — the app is copied to {}.", path.display())
+                    }
+                    None => "Installed.".to_string(),
+                }
+            } else {
+                "Not installed.".to_string()
+            };
+            ui.add(egui::Label::new(RichText::new(status).color(muted)).wrap());
+            ui.add_space(6.0);
+
+            let label = if self.context_menu_installed {
+                "Disable Right-Click Menu"
+            } else {
+                "Enable Right-Click Menu"
+            };
+            if ui
+                .add(egui::Button::new(label).min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)))
+                .clicked()
+            {
+                let outcome = if self.context_menu_installed {
+                    crate::context_menu::uninstall()
+                        .map(|()| "Right-click menu disabled.".to_string())
+                } else {
+                    crate::context_menu::install().map(|path| {
+                        format!(
+                            "Right-click menu enabled — the app is copied to {}.",
+                            path.display()
+                        )
+                    })
+                };
+                match outcome {
+                    Ok(message) => {
+                        self.context_menu_installed = !self.context_menu_installed;
+                        self.set_status(message, Tone::Success);
+                    }
+                    Err(error) => self.set_status(format!("{error:#}"), Tone::Error),
+                }
+            }
+        }
 
         ui.add_space(12.0);
         ui.separator();

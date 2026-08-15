@@ -16,6 +16,7 @@ mod apikey;
 mod app;
 mod audio;
 mod config;
+mod context_menu;
 mod dictionary;
 mod extract;
 mod ffmpeg;
@@ -42,6 +43,13 @@ fn main() -> eframe::Result<()> {
     // installed, which is just as good.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    // The Windows right-click "Speak to file" entry launches the app this
+    // way — see `context_menu` and `jobs::speak_to_file`. Handled before any
+    // window is built, so a run started from Explorer never flashes one up.
+    if let Some(path) = speak_to_file_argument() {
+        speak_to_file_and_exit(path);
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(APP_TITLE)
@@ -57,4 +65,91 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(app::SpeechApp::new(cc)))),
     )
+}
+
+/// The path after `--speak-to-file` on the command line, if that's how this
+/// run was started.
+fn speak_to_file_argument() -> Option<std::path::PathBuf> {
+    parse_speak_to_file_argument(std::env::args_os())
+}
+
+/// Takes the arguments as a parameter rather than reading them itself, so the
+/// parsing can be tested without a real process command line to point it at.
+fn parse_speak_to_file_argument(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    while let Some(arg) = args.next() {
+        if arg == "--speak-to-file" {
+            return args.next().map(std::path::PathBuf::from);
+        }
+    }
+    None
+}
+
+/// Runs the headless "Speak to file" pipeline and exits — this run was
+/// launched from Explorer's right-click menu, not by someone expecting a
+/// window, so nothing here ever calls `eframe::run_native`.
+fn speak_to_file_and_exit(path: std::path::PathBuf) -> ! {
+    let config = config::Config::load();
+    let (api_key, _) = apikey::load();
+
+    match jobs::speak_to_file(&path, &config, api_key.as_deref()) {
+        Ok(saved) => {
+            log::line(format!("speak-to-file: wrote {}", saved.display()));
+            std::process::exit(0);
+        }
+        Err(error) => {
+            log::line(format!("speak-to-file: failed — {error:#}"));
+            // The only GUI this headless path ever shows: silence would leave
+            // a failure looking like nothing happened at all.
+            rfd::MessageDialog::new()
+                .set_title(APP_TITLE)
+                .set_description(format!("{error:#}"))
+                .set_level(rfd::MessageLevel::Error)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(words: &[&str]) -> impl Iterator<Item = std::ffi::OsString> {
+        words
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn a_plain_open_with_path_is_not_a_speak_to_file_run() {
+        assert_eq!(
+            parse_speak_to_file_argument(args(&["accessengine.exe", "C:\\notes.txt"])),
+            None
+        );
+    }
+
+    #[test]
+    fn the_path_after_the_flag_is_taken_whatever_comes_before_it() {
+        assert_eq!(
+            parse_speak_to_file_argument(args(&[
+                "accessengine.exe",
+                "--speak-to-file",
+                "C:\\notes.txt",
+            ])),
+            Some(std::path::PathBuf::from("C:\\notes.txt"))
+        );
+    }
+
+    #[test]
+    fn a_flag_with_nothing_after_it_is_not_a_path() {
+        assert_eq!(
+            parse_speak_to_file_argument(args(&["accessengine.exe", "--speak-to-file"])),
+            None
+        );
+    }
 }
