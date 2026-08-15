@@ -468,7 +468,12 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
 
         let encoded = extract::image::encode_for_ollama(&frame.path)?;
         let answer = ollama::describe_image(model, &config.video_frame_prompt, &encoded.base64)?;
-        if answer.truncated {
+        // A frame cut off before the model produced a real answer — the same
+        // failure `read_image` rejects outright, see `ollama::FRAGMENT_CHARS`
+        // — is worth exactly as little here as an empty one, so it is dropped
+        // the same way rather than entering the transcript as a garbled word.
+        let fragment = answer.truncated && answer.text.chars().count() < ollama::FRAGMENT_CHARS;
+        if answer.truncated && !fragment {
             let _ = tx.send(Update::Log(format!(
                 "frame {} was cut off before {model} finished describing it",
                 index + 1
@@ -478,7 +483,12 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         // failed video, so it is dropped rather than retried — a retry here
         // costs another minute and buys one sentence out of dozens.
         let text = extract::tidy(&answer.text);
-        if text.is_empty() {
+        if fragment {
+            let _ = tx.send(Update::Log(format!(
+                "{model} was cut off with too little of frame {} to keep",
+                index + 1
+            )));
+        } else if text.is_empty() {
             let _ = tx.send(Update::Log(format!(
                 "{model} had nothing to say about frame {}",
                 index + 1
