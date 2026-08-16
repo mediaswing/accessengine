@@ -16,7 +16,8 @@ use crate::apikey::{self, KeySource};
 use crate::audio::{self, AudioFormat, Playback};
 use crate::config::{Action, Config, DEFAULT_VISION_PROMPT, EnginePreference, Formatting};
 use crate::extract::{
-    DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS, VIDEO_EXTENSIONS,
+    DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, PDF_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS,
+    VIDEO_EXTENSIONS,
 };
 use crate::jobs::{self, Cancel, Job, Update};
 use crate::theme::{self, CONTROL_HEIGHT, FORM_WIDTH, PROGRESS_HEIGHT};
@@ -744,6 +745,7 @@ impl SpeechApp {
                 &[
                     TEXT_EXTENSIONS,
                     DOC_EXTENSIONS,
+                    PDF_EXTENSIONS,
                     TABLE_EXTENSIONS,
                     IMAGE_EXTENSIONS,
                     VIDEO_EXTENSIONS,
@@ -752,6 +754,7 @@ impl SpeechApp {
             )
             .add_filter("Text files", TEXT_EXTENSIONS)
             .add_filter("Word documents", DOC_EXTENSIONS)
+            .add_filter("PDF files", PDF_EXTENSIONS)
             .add_filter("Tables", TABLE_EXTENSIONS)
             .add_filter("Images", IMAGE_EXTENSIONS)
             .add_filter("Video", VIDEO_EXTENSIONS)

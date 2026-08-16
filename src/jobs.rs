@@ -811,7 +811,8 @@ pub fn speak_to_file(
 ) -> Result<PathBuf> {
     let name = || path.file_name().unwrap_or_default().to_string_lossy();
     match FileKind::from_path(path) {
-        Some(FileKind::Text) | Some(FileKind::Docx) | Some(FileKind::Csv) => {}
+        Some(FileKind::Text) | Some(FileKind::Docx) | Some(FileKind::Pdf) | Some(FileKind::Csv) => {
+        }
         Some(FileKind::Image) | Some(FileKind::Video) => bail!(
             "{} needs Ollama to read, which can take a while and may need setup — open it in \
              accessengine instead of using the right-click menu",

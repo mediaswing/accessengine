@@ -13,6 +13,10 @@ base64 = "0.23.1"
 directories = "6.0.0"
 eframe = "0.36.1"
 egui = "0.36.1"
+# Only to inflate the compressed streams inside a PDF — see `extract::pdf`.
+# Already in the tree twice over, via `zip` and via `image`'s PNG decoder, so
+# naming it here costs no extra build.
+flate2 = "1.1.9"
 hound = "3.5.1"
 # Only to shrink oversized photos before they go to a vision model — see
 # `extract::image`. Default features pull in a decoder for every format there

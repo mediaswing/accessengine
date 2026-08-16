@@ -31,6 +31,7 @@ pub fn extensions() -> Vec<&'static str> {
     [
         extract::TEXT_EXTENSIONS,
         extract::DOC_EXTENSIONS,
+        extract::PDF_EXTENSIONS,
         extract::TABLE_EXTENSIONS,
     ]
     .concat()

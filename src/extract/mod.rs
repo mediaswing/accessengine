@@ -3,6 +3,7 @@
 pub mod csv;
 pub mod docx;
 pub mod image;
+pub mod pdf;
 pub mod txt;
 pub mod video;
 
@@ -16,6 +17,9 @@ pub enum FileKind {
     Text,
     /// Word document; text is pulled out of the OOXML body.
     Docx,
+    /// A PDF, whose text has to be reassembled from the instructions that draw
+    /// each page.
+    Pdf,
     /// A spreadsheet export, read as a table rather than as lines of values.
     Csv,
     /// A picture, which has to go through Ollama before there is any text.
@@ -32,6 +36,7 @@ impl FileKind {
         Some(match ext.as_str() {
             "txt" | "text" | "md" | "markdown" | "log" => Self::Text,
             "docx" => Self::Docx,
+            "pdf" => Self::Pdf,
             "csv" | "tsv" => Self::Csv,
             "jpg" | "jpeg" | "png" | "heic" | "heif" => Self::Image,
             "mp4" | "mov" | "m4v" | "avi" | "mkv" | "webm" => Self::Video,
@@ -43,6 +48,7 @@ impl FileKind {
         match self {
             Self::Text => "text file",
             Self::Docx => "Word document",
+            Self::Pdf => "PDF",
             Self::Csv => "table",
             Self::Image => "image",
             Self::Video => "video",
@@ -53,6 +59,7 @@ impl FileKind {
 /// Extensions offered in the open dialog, grouped the way the dialog shows them.
 pub const TEXT_EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "log"];
 pub const DOC_EXTENSIONS: &[&str] = &["docx"];
+pub const PDF_EXTENSIONS: &[&str] = &["pdf"];
 pub const TABLE_EXTENSIONS: &[&str] = &["csv", "tsv"];
 pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "heic", "heif"];
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "avi", "mkv", "webm"];
@@ -65,6 +72,7 @@ pub fn extract_document(path: &Path, formatting: crate::config::Formatting) -> R
     match FileKind::from_path(path) {
         Some(FileKind::Text) => txt::extract(path),
         Some(FileKind::Docx) => docx::extract(path, formatting),
+        Some(FileKind::Pdf) => pdf::extract(path),
         Some(FileKind::Csv) => csv::extract(path),
         Some(FileKind::Image) => bail!("images are read through Ollama, not this path"),
         Some(FileKind::Video) => bail!("videos are read through ffmpeg and Ollama, not this path"),
@@ -112,6 +120,10 @@ mod tests {
             Some(FileKind::Docx)
         );
         assert_eq!(
+            FileKind::from_path(&PathBuf::from("Statement.PDF")),
+            Some(FileKind::Pdf)
+        );
+        assert_eq!(
             FileKind::from_path(&PathBuf::from("photo.HEIC")),
             Some(FileKind::Image)
         );
@@ -130,6 +142,7 @@ mod tests {
         for (extensions, kind) in [
             (TEXT_EXTENSIONS, FileKind::Text),
             (DOC_EXTENSIONS, FileKind::Docx),
+            (PDF_EXTENSIONS, FileKind::Pdf),
             (TABLE_EXTENSIONS, FileKind::Csv),
             (IMAGE_EXTENSIONS, FileKind::Image),
             (VIDEO_EXTENSIONS, FileKind::Video),
