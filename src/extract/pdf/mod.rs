@@ -27,6 +27,19 @@
 //! **Encrypted files.** Including the very common kind with no password on
 //! them, only a restriction on printing or copying: the text is still
 //! scrambled, and unscrambling it needs cryptography this app does not carry.
+//!
+//! # What it reads only in part
+//!
+//! A font is free to number its glyphs rather than name them, and to leave out
+//! the `/ToUnicode` table that says which character each number is. Nothing can
+//! be recovered from such a page — the file simply does not record what it
+//! says. Whole documents like this are caught above and refused. The harder
+//! case is the mixed one, a document in English with a section in Chinese,
+//! Japanese or Korean: it opens, nearly all of it is right, and the affected
+//! pages come back with a third or more of their characters quietly missing.
+//! Those pages are counted as they are read and reported through
+//! [`Extracted::caveat`], because they are indistinguishable from good text
+//! until they are read aloud.
 
 pub mod content;
 pub mod doc;
@@ -35,6 +48,7 @@ pub mod filters;
 pub mod font;
 pub mod object;
 
+use super::Extracted;
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
@@ -58,7 +72,22 @@ const MAX_TEXT_CHARS: usize = 16 * 1024 * 1024;
 /// every page holds four characters is still a document nobody can read.
 const MIN_CHARS_PER_PAGE: usize = 8;
 
-pub fn extract(path: &Path) -> Result<String> {
+/// The share of a page's glyphs that has to be undecodable before the page is
+/// called garbled.
+///
+/// This is judged per page, not over the file, and the difference matters. A
+/// long English document with a Japanese appendix loses a rounding error's
+/// worth of its total characters, so a whole-document ratio stays quiet while
+/// the appendix comes out as nonsense. Measured per page the two are not close:
+/// a page whose fonts are readable drops nothing worth counting, and a page
+/// whose fonts are not drops a third of itself or more.
+const GARBLED_PERCENT: usize = 25;
+
+/// Enough undecodable glyphs on one page to be text rather than a stray symbol
+/// in a logo or a bullet from a font with no encoding.
+const ENOUGH_TO_BE_TEXT: usize = 32;
+
+pub fn extract(path: &Path) -> Result<Extracted> {
     let name = || path.file_name().unwrap_or_default().to_string_lossy();
 
     let size = std::fs::metadata(path)
@@ -99,10 +128,16 @@ pub fn extract(path: &Path) -> Result<String> {
     let mut extractor = content::Extractor::new(&document);
     let mut text = String::new();
     let mut with_text = 0usize;
-    for page in &pages {
+    let mut garbled = Vec::new();
+    for (number, page) in pages.iter().enumerate() {
+        let before = extractor.dropped;
         let page_text = extractor.page_text(page);
-        if page_text.trim().chars().count() >= MIN_CHARS_PER_PAGE {
+        let kept = page_text.trim().chars().count();
+        if kept >= MIN_CHARS_PER_PAGE {
             with_text += 1;
+        }
+        if is_garbled(kept, extractor.dropped - before) {
+            garbled.push(number + 1);
         }
         if !text.is_empty() {
             text.push_str("\n\n");
@@ -132,12 +167,64 @@ pub fn extract(path: &Path) -> Result<String> {
     }
 
     let text = super::tidy(&text);
-    if extractor.dropped > text.chars().count() {
-        // More was lost than kept: the file's fonts do not say what their
-        // glyphs mean, so what came back is not the document.
-        crate::log::line("pdf: most of the text could not be decoded");
+    // Some pages read and some did not, which is the case that needs saying out
+    // loud: the document opens, most of it is right, and the bad pages look
+    // exactly like the good ones until you listen to them.
+    let caveat = (!garbled.is_empty()).then(|| {
+        crate::log::line(garbled_explanation(&garbled, pages.len()));
+        match garbled.len() {
+            1 => "1 page did not decode".to_string(),
+            count => format!("{count} pages did not decode"),
+        }
+    });
+    Ok(Extracted { text, caveat })
+}
+
+/// Whether a page gave back so little of what it showed that what did come back
+/// cannot be trusted. Pages that show almost nothing — a chapter opener, a
+/// figure with a caption — are left alone, since a handful of undecodable
+/// glyphs there is a symbol rather than prose.
+fn is_garbled(kept: usize, dropped: usize) -> bool {
+    let shown = kept + dropped;
+    dropped >= ENOUGH_TO_BE_TEXT && dropped * 100 >= shown * GARBLED_PERCENT
+}
+
+/// The long form, for the log: which pages, why, and what to do about it.
+fn garbled_explanation(garbled: &[usize], pages: usize) -> String {
+    format!(
+        "pdf: {} of {pages} pages are set in fonts that do not say what their letters are, so the \
+         text from {} is missing characters and will not read aloud correctly — {}. This is usual \
+         in Chinese, Japanese and Korean documents. Opening the file in a PDF viewer and copying \
+         those pages into a plain text file will give them in full.",
+        garbled.len(),
+        if garbled.len() == 1 { "it" } else { "them" },
+        ranges(garbled),
+    )
+}
+
+/// Page numbers as runs — "pages 27–41, 59–64" rather than twenty-one numbers
+/// in a row, which is unreadable on a status line and worse read aloud.
+fn ranges(numbers: &[usize]) -> String {
+    let mut runs: Vec<String> = Vec::new();
+    let mut index = 0;
+    while index < numbers.len() {
+        let start = index;
+        while index + 1 < numbers.len() && numbers[index + 1] == numbers[index] + 1 {
+            index += 1;
+        }
+        runs.push(match numbers[index] - numbers[start] {
+            0 => numbers[start].to_string(),
+            // Two in a row read better as "8 and 9" than as a range of two.
+            1 => format!("{} and {}", numbers[start], numbers[index]),
+            _ => format!("{}–{}", numbers[start], numbers[index]),
+        });
+        index += 1;
     }
-    Ok(text)
+    format!(
+        "page{} {}",
+        if numbers.len() == 1 { "" } else { "s" },
+        runs.join(", ")
+    )
 }
 
 /// What to say about a PDF that gave up no text.
@@ -150,10 +237,6 @@ pub fn extract(path: &Path) -> Result<String> {
 /// usual looks like, and reading one needs character tables that ship with a
 /// PDF viewer rather than with the file.
 fn nothing_to_read(name: &str, pages: usize, dropped: usize) -> String {
-    /// Enough shown-but-undecodable characters to be text rather than a stray
-    /// glyph in the corner of a picture.
-    const ENOUGH_TO_BE_TEXT: usize = 32;
-
     if dropped >= ENOUGH_TO_BE_TEXT {
         return format!(
             "{name} has text in it, but its fonts do not say what their letters are, so there is \
@@ -222,11 +305,15 @@ mod tests {
         path
     }
 
-    fn extract_bytes(name: &str, data: &[u8]) -> Result<String> {
+    fn extract_all(name: &str, data: &[u8]) -> Result<Extracted> {
         let path = write(name, data);
         let result = extract(&path);
         std::fs::remove_file(&path).ok();
         result
+    }
+
+    fn extract_bytes(name: &str, data: &[u8]) -> Result<String> {
+        extract_all(name, data).map(|extracted| extracted.text)
     }
 
     #[test]
@@ -264,6 +351,101 @@ mod tests {
         pdf.extend_from_slice(b"trailer << /Root 1 0 R /Encrypt 7 0 R >>\n%%EOF\n");
         let error = extract_bytes("soe-pdf-encrypted.pdf", &pdf).unwrap_err();
         assert!(error.to_string().contains("encrypted"));
+    }
+
+    #[test]
+    fn page_runs_are_written_as_ranges() {
+        assert_eq!(ranges(&[7]), "page 7");
+        assert_eq!(ranges(&[8, 9]), "pages 8 and 9");
+        assert_eq!(ranges(&[27, 28, 29, 30]), "pages 27–30");
+        assert_eq!(
+            ranges(&[3, 27, 28, 29, 59, 60, 74]),
+            "pages 3, 27–29, 59 and 60, 74"
+        );
+    }
+
+    /// The threshold has to separate the two cases actually seen in the wild: a
+    /// page set in a font that decodes drops a glyph or two out of thousands,
+    /// and one set in a font that does not drops a third of itself or more.
+    #[test]
+    fn a_page_is_garbled_only_when_a_real_share_of_it_is_lost() {
+        assert!(!is_garbled(4381, 3), "a clean page is not garbled");
+        assert!(!is_garbled(3661, 39), "1% lost is not garbled");
+        assert!(is_garbled(1225, 518), "30% lost is garbled");
+        assert!(is_garbled(0, 1593), "a page that lost everything is garbled");
+        // A handful of undecodable glyphs on a nearly empty page is a symbol in
+        // a logo, not a sentence, and saying otherwise would cry wolf.
+        assert!(!is_garbled(0, 4), "a stray glyph is not garbled");
+    }
+
+    /// Builds a page that uses two fonts: one that decodes and one that numbers
+    /// its glyphs without saying what they are, which is the mixed-language
+    /// document this whole path exists for.
+    fn half_readable_page() -> Vec<u8> {
+        let mut out = Vec::from(&b"%PDF-1.4\n"[..]);
+        let push = |out: &mut Vec<u8>, number: usize, body: &str| {
+            out.extend_from_slice(format!("{number} 0 obj {body} endobj\n").as_bytes());
+        };
+        push(&mut out, 1, "<< /Type /Catalog /Pages 2 0 R >>");
+        push(&mut out, 2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        push(
+            &mut out,
+            3,
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R \
+             /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+        );
+        // Forty undecodable two-byte codes against a short readable line, which
+        // is the proportion a page of Chinese under an English heading has.
+        let codes = "00240025".repeat(20);
+        let content = format!(
+            "BT /F1 12 Tf 72 720 Td (Appendix A) Tj ET \
+             BT /F2 12 Tf 72 700 Td <{codes}> Tj ET"
+        );
+        out.extend_from_slice(
+            format!(
+                "4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
+                content.len()
+            )
+            .as_bytes(),
+        );
+        push(
+            &mut out,
+            5,
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        );
+        push(
+            &mut out,
+            6,
+            "<< /Type /Font /Subtype /Type0 /BaseFont /AAAAAA+PingFangSC-Regular \
+             /Encoding /Identity-H /DescendantFonts [7 0 R] >>",
+        );
+        push(
+            &mut out,
+            7,
+            "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /AAAAAA+PingFangSC-Regular \
+             /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 >>",
+        );
+        out.extend_from_slice(b"trailer << /Root 1 0 R /Size 9 >>\n%%EOF\n");
+        out
+    }
+
+    /// The case the whole-document ratio used to miss. The readable half is
+    /// still returned — it is a perfectly good heading — but the file no longer
+    /// passes off a page with most of its characters missing as complete.
+    #[test]
+    fn a_page_whose_font_cannot_be_decoded_is_reported_but_still_read() {
+        let extracted = extract_all("soe-pdf-halfreadable.pdf", &half_readable_page()).unwrap();
+        assert_eq!(extracted.text, "Appendix A");
+        assert_eq!(extracted.caveat.as_deref(), Some("1 page did not decode"));
+    }
+
+    /// A document that decodes cleanly must stay silent, or the warning means
+    /// nothing on the documents that need it.
+    #[test]
+    fn a_readable_document_carries_no_caveat() {
+        let pdf = build(&[], "BT /F1 12 Tf 72 720 Td (Quarterly Report) Tj ET");
+        let extracted = extract_all("soe-pdf-nocaveat.pdf", &pdf).unwrap();
+        assert_eq!(extracted.caveat, None);
     }
 
     /// The whole reason this reader scans for objects instead of seeking to

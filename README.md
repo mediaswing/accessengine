@@ -7,9 +7,10 @@ cannot use a mouse, or find small low-contrast text hard going.
 Choose a file, choose a voice, choose what to do with it, press **Apply**. That
 is the whole app. Speech comes from the voices already built into macOS and
 Windows, so it works with no account and no setup; add an ElevenLabs API key and
-you get their voices instead. Images work too: hand it a photo or a screenshot
-and a vision model running on your own machine reads the text out of it — and so
-does video, which is taken apart into stills and described a frame at a time.
+you get their voices instead. It reads text, Word documents, PDFs and tables.
+Images work too: hand it a photo or a screenshot and a vision model running on
+your own machine reads the text out of it — and so does video, which is taken
+apart into stills and described a frame at a time.
 
 The window is two panes. The list on the left — **Read a File**, **Audio
 Player**, **Dictionary**, **Settings**, **Shortcuts** — chooses what the
@@ -44,6 +45,9 @@ This is the point of the app rather than a feature of it.
 - **Reads `.txt` and `.docx`.** Word documents are unpacked and only the
   readable text is kept — no style names, no stray tab stops, and character
   references like `&amp;` and `&#233;` come through as `&` and `é`.
+- **Reads `.pdf`.** The page is redrawn and the words are worked back out of
+  where the glyphs land, since a PDF stores neither paragraphs nor words — see
+  [Reading PDFs](#reading-pdfs).
 - **Two speech engines.** The voices built into your operating system, or
   ElevenLabs. Choosing ElevenLabs asks for an API key there and then, with a
   link to where ElevenLabs keeps them, and checks the key as soon as you paste
@@ -75,9 +79,9 @@ This is the point of the app rather than a feature of it.
   Windows — the first time you open a file that needs one. It never installs
   anything without asking, and it shows you the command it would run.
 - **A right-click "Speak to file" entry, on Windows.** Turn it on once in
-  **Settings** and any text, Word or CSV file gets a **Speak to file** option
-  in Explorer's right-click menu — no window opens, the audio just appears
-  next to the file, using whatever engine and voice you last used.
+  **Settings** and any text, Word, PDF or CSV file gets a **Speak to file**
+  option in Explorer's right-click menu — no window opens, the audio just
+  appears next to the file, using whatever engine and voice you last used.
 
 ## The dictionary
 
@@ -146,10 +150,12 @@ To run the tests:
 cargo test
 ```
 
-The suite covers the `.docx` parser, the dictionary matcher, text chunking,
-WAV/MP3 encoding, the words-per-minute to SAPI rate conversion, and — on macOS
-and Windows — renders a real sentence through the system voice and checks the
-audio that comes back is neither empty nor silent.
+The suite covers the `.docx` parser, the PDF reader — its object syntax, stream
+filters, page tree, font encodings and the page-description interpreter, each
+tested separately — the dictionary matcher, text chunking, WAV/MP3 encoding, the
+words-per-minute to SAPI rate conversion, and — on macOS and Windows — renders a
+real sentence through the system voice and checks the audio that comes back is
+neither empty nor silent.
 
 ## Using ElevenLabs
 
@@ -182,6 +188,64 @@ says which part it is on. Each request carries the neighbouring text as context
 so the voice doesn't reset its intonation at the seams. Audio is cached per
 (text, voice, model), so listening to something and then saving it doesn't pay
 for the same synthesis twice.
+
+## Reading PDFs
+
+A PDF is not a document in the sense the other readers here deal with. A `.docx`
+says "this is a paragraph, and these are its words". A PDF says "put this glyph
+at this point on the page" — everything a reader needs, including where a word
+ends and where a line breaks, was thrown away when the file was made. So reading
+one is reconstruction: the page is redrawn, and the words are worked back out of
+where the glyphs land.
+
+Two details do most of the work. Character widths are read from the file's own
+embedded fonts, which is what tells a real word gap from ordinary letter
+spacing — without them a line positioned glyph by glyph comes out as
+"M a c B o o k". And the file is scanned for its objects rather than seeking to
+them through its index, because a PDF that has been edited almost always has a
+stale index, and trusting it reports readable documents as damaged.
+
+**Nothing is uploaded, and nothing needs installing.** Unlike images and video,
+a PDF is read entirely inside the app, in a second or two, which is why it is
+also offered in the Windows right-click menu.
+
+### When a PDF cannot be read
+
+Three cases give up no text, and the message says which one you have, because
+they need quite different things done about them:
+
+- **A scan.** A PDF from a scanner or a phone is a photograph of a page with no
+  text in it at all. Nothing can parse words out of one — but the image reader
+  can, so save the page as a JPEG or PNG and open that instead.
+- **Fonts that number their glyphs instead of naming them.** The file shows
+  text, but records nothing about what its letters *are*. This is what a Chinese,
+  Japanese or Korean document typeset before `/ToUnicode` became usual looks
+  like, and reading it needs character tables that ship with a PDF viewer rather
+  than with the file. Opening it in a viewer and copying the text out works.
+- **Encryption.** Including the very common kind with no password on it, only a
+  restriction on printing or copying — the text is still scrambled. Saving a
+  fresh copy from a PDF viewer usually removes it.
+
+A code no font can account for is dropped rather than guessed at. A voice
+reading confident nonsense is worse than a quiet one.
+
+### Pages that only partly decode
+
+The awkward case is a document that is mostly fine. A long English report with a
+section in Chinese, Japanese or Korean opens, reads correctly for a hundred
+pages, and then reaches pages whose fonts do not say what their letters are.
+Those pages come back with a third or more of their characters missing — which
+looks like ordinary text on screen and is nonsense when spoken.
+
+This is judged **per page**, not across the file, and that distinction is the
+whole point: measured over a long document those pages are a rounding error, so
+a whole-file check stays silent exactly when it is needed. Per page the two are
+nowhere near each other — a page whose fonts decode loses a glyph or two in
+several thousand, and a page whose fonts do not loses a third of itself or more.
+
+When it happens the status line says how many pages were affected, and the log
+names them and says what to do. The text is still there and still read out;
+nothing is hidden and nothing is dropped on your behalf.
 
 ## Reading images
 
@@ -251,7 +315,7 @@ frame, where a joined-up narration is a model's account of what connects them.
 ## Right-click "Speak to file" (Windows)
 
 Turning this on in **Settings** adds a **Speak to file** entry to the
-right-click menu in Explorer for text, Word and CSV files — the file kinds
+right-click menu in Explorer for text, Word, PDF and CSV files — the file kinds
 that read in a second or two, with no separate setup. Choosing it reads the
 file, speaks it with whatever engine, voice and rate are currently saved, and
 writes the audio next to the source (as WAV or MP3, whichever **Settings**
@@ -304,10 +368,12 @@ treated as untrusted.
   that `security` could read it back without a prompt, so both were one
   subprocess away for anything already running as you. Reliably having the key
   the user typed was worth more than that margin.
-- **Input is bounded.** Images are capped at 64 MB, plain text at 64 MB, and a
-  `.docx` body at 128 MB *after decompression* — a zip bomb is a few hundred
+- **Input is bounded.** Images are capped at 64 MB, plain text at 64 MB, a
+  `.docx` body at 128 MB *after decompression*, and a PDF at 128 MB on disk with
+  a further ceiling on the text taken out of it — a zip bomb is a few hundred
   kilobytes on disk, and an app that dies on one is an app that fails the person
-  relying on it to read their post.
+  relying on it to read their post. PDF streams are compressed too, and a
+  malformed one can describe an endless page.
 - **Scratch files are created exclusively** and, on macOS, readable only by their
   owner, so a name guessed in advance is an error rather than a write through
   someone else's symlink.
@@ -326,7 +392,8 @@ Output Engine.
 | `src/theme.rs` | Fonts, the contrast-checked palette, and the form metrics |
 | `src/dictionary.rs` | Word replacement |
 | `src/jobs.rs` | Background work and the messages it sends back |
-| `src/extract/` | `.txt`, `.docx`, image and video → text |
+| `src/extract/` | `.txt`, `.docx`, `.csv`, image and video → text |
+| `src/extract/pdf/` | `.pdf` → text: objects, filters, pages, fonts, page description |
 | `src/tts/` | The ElevenLabs and system-voice engines, and text chunking |
 | `src/audio.rs` | PCM, WAV/MP3 encoding, playback and the transport |
 | `src/ollama.rs` | Detecting, installing and calling Ollama |

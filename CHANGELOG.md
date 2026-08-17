@@ -3,6 +3,47 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [1.8.0] - 2026-08-17
+
+### Added
+
+- **It reads PDFs.** Open a `.pdf` and it comes out as text, ready to read aloud
+  or save as a WAV or MP3 like anything else. It is in the open dialog, in
+  "Open With", and — on Windows — in the right-click **Speak to file** menu,
+  since a PDF reads in a second or two and needs nothing installed.
+
+  A PDF is harder to read than it sounds. It does not store paragraphs or even
+  words: it stores instructions to put a particular glyph at a particular point
+  on the page, and everything a reader needs — where a word ends, where a line
+  breaks, which order the columns go in — was thrown away when the file was
+  made. So the page is redrawn and the words worked back out of where the
+  glyphs land. Character widths are read from the file's own fonts, which is
+  what tells a word gap from ordinary letter spacing; without that a line comes
+  out as "M a c B o o k".
+
+  Two kinds of PDF give up nothing, and rather than calling both "empty" it
+  says which you have. **A scan** — a photograph of a page, with no text in it
+  at all — points you at the image reader, which is the part of this app that
+  can read a picture of a page. **A file whose fonts number their glyphs
+  instead of naming them** says so too; that is what an older Chinese, Japanese
+  or Korean document looks like, and no reader can recover it from the file
+  alone. **Encrypted files** say so as well, including the very common kind
+  that opens with no password but is locked against printing or copying.
+
+  Files that have been edited usually have a stale index of where their objects
+  are. Trusting it reports perfectly readable documents as damaged, so the file
+  is scanned for its objects instead of seeking to them.
+
+- **Pages that could not be decoded are now called out.** A document mostly in
+  English with a section in Chinese, Japanese or Korean opens and reads fine
+  almost all the way through, and then hits pages whose fonts do not record
+  what their letters are. Those pages come back with a third or more of their
+  characters silently missing — text that looks ordinary on screen and is
+  nonsense when spoken. The status line now says how many pages it happened to,
+  and the log names them and explains what to do: opening the file in a PDF
+  viewer and copying those pages into a plain text file gives them in full. The
+  text is still there to read; nothing is hidden.
+
 ## [1.7.0] - 2026-08-15
 
 ### Added

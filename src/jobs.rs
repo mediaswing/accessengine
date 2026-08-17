@@ -224,7 +224,8 @@ fn run(job: Job, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
 }
 
 fn read_document(path: PathBuf, formatting: Formatting, tx: &Sender<Update>) -> Result<()> {
-    let text = extract::extract_document(&path, formatting)?;
+    let extracted = extract::extract_document(&path, formatting)?;
+    let text = extracted.text;
     if text.trim().is_empty() {
         bail!(
             "{} contains no readable text",
@@ -234,7 +235,14 @@ fn read_document(path: PathBuf, formatting: Formatting, tx: &Sender<Update>) -> 
     let kind = FileKind::from_path(&path)
         .map(FileKind::label)
         .unwrap_or("file");
-    let note = format!("{} · {} characters", kind, text.chars().count());
+    let mut note = format!("{} · {} characters", kind, text.chars().count());
+    // The status line is the only part a screen reader announces by itself, so
+    // a warning that lives only in the log would not reach the person it is
+    // for. The headline goes here; the reader has already logged the detail.
+    if let Some(caveat) = extracted.caveat {
+        note.push_str(" · ");
+        note.push_str(&caveat);
+    }
     let _ = tx.send(Update::TextReady { text, note });
     Ok(())
 }
@@ -821,11 +829,15 @@ pub fn speak_to_file(
         None => bail!("{} is not a file type accessengine can read", name()),
     }
 
-    let text = extract::extract_document(path, config.formatting)?;
-    if text.trim().is_empty() {
+    let extracted = extract::extract_document(path, config.formatting)?;
+    if extracted.text.trim().is_empty() {
         bail!("{} contains no readable text", name());
     }
-    let (text, _) = crate::dictionary::apply(&text, &config.dictionary);
+    // Nothing here has a window to report into, so the log is the whole of it —
+    // which the reader has already written to. Saving still goes ahead: a
+    // mostly-good recording is what was asked for, and refusing it would be a
+    // worse answer than an imperfect one.
+    let (text, _) = crate::dictionary::apply(&extracted.text, &config.dictionary);
 
     let engine = resolve_engine(config, api_key)?;
     let format = config.save_format;

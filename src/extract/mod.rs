@@ -64,23 +64,45 @@ pub const TABLE_EXTENSIONS: &[&str] = &["csv", "tsv"];
 pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "heic", "heif"];
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "avi", "mkv", "webm"];
 
+/// Text taken out of a file, and anything the reader needs to say about how it
+/// came out.
+///
+/// Most readers either produce the document or fail. A PDF has a third outcome:
+/// text that arrived, but incomplete, because the file's fonts do not say what
+/// their glyphs mean — see [`pdf`]. That is not an error, since the rest of the
+/// document is perfectly good, but it is not something to keep quiet about
+/// either when the result is going to be read aloud.
+pub struct Extracted {
+    pub text: String,
+    /// A short headline for the status line, if there is anything to warn
+    /// about. The long version goes to the log, where there is room for it.
+    pub caveat: Option<String>,
+}
+
+impl Extracted {
+    /// Text with nothing to report, which is what every reader but [`pdf`] returns.
+    fn plain(text: String) -> Self {
+        Self { text, caveat: None }
+    }
+}
+
 /// Reads a text or Word file. Images are not handled here because they need the
 /// Ollama plumbing in [`image`], which the caller drives separately so it can
 /// prompt about installing Ollama first.
 /// `formatting` applies to Word documents, the only kind that carries any.
-pub fn extract_document(path: &Path, formatting: crate::config::Formatting) -> Result<String> {
-    match FileKind::from_path(path) {
-        Some(FileKind::Text) => txt::extract(path),
-        Some(FileKind::Docx) => docx::extract(path, formatting),
-        Some(FileKind::Pdf) => pdf::extract(path),
-        Some(FileKind::Csv) => csv::extract(path),
+pub fn extract_document(path: &Path, formatting: crate::config::Formatting) -> Result<Extracted> {
+    Ok(match FileKind::from_path(path) {
+        Some(FileKind::Text) => Extracted::plain(txt::extract(path)?),
+        Some(FileKind::Docx) => Extracted::plain(docx::extract(path, formatting)?),
+        Some(FileKind::Pdf) => pdf::extract(path)?,
+        Some(FileKind::Csv) => Extracted::plain(csv::extract(path)?),
         Some(FileKind::Image) => bail!("images are read through Ollama, not this path"),
         Some(FileKind::Video) => bail!("videos are read through ffmpeg and Ollama, not this path"),
         None => bail!(
             "{} is not a file type this app can read",
             path.file_name().unwrap_or_default().to_string_lossy()
         ),
-    }
+    })
 }
 
 /// Collapses the runs of blank space that documents are full of, so the voice
