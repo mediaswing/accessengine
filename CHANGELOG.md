@@ -44,6 +44,13 @@ rather than for someone reading the diff.
   viewer and copying those pages into a plain text file gives them in full. The
   text is still there to read; nothing is hidden.
 
+  Where one of those pages gave back nothing at all, a line now stands in its
+  place — "Pages 27 to 41 could not be read: the fonts used there do not say
+  what their letters are." Without it such pages are simply absent, and a gap in
+  a spoken document sounds exactly like the document having nothing more to say,
+  so a whole missing section would pass unnoticed. One marker covers a run of
+  consecutive pages rather than interrupting once per page.
+
 ## [1.7.0] - 2026-08-15
 
 ### Added

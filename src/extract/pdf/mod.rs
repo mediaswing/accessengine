@@ -39,7 +39,9 @@
 //! pages come back with a third or more of their characters quietly missing.
 //! Those pages are counted as they are read and reported through
 //! [`Extracted::caveat`], because they are indistinguishable from good text
-//! until they are read aloud.
+//! until they are read aloud. Where such a page gave back nothing at all, a
+//! marker stands in its place, so a section that is missing sounds missing
+//! rather than sounding like the end of the paragraph before it.
 
 pub mod content;
 pub mod doc;
@@ -126,30 +128,34 @@ pub fn extract(path: &Path) -> Result<Extracted> {
     }
 
     let mut extractor = content::Extractor::new(&document);
-    let mut text = String::new();
+    let mut read: Vec<ReadPage> = Vec::with_capacity(pages.len());
     let mut with_text = 0usize;
-    let mut garbled = Vec::new();
-    for (number, page) in pages.iter().enumerate() {
+    let mut budget = 0usize;
+    for page in &pages {
         let before = extractor.dropped;
-        let page_text = extractor.page_text(page);
-        let kept = page_text.trim().chars().count();
+        let text = extractor.page_text(page);
+        let kept = text.trim().chars().count();
         if kept >= MIN_CHARS_PER_PAGE {
             with_text += 1;
         }
-        if is_garbled(kept, extractor.dropped - before) {
-            garbled.push(number + 1);
-        }
-        if !text.is_empty() {
-            text.push_str("\n\n");
-        }
-        text.push_str(&page_text);
-        if text.len() > MAX_TEXT_CHARS {
+        let garbled = is_garbled(kept, extractor.dropped - before);
+        budget += text.len();
+        read.push(ReadPage { text, garbled });
+        if budget > MAX_TEXT_CHARS {
             crate::log::line(format!(
                 "pdf: stopped after {MAX_TEXT_CHARS} characters, which is all this app will read"
             ));
             break;
         }
     }
+
+    let garbled: Vec<usize> = read
+        .iter()
+        .enumerate()
+        .filter(|(_, page)| page.garbled)
+        .map(|(index, _)| index + 1)
+        .collect();
+    let text = super::tidy(&assemble(&read));
 
     crate::log::line(format!(
         "pdf: {} pages, {} with text, {} characters{}",
@@ -166,7 +172,6 @@ pub fn extract(path: &Path) -> Result<Extracted> {
         bail!("{}", nothing_to_read(&name(), pages.len(), extractor.dropped));
     }
 
-    let text = super::tidy(&text);
     // Some pages read and some did not, which is the case that needs saying out
     // loud: the document opens, most of it is right, and the bad pages look
     // exactly like the good ones until you listen to them.
@@ -178,6 +183,62 @@ pub fn extract(path: &Path) -> Result<Extracted> {
         }
     });
     Ok(Extracted { text, caveat })
+}
+
+/// One page's worth of the document, kept until every page has been read
+/// because a marker has to name the whole run of pages it stands for, and the
+/// end of a run is not known until the run is over.
+struct ReadPage {
+    text: String,
+    garbled: bool,
+}
+
+/// Joins the pages up, announcing the ones whose fonts could not be decoded.
+///
+/// A page that lost everything contributes nothing, and a gap in a spoken
+/// document is indistinguishable from the document simply not saying anything —
+/// so the gap is given a voice. The announcement covers a whole run of
+/// consecutive pages rather than appearing on each: the fifteen-page stretch
+/// that prompted this would otherwise interrupt fifteen times to say the same
+/// thing, which is worse than the silence it replaces.
+fn assemble(pages: &[ReadPage]) -> String {
+    let mut out = String::new();
+    let mut push = |part: &str| {
+        if part.trim().is_empty() {
+            return;
+        }
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(part);
+    };
+    for (index, page) in pages.iter().enumerate() {
+        let starts_run = page.garbled && (index == 0 || !pages[index - 1].garbled);
+        if starts_run {
+            let mut last = index;
+            while last + 1 < pages.len() && pages[last + 1].garbled {
+                last += 1;
+            }
+            push(&marker(index + 1, last + 1));
+        }
+        push(&page.text);
+    }
+    out
+}
+
+/// What stands in for a run of pages that could not be decoded.
+///
+/// This one is spoken, unlike the log's version, so it says "27 to 41" rather
+/// than "27–41" — a dash is anybody's guess as to how a voice reads it — and it
+/// explains itself in a single sentence, since the listener has no log in front
+/// of them.
+fn marker(first: usize, last: usize) -> String {
+    let pages = if first == last {
+        format!("Page {first}")
+    } else {
+        format!("Pages {first} to {last}")
+    };
+    format!("[{pages} could not be read: the fonts used there do not say what their letters are.]")
 }
 
 /// Whether a page gave back so little of what it showed that what did come back
@@ -435,8 +496,74 @@ mod tests {
     #[test]
     fn a_page_whose_font_cannot_be_decoded_is_reported_but_still_read() {
         let extracted = extract_all("soe-pdf-halfreadable.pdf", &half_readable_page()).unwrap();
-        assert_eq!(extracted.text, "Appendix A");
+        assert_eq!(
+            extracted.text,
+            "[Page 1 could not be read: the fonts used there do not say what their letters are.]\n\n\
+             Appendix A"
+        );
         assert_eq!(extracted.caveat.as_deref(), Some("1 page did not decode"));
+    }
+
+    fn page(text: &str, garbled: bool) -> ReadPage {
+        ReadPage {
+            text: text.to_string(),
+            garbled,
+        }
+    }
+
+    /// The point of collapsing runs: the stretch that prompted all this is
+    /// fifteen pages long, and a marker on each would interrupt fifteen times
+    /// over to say the same sentence.
+    #[test]
+    fn a_run_of_undecodable_pages_is_announced_once_for_the_whole_run() {
+        let pages = [
+            page("Chapter One", false),
+            page("", true),
+            page("", true),
+            page("", true),
+            page("Chapter Two", false),
+        ];
+        assert_eq!(
+            assemble(&pages),
+            "Chapter One\n\n[Pages 2 to 4 could not be read: the fonts used there do not say what \
+             their letters are.]\n\nChapter Two"
+        );
+    }
+
+    /// Two separate runs are two separate announcements, each naming its own
+    /// pages — otherwise the numbers would be wrong, which is worse than none.
+    #[test]
+    fn separate_runs_are_announced_separately() {
+        let pages = [
+            page("", true),
+            page("Readable", false),
+            page("", true),
+            page("", true),
+        ];
+        let assembled = assemble(&pages);
+        assert!(assembled.starts_with("[Page 1 could not be read"), "{assembled}");
+        assert!(assembled.contains("[Pages 3 to 4 could not be read"), "{assembled}");
+    }
+
+    /// A garbled page that still has some text keeps it, with the warning ahead
+    /// of it rather than instead of it — the listener is told before they hear
+    /// the part that cannot be trusted.
+    #[test]
+    fn a_partly_readable_page_keeps_its_text_under_the_marker() {
+        let pages = [page("Appendix A", true), page("Clean page", false)];
+        assert_eq!(
+            assemble(&pages),
+            "[Page 1 could not be read: the fonts used there do not say what their letters are.]\
+             \n\nAppendix A\n\nClean page"
+        );
+    }
+
+    /// A document with nothing wrong with it must come out exactly as it did
+    /// before any of this existed.
+    #[test]
+    fn a_clean_document_gains_no_markers() {
+        let pages = [page("One", false), page("", false), page("Two", false)];
+        assert_eq!(assemble(&pages), "One\n\nTwo");
     }
 
     /// A document that decodes cleanly must stay silent, or the warning means

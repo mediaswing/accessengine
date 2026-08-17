@@ -247,6 +247,17 @@ When it happens the status line says how many pages were affected, and the log
 names them and says what to do. The text is still there and still read out;
 nothing is hidden and nothing is dropped on your behalf.
 
+Where such a page gave back nothing at all, a line stands in its place:
+
+> [Pages 27 to 41 could not be read: the fonts used there do not say what their
+> letters are.]
+
+Otherwise those pages would simply be absent, and a gap in a spoken document is
+indistinguishable from the document having nothing more to say — you would never
+know a section had been there. One marker covers a whole run of consecutive
+pages: on the file this was built against that is a fifteen-page stretch, which
+announced page by page would interrupt fifteen times to say the same sentence.
+
 ## Reading images
 
 The first time you open an image, the app checks for Ollama and offers to set up
