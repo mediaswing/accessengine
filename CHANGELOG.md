@@ -3,7 +3,7 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
-## [Unreleased]
+## [1.9.0] - 2026-08-17
 
 ### Added
 
@@ -37,6 +37,13 @@ rather than for someone reading the diff.
 
 - **A French translation**, complete but written alongside the machinery rather
   than by a native speaker. It wants a proper reading; see the README.
+
+- **macOS offers the app for video files.** Video has been readable since
+  1.6.0, but the bundle never claimed the type, so the app was missing from
+  Finder's **Open With** for an `.mp4` — the only ways in were the app's own
+  file picker, dropping the file on the window, or a path on the command line.
+  All six formats it reads conform to `public.movie`, so one declaration covers
+  them. It stays an alternate handler, so nothing is taken away from QuickTime.
 
 ### Fixed
 
