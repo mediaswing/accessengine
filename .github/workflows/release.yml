@@ -75,6 +75,12 @@ jobs:
           # the app already accepts a path on the command line, which is exactly
           # what Finder passes. LSMinimumSystemVersion 11.0 is the floor for the
           # aarch64 target.
+          #
+          # The list is by conformance, not by extension, so it is shorter than
+          # the set of things the app reads: .csv and .tsv arrive under
+          # public.plain-text, and all six video formats under public.movie.
+          # Checking one of these is a one-line question to the system rather
+          # than a guess — UTType(filenameExtension:).conforms(to:).
           cat > "$APP/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -121,6 +127,7 @@ jobs:
                           <string>public.png</string>
                           <string>public.heic</string>
                           <string>public.heif</string>
+                          <string>public.movie</string>
                       </array>
                   </dict>
               </array>
