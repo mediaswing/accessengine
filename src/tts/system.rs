@@ -25,8 +25,9 @@ use std::process::Child;
 pub const SUPPORTED: bool = cfg!(any(target_os = "macos", target_os = "windows"));
 
 /// Shown wherever the system engine is offered but cannot work.
-pub const UNSUPPORTED_MESSAGE: &str =
-    "System voices are available on macOS and Windows. On this system, choose ElevenLabs instead.";
+pub fn unsupported_message() -> String {
+    crate::t!("error.unsupported_platform")
+}
 
 /// Lists the installed system voices.
 pub fn list_voices() -> Result<Vec<Voice>> {
@@ -52,7 +53,7 @@ pub fn write_wav(text: &str, voice: &str, rate: u32, destination: &Path) -> Resu
 
 fn check(text: &str) -> Result<()> {
     if !SUPPORTED {
-        bail!("{UNSUPPORTED_MESSAGE}");
+        bail!("{}", unsupported_message());
     }
     if text.trim().is_empty() {
         bail!("there is no text to read");
@@ -352,21 +353,21 @@ $synth.Dispose()",
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod platform {
-    use super::{UNSUPPORTED_MESSAGE, Voice};
+    use super::{Voice, unsupported_message};
     use anyhow::{Result, bail};
     use std::path::Path;
     use std::process::Child;
 
     pub fn list_voices() -> Result<Vec<Voice>> {
-        bail!("{UNSUPPORTED_MESSAGE}")
+        bail!("{}", unsupported_message())
     }
 
     pub fn speak(_text: &str, _voice: &str, _rate: u32) -> Result<Child> {
-        bail!("{UNSUPPORTED_MESSAGE}")
+        bail!("{}", unsupported_message())
     }
 
     pub fn write_wav(_text: &str, _voice: &str, _rate: u32, _destination: &Path) -> Result<()> {
-        bail!("{UNSUPPORTED_MESSAGE}")
+        bail!("{}", unsupported_message())
     }
 }
 

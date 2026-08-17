@@ -22,6 +22,7 @@ mod extract;
 mod ffmpeg;
 mod geocode;
 mod homebrew;
+mod i18n;
 mod jobs;
 mod log;
 mod ollama;
@@ -30,12 +31,13 @@ mod theme;
 mod tts;
 mod update;
 
-/// The name shown to the user, which is not the name of the binary.
-const APP_TITLE: &str = "Speech Output Engine";
-
 fn main() -> eframe::Result<()> {
     // First, so that anything going wrong during startup is in the log too.
     log::start(env!("CARGO_PKG_VERSION"));
+
+    // Before anything that says a word, including the headless path below,
+    // which puts its failure in a message box.
+    i18n::apply_setting(&config::Config::load().language);
 
     // reqwest is built without a built-in crypto provider (see Cargo.toml), so
     // one has to be installed before the first HTTPS request or the ElevenLabs
@@ -52,7 +54,7 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(APP_TITLE)
+            .with_title(t!("app.title"))
             // The pane rail plus the form, with room to spare on both.
             .with_inner_size([800.0, 740.0])
             .with_min_inner_size([700.0, 480.0])
@@ -61,7 +63,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        APP_TITLE,
+        &t!("app.title"),
         options,
         Box::new(|cc| Ok(Box::new(app::SpeechApp::new(cc)))),
     )
@@ -103,7 +105,7 @@ fn speak_to_file_and_exit(path: std::path::PathBuf) -> ! {
             // The only GUI this headless path ever shows: silence would leave
             // a failure looking like nothing happened at all.
             rfd::MessageDialog::new()
-                .set_title(APP_TITLE)
+                .set_title(t!("app.title"))
                 .set_description(format!("{error:#}"))
                 .set_level(rfd::MessageLevel::Error)
                 .set_buttons(rfd::MessageButtons::Ok)

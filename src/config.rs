@@ -6,9 +6,13 @@
 
 use crate::audio::AudioFormat;
 use crate::dictionary::Replacement;
+use crate::t;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// The saved value meaning "whatever language this computer is set to".
+pub const AUTO_LANGUAGE: &str = "auto";
 
 /// Which synthesiser the user picked. There is no "automatic" setting: the app
 /// asks the question in one dropdown and the answer stays answered, which is far
@@ -25,19 +29,19 @@ pub enum EnginePreference {
 impl EnginePreference {
     pub const ALL: [Self; 2] = [Self::System, Self::ElevenLabs];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::System => "System voices",
-            Self::ElevenLabs => "ElevenLabs",
+            Self::System => t!("engine.system.label"),
+            Self::ElevenLabs => t!("engine.elevenlabs.label"),
         }
     }
 
     /// Spoken to the user in tooltips and read out by a screen reader, so it
     /// says what the choice actually means rather than repeating the name.
-    pub fn description(self) -> &'static str {
+    pub fn description(self) -> String {
         match self {
-            Self::System => "The voices built into this computer. No account or internet needed.",
-            Self::ElevenLabs => "Higher-quality online voices. Needs an ElevenLabs API key.",
+            Self::System => t!("engine.system.description"),
+            Self::ElevenLabs => t!("engine.elevenlabs.description"),
         }
     }
 }
@@ -55,36 +59,27 @@ where
     })
 }
 
-/// The vision models offered in Settings, with the download each one commits
-/// the user to.
+/// The vision models offered in Settings, as `(model id, description key)`.
 ///
 /// Ollama runs vision models on its own engine now and has dropped the old
 /// `mllama` runner, so a model that worked a year ago may simply refuse to
 /// load — see [`is_retired`]. Everything listed here loads on current Ollama;
 /// the descriptions say what each is actually good at, since "which vision
-/// model" is not a question most people should have to research.
+/// model" is not a question most people should have to research. They are keys
+/// rather than sentences because the size and the trade-off have to be readable
+/// in whatever language the app is running in — see [`vision_model_description`].
 pub const VISION_MODELS: &[(&str, &str)] = &[
-    (
-        "qwen2.5vl:3b",
-        "Qwen2.5-VL 3B — about 3 GB. Reads text well and is the quickest to download.",
-    ),
-    (
-        "qwen2.5vl:7b",
-        "Qwen2.5-VL 7B — about 5.7 GB. Better on dense or handwritten pages, slower to answer.",
-    ),
-    (
-        "granite3.2-vision:2b",
-        "Granite Vision 2B — about 2.3 GB. The smallest; tuned for documents and tables.",
-    ),
-    (
-        "gemma3:4b",
-        "Gemma 3 4B — about 3.2 GB. Describes photographs and scenes well.",
-    ),
-    (
-        "minicpm-v:8b",
-        "MiniCPM-V 8B — about 5.2 GB. A strong all-rounder on both text and scenes.",
-    ),
+    ("qwen2.5vl:3b", "model.qwen3b"),
+    ("qwen2.5vl:7b", "model.qwen7b"),
+    ("granite3.2-vision:2b", "model.granite"),
+    ("gemma3:4b", "model.gemma"),
+    ("minicpm-v:8b", "model.minicpm"),
 ];
+
+/// What a model in [`VISION_MODELS`] is good at, in the language in use.
+pub fn vision_model_description(key: &str) -> String {
+    crate::i18n::text(key, &[])
+}
 
 pub const DEFAULT_VISION_MODEL: &str = "qwen2.5vl:3b";
 
@@ -140,20 +135,17 @@ pub enum Formatting {
 impl Formatting {
     pub const ALL: [Self; 2] = [Self::Ignore, Self::Announce];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Ignore => "Words only",
-            Self::Announce => "Words and formatting",
+            Self::Ignore => t!("formatting.ignore.label"),
+            Self::Announce => t!("formatting.announce.label"),
         }
     }
 
-    pub fn description(self) -> &'static str {
+    pub fn description(self) -> String {
         match self {
-            Self::Ignore => "Read the text and nothing else.",
-            Self::Announce => {
-                "Also say where bold, italic, underline, strikethrough, colour and \
-                 highlighting start and end. Word documents only."
-            }
+            Self::Ignore => t!("formatting.ignore.description"),
+            Self::Announce => t!("formatting.announce.description"),
         }
     }
 }
@@ -171,17 +163,17 @@ pub enum Action {
 impl Action {
     pub const ALL: [Self; 2] = [Self::ReadAloud, Self::SaveAudio];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::ReadAloud => "Read Text Aloud",
-            Self::SaveAudio => "Save Audio File",
+            Self::ReadAloud => t!("action.read.label"),
+            Self::SaveAudio => t!("action.save.label"),
         }
     }
 
-    pub fn description(self) -> &'static str {
+    pub fn description(self) -> String {
         match self {
-            Self::ReadAloud => "Speak the document through this computer's audio output.",
-            Self::SaveAudio => "Write the spoken document to an audio file on disk.",
+            Self::ReadAloud => t!("action.read.description"),
+            Self::SaveAudio => t!("action.save.description"),
         }
     }
 }
@@ -189,6 +181,16 @@ impl Action {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// The language the interface is written in: a code like `fr`, or `auto`
+    /// to follow the operating system. See [`crate::i18n`].
+    ///
+    /// Deliberately not reset by [`Config::reset_to_defaults`]. Everything else
+    /// on that page is a preference; this one is the difference between an app
+    /// somebody can read and an app they cannot, and putting it back to
+    /// "whatever this computer says" would be a reset that hides its own
+    /// confirmation dialog behind a language they did not choose.
+    pub language: String,
+
     #[serde(deserialize_with = "deserialize_engine")]
     pub engine: EnginePreference,
 
@@ -263,6 +265,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            language: AUTO_LANGUAGE.to_string(),
             engine: EnginePreference::System,
             action: Action::ReadAloud,
             formatting: Formatting::Ignore,
@@ -276,10 +279,10 @@ impl Default for Config {
             system_rate: 175,
             dictionary: Vec::new(),
             ollama_model: DEFAULT_VISION_MODEL.to_string(),
-            ollama_prompt: DEFAULT_VISION_PROMPT.to_string(),
-            video_frame_prompt: DEFAULT_FRAME_PROMPT.to_string(),
+            ollama_prompt: default_vision_prompt(),
+            video_frame_prompt: default_frame_prompt(),
             video_narrate: true,
-            video_narration_prompt: DEFAULT_NARRATION_PROMPT.to_string(),
+            video_narration_prompt: default_narration_prompt(),
             narration_model: String::new(),
             video_scene_threshold: DEFAULT_SCENE_THRESHOLD,
             video_interval_secs: DEFAULT_INTERVAL_SECS,
@@ -293,9 +296,19 @@ impl Default for Config {
 /// Used when the configured prompt comes back empty. Small vision models often
 /// go quiet on a long conditional instruction but answer a plain question, so
 /// this is deliberately as simple as it can be.
-pub const FALLBACK_VISION_PROMPT: &str = "Describe this image, including any text it contains.";
+pub fn fallback_vision_prompt() -> String {
+    t!("prompt.fallback")
+}
 
 /// What the vision model is asked for.
+///
+/// Comes from the language file rather than from here, so that a French
+/// interface asks the model in French and a French voice reads back a French
+/// description. The three prompts are the one place where the interface
+/// language decides what the app *says to something else* rather than to the
+/// user, and getting them from the same file is what keeps the whole chain in
+/// one language. A prompt the user has since edited is never replaced — see
+/// [`crate::i18n::is_untouched_prompt`].
 ///
 /// The description comes first and unconditionally, which is the whole point of
 /// the wording. The prompt this replaced asked for a transcription and said to
@@ -312,13 +325,9 @@ pub const FALLBACK_VISION_PROMPT: &str = "Describe this image, including any tex
 /// The last sentence earns its place too. Asked for a transcription without it,
 /// the model returns Markdown — `**Transcription:**` and a fenced block — and a
 /// speech synthesiser reads the asterisks out.
-pub const DEFAULT_VISION_PROMPT: &str = "\
-Describe what this image shows in two or three plain sentences. Then transcribe every \
-word of any text that appears in it, exactly as written, preserving the reading order \
-and line breaks. If the image is mainly a page or screen of text, keep the description \
-to one short sentence and give the full transcription. Your answer will be read aloud, \
-so write plain sentences with no headings, bullet points, markdown, asterisks or code \
-blocks.";
+pub fn default_vision_prompt() -> String {
+    t!("prompt.vision")
+}
 
 /// The prompt shipped up to version 1.2.2, kept only to recognise it.
 ///
@@ -341,7 +350,7 @@ where
     let raw = String::deserialize(deserializer)?;
     Ok(
         if raw.trim().is_empty() || raw.trim() == SUPERSEDED_VISION_PROMPT.trim() {
-            DEFAULT_VISION_PROMPT.to_string()
+            default_vision_prompt()
         } else {
             raw
         },
@@ -355,12 +364,9 @@ where
 /// photograph the user chose to open and wrong forty times over for frames that
 /// will be joined together — a video of a conference talk would otherwise
 /// return the same slide transcribed in full at every cut.
-pub const DEFAULT_FRAME_PROMPT: &str = "\
-This is a single frame from a video. Describe what it shows in one or two plain sentences: \
-where it is, who or what is in it, and what they appear to be doing. If words appear on \
-screen, give them exactly as written. Do not begin with a phrase like \"this image shows\" — \
-describe the scene directly. Your answer will be read aloud, so write plain sentences with \
-no headings, bullet points, markdown, asterisks or code blocks.";
+pub fn default_frame_prompt() -> String {
+    t!("prompt.frame")
+}
 
 /// The instruction for turning those frames into narration.
 ///
@@ -369,14 +375,9 @@ no headings, bullet points, markdown, asterisks or code blocks.";
 /// frame one and frame nine is described as having "waited there all afternoon"
 /// — and a description track that invents what happened between the frames is
 /// worse than useless to someone who cannot check it against the picture.
-pub const DEFAULT_NARRATION_PROMPT: &str = "\
-Below are descriptions of still frames taken from a video, in order, each labelled with when \
-it appears. Write a single flowing description of the video for someone who cannot see it. \
-Describe only what the frames actually show: do not invent events, dialogue or explanations \
-for what happened between them, and where the frames do not say what connects two moments, \
-simply move on to the next. Mention the timings only where they matter. Your answer will be \
-read aloud, so write plain sentences with no headings, bullet points, markdown, asterisks or \
-code blocks.";
+pub fn default_narration_prompt() -> String {
+    t!("prompt.narration")
+}
 
 /// ffmpeg's scene score for an ordinary cut. Lower catches camera movement and
 /// costs vision calls for it; higher misses everything but hard cuts.
@@ -434,15 +435,21 @@ impl Config {
 
     /// Puts every setting back to its default, keeping what the user wrote.
     ///
-    /// The dictionary is the exception, and the only one: every other field
-    /// here is a preference that takes seconds to set again, whereas a list of
-    /// replacements is built up a word at a time over months of use. A "reset
-    /// settings" button that quietly threw it away would be a far worse bug
-    /// than any setting it put right.
+    /// The dictionary is one exception: every other field here is a preference
+    /// that takes seconds to set again, whereas a list of replacements is built
+    /// up a word at a time over months of use. A "reset settings" button that
+    /// quietly threw it away would be a far worse bug than any setting it put
+    /// right.
+    ///
+    /// The language is the other, and for a starker reason — a reset that also
+    /// changed the language would leave the user unable to read the message
+    /// telling them what had just happened.
     pub fn reset_to_defaults(&mut self) {
         let dictionary = std::mem::take(&mut self.dictionary);
+        let language = std::mem::take(&mut self.language);
         *self = Self {
             dictionary,
+            language,
             ..Self::default()
         };
     }
@@ -522,7 +529,7 @@ mod tests {
 
         assert_eq!(config.system_rate, 175);
         assert_eq!(config.ollama_model, DEFAULT_VISION_MODEL);
-        assert_eq!(config.ollama_prompt, DEFAULT_VISION_PROMPT);
+        assert_eq!(config.ollama_prompt, default_vision_prompt());
         assert_eq!(config.engine, EnginePreference::System);
         assert_eq!(config.dictionary.len(), 1, "the dictionary must survive");
         assert_eq!(config.dictionary[0].from, "Dr");
@@ -535,14 +542,16 @@ mod tests {
     fn the_superseded_prompt_is_replaced_on_load() {
         let saved = serde_json::json!({ "ollama_prompt": SUPERSEDED_VISION_PROMPT }).to_string();
         let config: Config = serde_json::from_str(&saved).unwrap();
-        assert_eq!(config.ollama_prompt, DEFAULT_VISION_PROMPT);
+        assert_eq!(config.ollama_prompt, default_vision_prompt());
     }
 
     /// The description has to be unconditional. A prompt that asks for one only
     /// when there is no text is the bug, whatever else it says.
     #[test]
     fn the_default_prompt_asks_for_a_description_before_any_condition() {
-        let prompt = DEFAULT_VISION_PROMPT;
+        // Pinned to English: the wording being checked is English wording, and
+        // holding every translation to it would be checking the wrong thing.
+        let prompt = crate::i18n::with_language("en", default_vision_prompt);
         assert!(prompt.starts_with("Describe what this image shows"));
         assert!(
             !prompt.contains("contains no text"),
@@ -627,14 +636,17 @@ mod tests {
     /// keeps Markdown out of a synthesiser's mouth.
     #[test]
     fn the_video_prompts_ask_for_speakable_text() {
-        for prompt in [DEFAULT_FRAME_PROMPT, DEFAULT_NARRATION_PROMPT] {
+        let (frame, narration) = crate::i18n::with_language("en", || {
+            (default_frame_prompt(), default_narration_prompt())
+        });
+        for prompt in [&frame, &narration] {
             assert!(prompt.contains("read aloud"), "{prompt}");
             assert!(prompt.contains("markdown"), "{prompt}");
         }
         // The frame prompt has to keep each answer short: it is one of dozens.
-        assert!(DEFAULT_FRAME_PROMPT.contains("one or two"));
+        assert!(frame.contains("one or two"));
         // And the narration prompt has to forbid the invented connective
         // tissue that makes a description track untrustworthy.
-        assert!(DEFAULT_NARRATION_PROMPT.contains("do not invent"));
+        assert!(narration.contains("do not invent"));
     }
 }

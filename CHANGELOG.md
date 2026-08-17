@@ -3,6 +3,60 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [Unreleased]
+
+### Added
+
+- **The interface can be translated, by editing one plain text file.** No
+  programming, no build, no Rust toolchain. **Settings → Language** picks the
+  language, or follows whatever the computer is set to; **Open Language Folder**
+  puts you where the files live, and **Reload Language Files** shows your
+  changes without a restart.
+
+  Everything on screen in normal use moves with it: every label, button,
+  caption, tooltip, dialog, keyboard shortcut, progress message and status line,
+  including the ones a background job writes while it works. So does the
+  spoken clock in the audio player, which is the piece of text a listener has to
+  take in while the audio is running.
+
+  A half-finished translation is still a working app. Any line not yet written
+  falls back to English, so a file is worth testing from its very first line
+  rather than only its last — which is the difference between a translation
+  somebody starts and one somebody finishes. Whatever the app could not read is
+  reported back by line number under the Language setting, rather than dropped
+  in silence.
+
+  A file dropped in the folder whose code matches a built-in language replaces
+  it, so a shipped translation can be corrected as well as a new one added.
+
+  The prompts sent to the vision model live in the language file too, which
+  means a French interface asks the model in French and gets a French
+  description that a French voice can read. A prompt you have written yourself
+  in Settings is never overwritten by a language change, and the app says so
+  when it has left one alone.
+
+- **A French translation**, complete but written alongside the machinery rather
+  than by a native speaker. It wants a proper reading; see the README.
+
+### Fixed
+
+- **The arrow keys in the Shortcuts pane were drawn as empty boxes.** No font
+  the app bundles — Ubuntu Bold, or any of the faces egui ships behind it — has
+  a glyph for ← ↑ → ↓, so the two rows describing them showed tofu on every
+  platform. They now read "Up / Down" and "Left / Right", which a screen reader
+  also announces far better than an arrow. A test now refuses any language file
+  containing a character the bundled fonts cannot draw, which is how this was
+  found.
+
+### Known limits
+
+- Error text from the reading engines is still English. Everything on screen in
+  normal use is not.
+- Arabic and Hebrew cannot be laid out correctly, because egui has no
+  bidirectional text support yet; they would render backwards.
+- Chinese, Japanese, Korean and Vietnamese need a font the app does not bundle.
+  Latin, Greek and Cyrillic are all covered.
+
 ## [1.8.0] - 2026-08-17
 
 ### Added

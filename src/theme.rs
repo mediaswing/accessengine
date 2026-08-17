@@ -85,14 +85,19 @@ pub fn palette(visuals: &Visuals) -> Palette {
     if visuals.dark_mode { DARK } else { LIGHT }
 }
 
-/// Installs Ubuntu Bold as the default proportional face.
+/// Ubuntu Bold in front of everything egui ships.
 ///
 /// `RichText::strong()` only recolours; a heavier weight has to arrive as a real
 /// font. Putting it first in the `Proportional` chain means every widget picks
 /// it up without each call site asking. Everything egui already had stays behind
 /// it, so a glyph Ubuntu Bold doesn't cover still renders instead of becoming a
 /// tofu box — which is what keeps the `▶`, `💾` and `⚙` in the labels working.
-fn install_fonts(ctx: &egui::Context) {
+///
+/// Built here rather than inline so a test can ask the same set of faces
+/// whether it covers a language file; see `i18n`. A language that ships as rows
+/// of `?` is a language nobody can use, and that is worth catching before it
+/// reaches anyone rather than after.
+pub fn font_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
         "Ubuntu-Bold".to_owned(),
@@ -103,7 +108,11 @@ fn install_fonts(ctx: &egui::Context) {
         .entry(FontFamily::Proportional)
         .or_default()
         .insert(0, "Ubuntu-Bold".to_owned());
-    ctx.set_fonts(fonts);
+    fonts
+}
+
+fn install_fonts(ctx: &egui::Context) {
+    ctx.set_fonts(font_definitions());
 }
 
 fn light_visuals() -> Visuals {

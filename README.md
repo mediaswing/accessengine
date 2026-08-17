@@ -111,13 +111,81 @@ the voice.
 | <kbd>⌘1</kbd> … <kbd>⌘5</kbd> | Go to Read, Audio player, Dictionary, Settings or Shortcuts |
 | <kbd>⌘P</kbd> | Audio player: play, or pause if already playing |
 | <kbd>⌘R</kbd> | Audio player: skip back ten seconds |
-| <kbd>↑</kbd> <kbd>↓</kbd> | Move along the list of panes, once it has focus |
+| <kbd>Up</kbd> <kbd>Down</kbd> | Move along the list of panes, once it has focus |
 | <kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> | Move between controls |
 | <kbd>Space</kbd> or <kbd>Return</kbd> | Operate the focused control |
-| <kbd>←</kbd> <kbd>→</kbd> | Change the value in an open dropdown or a slider |
+| <kbd>Left</kbd> <kbd>Right</kbd> | Change the value in an open dropdown or a slider |
 | <kbd>⌘K</kbd> | ElevenLabs API key |
 | <kbd>⌘L</kbd> | Show or hide the activity log |
 | <kbd>F1</kbd> | The Shortcuts pane |
+
+## Other languages
+
+The interface can be translated by editing one plain text file. No programming,
+no build, no toolchain — and a half-finished translation still leaves a working
+app, because every line you have not written yet falls back to English.
+
+English and a French draft are built in. **Settings → Language** picks between
+them, or follows the operating system.
+
+### Writing a translation
+
+1. Open **Settings → Language** and press **Open Language Folder**.
+2. Copy [`assets/lang/en.toml`](assets/lang/en.toml) into it, named for your
+   language — `de.toml`, `pt-BR.toml`.
+3. Change the three lines at the top: `code`, `name` (written in your own
+   language, so it reads "Deutsch" rather than "German"), and `plural`.
+4. Translate the right-hand side of each line. Leave the keys on the left alone.
+5. Press **Reload Language Files** and watch the app change. No restart.
+
+A file whose `code` matches a built-in language replaces it, so a shipped
+translation can be improved as well as a new one added. Anything the app could
+not read is reported by line number under the Language setting rather than
+silently dropped.
+
+The format is a comment, a key, and a quoted value:
+
+```toml
+code   = "de"
+name   = "Deutsch"
+plural = "one_other"
+
+# Choose a file, a voice, and what to do with it
+pane.read.hint = "Wählen Sie eine Datei, eine Stimme und was damit geschehen soll"
+
+# Reading aloud… {n} words replaced by the dictionary.
+status.reading.one   = "Wird vorgelesen… {n} Wort ersetzt."
+status.reading.other = "Wird vorgelesen… {n} Wörter ersetzt."
+```
+
+Every entry in `en.toml` carries its English source in a comment above it, so
+the reference is never in another window. Three things to know:
+
+- **`{C}`** becomes <kbd>⌘</kbd> on macOS and <kbd>Ctrl</kbd> on Windows. Put it
+  wherever your sentence needs it.
+- **`{name}` and friends** are values the app fills in. Move them anywhere in
+  the sentence — that is what they are named for — but do not rename them.
+- **`.one` / `.other`** are counted messages. `plural` at the top of the file
+  says which forms yours needs: `one_other`, `french` (zero takes the singular),
+  `polish`, or `russian`.
+
+The prompts sent to the vision model are in the file too, and they are worth
+translating: a German prompt gets a German description that a German voice can
+read. A prompt you have edited yourself in Settings is never overwritten by a
+language change.
+
+### What is not translated yet
+
+- **Error text from the reading engines** — `src/extract/`, `src/tts/`,
+  `src/ffmpeg.rs`, `src/ollama.rs` — is still English. Everything on screen in
+  normal use is not.
+- **Arabic, Hebrew and other right-to-left languages** cannot be laid out
+  correctly: egui has no bidirectional text support yet, so they would render
+  backwards. This is not something a language file can work around.
+- **Chinese, Japanese, Korean and Vietnamese** need a font the app does not
+  bundle. A test refuses any language file containing characters the bundled
+  fonts cannot draw, so this fails loudly at build time rather than quietly as
+  rows of `?` on somebody's screen. Latin, Greek and Cyrillic are all covered.
 
 ## Requirements
 
@@ -411,6 +479,7 @@ Output Engine.
 | `src/ffmpeg.rs` | Detecting and installing ffmpeg, and taking frames out of video |
 | `src/apikey.rs` | API key storage |
 | `src/sysexec.rs` | Locating system programs, and staging files for them |
+| `src/i18n/` | The language files, and every word the interface says |
 | `src/config.rs` | Everything else, as JSON |
 
 The UI thread never blocks. Anything slow — a network call, a model download, an

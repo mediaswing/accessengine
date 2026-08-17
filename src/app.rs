@@ -14,7 +14,7 @@
 
 use crate::apikey::{self, KeySource};
 use crate::audio::{self, AudioFormat, Playback};
-use crate::config::{Action, Config, DEFAULT_VISION_PROMPT, EnginePreference, Formatting};
+use crate::config::{AUTO_LANGUAGE, Action, Config, EnginePreference, Formatting};
 use crate::extract::{
     DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, PDF_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS,
     VIDEO_EXTENSIONS,
@@ -23,6 +23,7 @@ use crate::jobs::{self, Cancel, Job, Update};
 use crate::theme::{self, CONTROL_HEIGHT, FORM_WIDTH, PROGRESS_HEIGHT};
 use crate::tts::{self, Voice};
 use crate::update;
+use crate::{i18n, t, tn};
 use egui::{Key, Modifiers, RichText};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -43,11 +44,11 @@ impl Tone {
     /// A word in front of the message, because colour must never be the only
     /// thing carrying meaning — it is invisible to a screen reader and to
     /// roughly one in twelve men.
-    fn prefix(self) -> &'static str {
+    fn prefix(self) -> String {
         match self {
-            Self::Info => "",
-            Self::Success => "Done: ",
-            Self::Error => "Problem: ",
+            Self::Info => String::new(),
+            Self::Success => t!("status.prefix.success"),
+            Self::Error => t!("status.prefix.error"),
         }
     }
 
@@ -167,35 +168,36 @@ impl Pane {
         Self::Shortcuts,
     ];
 
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::Read => "📄  Read a File",
-            Self::Player => "🔊  Audio player",
-            Self::Dictionary => "📖  Dictionary",
-            Self::Settings => "⚙  Settings",
-            Self::Shortcuts => "？  Shortcuts",
+            Self::Read => t!("pane.read.label"),
+            Self::Player => t!("pane.player.label"),
+            Self::Dictionary => t!("pane.dictionary.label"),
+            Self::Settings => t!("pane.settings.label"),
+            Self::Shortcuts => t!("pane.shortcuts.label"),
         }
     }
 
-    fn hint(self) -> &'static str {
+    fn hint(self) -> String {
         match self {
-            Self::Read => "Choose a file, a voice, and what to do with it",
-            Self::Player => "Play back a spoken-word audio file",
-            Self::Dictionary => "Words to swap before the document is spoken",
-            Self::Settings => "The ElevenLabs model, and how images are read",
-            Self::Shortcuts => "Every keyboard shortcut in the app",
+            Self::Read => t!("pane.read.hint"),
+            Self::Player => t!("pane.player.hint"),
+            Self::Dictionary => t!("pane.dictionary.hint"),
+            Self::Settings => t!("pane.settings.hint"),
+            Self::Shortcuts => t!("pane.shortcuts.hint"),
         }
     }
 
-    /// The shortcut that opens it, in [`shortcut_text`] notation.
-    fn shortcut(self) -> &'static str {
-        match self {
-            Self::Read => "{C}1",
-            Self::Player => "{C}2",
-            Self::Dictionary => "{C}3",
-            Self::Settings => "{C}4",
-            Self::Shortcuts => "{C}5",
-        }
+    /// The shortcut that opens it. `{C}` becomes this platform's modifier.
+    fn shortcut(self) -> String {
+        let number = match self {
+            Self::Read => 1,
+            Self::Player => 2,
+            Self::Dictionary => 3,
+            Self::Settings => 4,
+            Self::Shortcuts => 5,
+        };
+        format!("{}{number}", crate::i18n::MODIFIER)
     }
 }
 
@@ -220,43 +222,20 @@ struct VoiceList {
     loaded: bool,
 }
 
-/// Every keyboard shortcut, in the order the help dialog lists them. Defined
-/// once so the dialog, the tooltips and the README cannot drift apart.
-pub const SHORTCUTS: &[(&str, &str)] = &[
-    (
-        "{C}O",
-        "Choose a file — a document, or an audio file in the player",
-    ),
-    ("{C}Return", "Apply — run the chosen action"),
-    (
-        "{C}. or Esc",
-        "Stop reading or playing, or cancel what is running",
-    ),
-    (
-        "{C}1 … {C}5",
-        "Go to Read, Audio player, Dictionary, Settings or Shortcuts",
-    ),
-    ("{C}P", "Audio player: play, or pause if already playing"),
-    ("{C}R", "Audio player: skip back ten seconds"),
-    ("↑ ↓", "Move along the list of panes, once it has focus"),
-    ("Tab / Shift+Tab", "Move between controls"),
-    ("Space or Return", "Operate the focused control"),
-    ("←  →", "Change the value in an open dropdown or a slider"),
-    ("{C}K", "ElevenLabs API key"),
-    ("{C}L", "Show or hide the activity log"),
-    ("F1", "The Shortcuts pane"),
+/// Every keyboard shortcut, in the order the help pane lists them.
+///
+/// Names rather than sentences: each one is two entries in the language file,
+/// `shortcuts.<name>.keys` and `shortcuts.<name>.what`. The keys are worth
+/// translating as well as the descriptions — "Shift" and "Space" are not what
+/// every keyboard in the world has printed on it.
+pub const SHORTCUTS: &[&str] = &[
+    "open", "apply", "stop", "panes", "play", "back", "rail", "tab", "operate", "adjust", "key",
+    "log", "help",
 ];
 
-/// Renders `{C}` as the modifier this platform actually uses.
-fn shortcut_text(raw: &str) -> String {
-    raw.replace(
-        "{C}",
-        if cfg!(target_os = "macos") {
-            "⌘"
-        } else {
-            "Ctrl+"
-        },
-    )
+/// One half of a shortcut row: `part` is `keys` or `what`.
+fn shortcut_text(name: &str, part: &str) -> String {
+    crate::i18n::text(&format!("shortcuts.{name}.{part}"), &[])
 }
 
 /// A rough seconds-per-frame for a vision model with no GPU behind it, used
@@ -269,13 +248,13 @@ const SECONDS_PER_FRAME_ESTIMATE: u64 = 15;
 
 /// How a scene threshold reads in words, since the number itself means nothing
 /// outside ffmpeg.
-fn describe_sensitivity(threshold: f32) -> &'static str {
+fn describe_sensitivity(threshold: f32) -> String {
     match threshold {
-        t if t < 0.2 => "Very sensitive — takes a frame on camera movement, not just cuts",
-        t if t < 0.35 => "Sensitive — catches pans and gradual changes",
-        t if t < 0.55 => "Balanced — roughly one frame per shot",
-        t if t < 0.8 => "Selective — only clear cuts between shots",
-        _ => "Very selective — only a complete change of picture",
+        v if v < 0.2 => t!("sensitivity.very_high"),
+        v if v < 0.35 => t!("sensitivity.high"),
+        v if v < 0.55 => t!("sensitivity.balanced"),
+        v if v < 0.8 => t!("sensitivity.low"),
+        _ => t!("sensitivity.very_low"),
     }
 }
 
@@ -484,6 +463,18 @@ impl SpeechApp {
         };
         app.load_system_voices();
 
+        // The language was chosen before this window existed — by the setting,
+        // or by asking the operating system. The prompts have to follow it here
+        // as well as when it is changed in Settings, or somebody whose computer
+        // is set to French gets a French interface asking the vision model in
+        // English and reading the answer back in an English voice.
+        //
+        // Silent, unlike the same move made from Settings: nothing has just
+        // happened from the user's point of view, and an app that opens with a
+        // status line already talking about prompts is answering a question
+        // nobody asked.
+        app.retranslate_prompts();
+
         // A path on the command line opens straight away, which is what
         // "Open With" produces on both platforms.
         if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
@@ -672,7 +663,10 @@ impl SpeechApp {
 
     fn save_config(&mut self) {
         if let Err(error) = self.config.save() {
-            self.set_status(format!("Could not save settings: {error:#}"), Tone::Error);
+            self.set_status(
+                t!("status.config_failed", error = format!("{error:#}")),
+                Tone::Error,
+            );
         }
     }
 
@@ -739,9 +733,9 @@ impl SpeechApp {
             return;
         }
         if let Some(path) = rfd::FileDialog::new()
-            .set_title("Choose a document, image or video to read")
+            .set_title(t!("chooser.document.title"))
             .add_filter(
-                "All supported files",
+                t!("chooser.filter.all"),
                 &[
                     TEXT_EXTENSIONS,
                     DOC_EXTENSIONS,
@@ -752,12 +746,12 @@ impl SpeechApp {
                 ]
                 .concat(),
             )
-            .add_filter("Text files", TEXT_EXTENSIONS)
-            .add_filter("Word documents", DOC_EXTENSIONS)
-            .add_filter("PDF files", PDF_EXTENSIONS)
-            .add_filter("Tables", TABLE_EXTENSIONS)
-            .add_filter("Images", IMAGE_EXTENSIONS)
-            .add_filter("Video", VIDEO_EXTENSIONS)
+            .add_filter(t!("chooser.filter.text"), TEXT_EXTENSIONS)
+            .add_filter(t!("chooser.filter.docx"), DOC_EXTENSIONS)
+            .add_filter(t!("chooser.filter.pdf"), PDF_EXTENSIONS)
+            .add_filter(t!("chooser.filter.table"), TABLE_EXTENSIONS)
+            .add_filter(t!("chooser.filter.image"), IMAGE_EXTENSIONS)
+            .add_filter(t!("chooser.filter.video"), VIDEO_EXTENSIONS)
             .pick_file()
         {
             self.open_file(ctx, path);
@@ -767,9 +761,9 @@ impl SpeechApp {
     fn open_file(&mut self, ctx: &egui::Context, path: PathBuf) {
         let Some(kind) = FileKind::from_path(&path) else {
             self.set_status(
-                format!(
-                    "{} is not a file type this app can read",
-                    path.file_name().unwrap_or_default().to_string_lossy()
+                t!(
+                    "status.unreadable_type",
+                    name = path.file_name().unwrap_or_default().to_string_lossy()
                 ),
                 Tone::Error,
             );
@@ -807,28 +801,22 @@ impl SpeechApp {
             return;
         }
         if self.file.is_none() {
-            self.set_status("Choose a file first.", Tone::Error);
+            self.set_status(t!("status.no_file"), Tone::Error);
             self.focus = Some(Field::File);
             return;
         }
         if self.text.trim().is_empty() {
-            self.set_status(
-                "There is no text to read yet — the file is still being read, or it was empty.",
-                Tone::Error,
-            );
+            self.set_status(t!("status.no_text"), Tone::Error);
             return;
         }
         match self.active_engine() {
             ActiveEngine::MissingKey => {
-                self.set_status(
-                    "Add an ElevenLabs API key, or choose System voices.",
-                    Tone::Error,
-                );
+                self.set_status(t!("status.no_key"), Tone::Error);
                 self.open_api_key_dialog();
                 return;
             }
             ActiveEngine::Unsupported => {
-                self.set_status(tts::system::UNSUPPORTED_MESSAGE, Tone::Error);
+                self.set_status(tts::system::unsupported_message(), Tone::Error);
                 return;
             }
             _ => {}
@@ -846,9 +834,8 @@ impl SpeechApp {
         };
         let (text, replaced) = self.spoken_text();
         let reading = match replaced {
-            0 => "Reading aloud…".to_string(),
-            1 => "Reading aloud… 1 word replaced by the dictionary.".to_string(),
-            n => format!("Reading aloud… {n} words replaced by the dictionary."),
+            0 => t!("status.reading_plain"),
+            n => tn!("status.reading", n),
         };
 
         match engine {
@@ -864,7 +851,7 @@ impl SpeechApp {
             },
             jobs::Engine::ElevenLabs { .. } => {
                 if self.config.elevenlabs_voice_id.is_empty() {
-                    self.set_status("Choose an ElevenLabs voice first.", Tone::Error);
+                    self.set_status(t!("status.no_voice"), Tone::Error);
                     self.focus = Some(Field::Voice);
                     return;
                 }
@@ -885,7 +872,7 @@ impl SpeechApp {
             Ok(playback) => {
                 self.playback = Some(playback);
                 self.playing_audio_file = false;
-                self.set_status("Reading aloud…", Tone::Info);
+                self.set_status(t!("status.reading_plain"), Tone::Info);
             }
             Err(error) => self.set_status(format!("{error:#}"), Tone::Error),
         }
@@ -912,8 +899,8 @@ impl SpeechApp {
 
     fn choose_audio_file(&mut self) {
         let mut dialog = rfd::FileDialog::new()
-            .set_title("Choose an audio file to play")
-            .add_filter("Audio files", audio::PLAYABLE_EXTENSIONS);
+            .set_title(t!("chooser.audio.title"))
+            .add_filter(t!("chooser.filter.audio"), audio::PLAYABLE_EXTENSIONS);
         if let Some(dir) = self
             .config
             .last_audio_dir
@@ -937,7 +924,7 @@ impl SpeechApp {
         self.config.last_audio_dir = path.parent().map(Path::to_path_buf);
         self.config_dirty = true;
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        self.set_status_quietly(format!("Loaded {name}. Press Play."), Tone::Success);
+        self.set_status_quietly(t!("status.loaded", name = name), Tone::Success);
         self.audio_file = Some(path);
         self.focus = Some(Field::Play);
     }
@@ -948,14 +935,14 @@ impl SpeechApp {
             if let Some(playback) = &mut self.playback {
                 playback.resume();
             }
-            self.set_status("Playing.", Tone::Info);
+            self.set_status(t!("status.playing"), Tone::Info);
             return;
         }
         if self.player_is_active() {
             return;
         }
         let Some(path) = self.audio_file.clone() else {
-            self.set_status("Choose an audio file first.", Tone::Error);
+            self.set_status(t!("status.no_audio_file"), Tone::Error);
             self.focus = Some(Field::AudioFile);
             return;
         };
@@ -968,9 +955,9 @@ impl SpeechApp {
                 self.playback = Some(playback);
                 self.playing_audio_file = true;
                 self.set_status(
-                    format!(
-                        "Playing {}.",
-                        path.file_name().unwrap_or_default().to_string_lossy()
+                    t!(
+                        "status.playing_file",
+                        name = path.file_name().unwrap_or_default().to_string_lossy()
                     ),
                     Tone::Info,
                 );
@@ -986,7 +973,7 @@ impl SpeechApp {
         if let Some(playback) = &mut self.playback {
             playback.pause();
             let at = audio::spoken_time(playback.position());
-            self.set_status(format!("Paused at {at}."), Tone::Info);
+            self.set_status(t!("status.paused_at", at = at), Tone::Info);
         }
     }
 
@@ -995,7 +982,7 @@ impl SpeechApp {
             return;
         }
         self.stop_playback();
-        self.set_status("Stopped.", Tone::Info);
+        self.set_status(t!("status.stopped"), Tone::Info);
     }
 
     /// Back ten seconds, without disturbing whether it was playing or paused.
@@ -1009,12 +996,12 @@ impl SpeechApp {
         match playback.skip_back() {
             Ok(()) => {
                 let at = audio::spoken_time(playback.position());
-                let state = if playback.is_paused() {
-                    "Paused"
+                let message = if playback.is_paused() {
+                    t!("status.resumed_paused", at = at)
                 } else {
-                    "Playing"
+                    t!("status.resumed_playing", at = at)
                 };
-                self.set_status(format!("{state} from {at}."), Tone::Info);
+                self.set_status(message, Tone::Info);
             }
             Err(error) => self.set_status(format!("{error:#}"), Tone::Error),
         }
@@ -1033,9 +1020,9 @@ impl SpeechApp {
     fn stop_everything(&mut self) {
         if self.is_playing() {
             let what = if self.playing_audio_file {
-                "Stopped."
+                t!("status.stopped")
             } else {
-                "Stopped reading."
+                t!("status.stopped_reading")
             };
             self.stop_playback();
             self.set_status(what, Tone::Info);
@@ -1045,7 +1032,7 @@ impl SpeechApp {
             && busy.cancellable
         {
             busy.cancel.store(true, Ordering::Relaxed);
-            self.set_status("Cancelling…", Tone::Info);
+            self.set_status(t!("status.cancelling"), Tone::Info);
         }
     }
 
@@ -1061,19 +1048,19 @@ impl SpeechApp {
                 .as_ref()
                 .and_then(|p| p.file_stem())
                 .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "speech".to_string()),
+                .unwrap_or_else(|| t!("chooser.save.fallback_name")),
             format.extension()
         );
 
         let mut dialog = rfd::FileDialog::new()
-            .set_title("Save the audio file as")
+            .set_title(t!("chooser.save.title"))
             .add_filter(format.label(), &[format.extension()])
             .set_file_name(&suggested);
         if let Some(dir) = self.config.last_save_dir.as_ref().filter(|d| d.is_dir()) {
             dialog = dialog.set_directory(dir);
         }
         let Some(mut path) = dialog.save_file() else {
-            self.set_status("Nothing saved.", Tone::Info);
+            self.set_status(t!("status.nothing_saved"), Tone::Info);
             return;
         };
 
@@ -1126,11 +1113,7 @@ impl SpeechApp {
         // the file would not stop it being loaded again at the next launch.
         if self.key_source == KeySource::Env {
             self.set_status(
-                format!(
-                    "ElevenLabs rejected the key in {}. Unset it, or replace it with one that \
-                     works.",
-                    apikey::ENV_VAR
-                ),
+                t!("status.key_rejected_env", variable = apikey::ENV_VAR),
                 Tone::Error,
             );
             return;
@@ -1147,11 +1130,7 @@ impl SpeechApp {
         self.api_key = None;
         self.key_source = KeySource::None;
         self.key_rejected = true;
-        self.set_status(
-            "ElevenLabs rejected that API key, so it has been removed. Enter another, or \
-             choose System voices.",
-            Tone::Error,
-        );
+        self.set_status(t!("status.key_rejected"), Tone::Error);
         self.open_api_key_dialog();
     }
 
@@ -1190,7 +1169,7 @@ impl SpeechApp {
                     self.text = text;
                     self.text_note = note;
                     self.cached = None;
-                    self.set_status("Ready. Press Apply to read it.", Tone::Success);
+                    self.set_status(t!("status.ready"), Tone::Success);
                 }
                 Update::ElevenLabsVoices(voices) => {
                     // Keep the saved voice if it still exists, otherwise take
@@ -1211,7 +1190,7 @@ impl SpeechApp {
                     // The voice list is the key check, so this is the moment a
                     // key the user just typed is known to be good.
                     if std::mem::take(&mut self.checking_key) {
-                        self.set_status("API key accepted.", Tone::Success);
+                        self.set_status(t!("status.key_accepted"), Tone::Success);
                     }
                 }
                 Update::Mp3Ready(mp3) => {
@@ -1223,7 +1202,7 @@ impl SpeechApp {
                 }
                 Update::Saved(path) => {
                     crate::log::line(format!("saved {}", path.display()));
-                    self.set_status(format!("Saved to {}", path.display()), Tone::Success);
+                    self.set_status(t!("status.saved", path = path.display()), Tone::Success);
                 }
                 Update::NeedsFfmpegInstall => {
                     self.prompt = Some(Prompt::InstallFfmpeg);
@@ -1243,10 +1222,7 @@ impl SpeechApp {
                     // the picker. A check the user asked for by entering a key
                     // is still owed an answer, out loud.
                     if std::mem::take(&mut self.checking_key) {
-                        self.set_status(
-                            format!("The key was saved but could not be checked: {message}"),
-                            Tone::Error,
-                        );
+                        self.set_status(t!("status.key_unchecked", error = message), Tone::Error);
                     }
                     self.elevenlabs_voices = VoiceList {
                         voices: Vec::new(),
@@ -1283,9 +1259,9 @@ impl SpeechApp {
                 if was_a_file {
                     // No chime on the end of a recording: it arrives over the
                     // last word, and the file running out is not news.
-                    self.set_status_quietly("Finished playing.", Tone::Success);
+                    self.set_status_quietly(t!("status.finished_playing"), Tone::Success);
                 } else {
-                    self.set_status("Finished reading.", Tone::Success);
+                    self.set_status(t!("status.finished_reading"), Tone::Success);
                 }
             }
         }
@@ -1425,16 +1401,14 @@ impl SpeechApp {
 
     fn file_field(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        let caption = Self::caption(ui, "Document or image");
+        let caption = Self::caption(ui, &t!("read.file.caption"));
 
         let button = ui.add_enabled(
             self.busy.is_none(),
-            egui::Button::new("📂  Choose File…").min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
+            egui::Button::new(t!("read.file.button"))
+                .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
         );
-        let button = button.on_hover_text(format!(
-            "{}  ·  Text, Word documents and images. You can also drop a file on this window.",
-            shortcut_text("{C}O")
-        ));
+        let button = button.on_hover_text(t!("read.file.hint"));
         let _ = caption.labelled_by(button.id);
         self.take_focus(Field::File, &button);
         if button.clicked() {
@@ -1447,12 +1421,12 @@ impl SpeechApp {
             Some(path) => {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
                 if self.text_note.is_empty() {
-                    format!("Chosen: {name}")
+                    t!("read.file.chosen", name = name)
                 } else {
-                    format!("Chosen: {name} — {}", self.text_note)
+                    t!("read.file.chosen_note", name = name, note = self.text_note)
                 }
             }
-            None => "No file chosen yet.".to_string(),
+            None => t!("read.file.none"),
         };
         let line = ui.add(egui::Label::new(RichText::new(text)).wrap());
         if let Some(path) = &self.file {
@@ -1461,7 +1435,7 @@ impl SpeechApp {
     }
 
     fn engine_field(&mut self, ui: &mut egui::Ui) {
-        let caption = Self::caption(ui, "Speech engine");
+        let caption = Self::caption(ui, &t!("read.engine.caption"));
         let mut chosen = self.config.engine;
 
         let combo = egui::ComboBox::from_id_salt("engine")
@@ -1474,10 +1448,9 @@ impl SpeechApp {
                 }
             })
             .response;
-        let combo = combo.on_hover_text(format!(
-            "{}  ·  {}",
-            shortcut_text("{C}2"),
-            self.config.engine.description()
+        let combo = combo.on_hover_text(t!(
+            "read.engine.hint",
+            description = self.config.engine.description()
         ));
         let _ = caption.labelled_by(combo.id);
         self.take_focus(Field::Engine, &combo);
@@ -1496,25 +1469,25 @@ impl SpeechApp {
         match self.active_engine() {
             ActiveEngine::ElevenLabs => {
                 let source = match self.key_source {
-                    KeySource::Env => "API key from the environment",
-                    _ => "API key saved on this computer",
+                    KeySource::Env => t!("read.engine.key_from_env"),
+                    _ => t!("read.engine.key_stored"),
                 };
                 let muted = crate::theme::palette(ui.visuals()).muted;
                 ui.label(RichText::new(source).color(muted));
             }
             ActiveEngine::System => {
                 let muted = crate::theme::palette(ui.visuals()).muted;
-                ui.label(RichText::new(SYSTEM_VOICE_NOTE).color(muted));
+                ui.label(RichText::new(system_voice_note()).color(muted));
             }
             ActiveEngine::MissingKey => {
                 let colour = crate::theme::palette(ui.visuals()).warn;
-                ui.colored_label(colour, "No API key set — ElevenLabs cannot be used yet.");
+                ui.colored_label(colour, t!("read.engine.no_key"));
                 if ui
                     .add(
-                        egui::Button::new("Enter API Key…")
+                        egui::Button::new(t!("read.engine.enter_key"))
                             .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
                     )
-                    .on_hover_text(shortcut_text("{C}K"))
+                    .on_hover_text(shortcut_text("key", "keys"))
                     .clicked()
                 {
                     self.open_api_key_dialog();
@@ -1523,7 +1496,7 @@ impl SpeechApp {
             ActiveEngine::Unsupported => {
                 ui.colored_label(
                     ui.visuals().error_fg_color,
-                    tts::system::UNSUPPORTED_MESSAGE,
+                    tts::system::unsupported_message(),
                 );
             }
         }
@@ -1531,7 +1504,7 @@ impl SpeechApp {
 
     fn voice_field(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        let caption = Self::caption(ui, "Voice");
+        let caption = Self::caption(ui, &t!("read.voice.caption"));
 
         match self.config.engine {
             EnginePreference::ElevenLabs => {
@@ -1562,18 +1535,18 @@ impl SpeechApp {
                             .response
                     })
                     .inner;
-                let combo = combo.on_hover_text(format!(
-                    "{}  ·  The ElevenLabs voice the document is read in",
-                    shortcut_text("{C}3")
-                ));
+                let combo = combo.on_hover_text(t!("read.voice.hint_elevenlabs"));
                 let _ = caption.labelled_by(combo.id);
                 self.take_focus(Field::Voice, &combo);
 
                 if let Some(error) = self.elevenlabs_voices.error.clone() {
-                    ui.colored_label(ui.visuals().error_fg_color, format!("Voices: {error}"));
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        t!("read.voice.failed", error = error),
+                    );
                     if ui
                         .add(
-                            egui::Button::new("Try Loading Voices Again")
+                            egui::Button::new(t!("read.voice.retry"))
                                 .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
                         )
                         .clicked()
@@ -1589,7 +1562,7 @@ impl SpeechApp {
                     .iter()
                     .find(|v| v.id == self.config.system_voice)
                     .map(Voice::display)
-                    .unwrap_or_else(|| DEFAULT_VOICE_LABEL.to_string());
+                    .unwrap_or_else(|| t!("read.voice.default"));
 
                 let combo = egui::ComboBox::from_id_salt("system_voice")
                     .width(FORM_WIDTH)
@@ -1600,7 +1573,7 @@ impl SpeechApp {
                         if ui
                             .selectable_label(
                                 self.config.system_voice.is_empty(),
-                                DEFAULT_VOICE_LABEL,
+                                t!("read.voice.default"),
                             )
                             .clicked()
                         {
@@ -1619,10 +1592,7 @@ impl SpeechApp {
                         }
                     })
                     .response;
-                let combo = combo.on_hover_text(format!(
-                    "{}  ·  The installed voice the document is read in",
-                    shortcut_text("{C}3")
-                ));
+                let combo = combo.on_hover_text(t!("read.voice.hint_system"));
                 let _ = caption.labelled_by(combo.id);
                 self.take_focus(Field::Voice, &combo);
 
@@ -1636,10 +1606,7 @@ impl SpeechApp {
                 // caption is what a screen reader announces as the name.
                 let speed = Self::caption(
                     ui,
-                    &format!(
-                        "Speaking speed — {} words per minute",
-                        self.config.system_rate
-                    ),
+                    &t!("read.voice.rate.caption", rate = self.config.system_rate),
                 );
                 ui.spacing_mut().slider_width = FORM_WIDTH;
                 let slider = ui.add_sized(
@@ -1648,9 +1615,7 @@ impl SpeechApp {
                         .show_value(false)
                         .clamping(egui::SliderClamping::Always),
                 );
-                let slider = slider.on_hover_text(
-                    "Left and right arrows adjust this by one word per minute when it has focus.",
-                );
+                let slider = slider.on_hover_text(t!("read.voice.rate.hint"));
                 let _ = speed.labelled_by(slider.id);
                 if slider.changed() {
                     self.cached = None;
@@ -1663,7 +1628,7 @@ impl SpeechApp {
     /// What the ElevenLabs voice dropdown should say right now.
     fn elevenlabs_selection(&self) -> String {
         if self.api_key.is_none() {
-            return "Add an API key to load voices".to_string();
+            return t!("read.voice.needs_key");
         }
         self.elevenlabs_voices
             .voices
@@ -1675,9 +1640,9 @@ impl SpeechApp {
             })
             .unwrap_or_else(|| {
                 if self.elevenlabs_voices.error.is_some() {
-                    "Voices unavailable".to_string()
+                    t!("read.voice.unavailable")
                 } else {
-                    "Loading voices…".to_string()
+                    t!("read.voice.loading")
                 }
             })
     }
@@ -1691,7 +1656,7 @@ impl SpeechApp {
     /// file has no formatting to read.
     fn formatting_field(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        let caption = Self::caption(ui, "What to read");
+        let caption = Self::caption(ui, &t!("read.formatting.caption"));
         let mut chosen = self.config.formatting;
         // Nothing else this app opens carries formatting: a `.txt` has none, a
         // CSV is already announced as a table, and an image comes back as
@@ -1713,11 +1678,14 @@ impl SpeechApp {
             })
             .inner;
         let combo = combo.on_hover_text(if applies {
-            self.config.formatting.description().to_string()
+            self.config.formatting.description()
         } else {
-            format!(
-                "Only Word documents carry formatting; a {} has none.",
-                self.file_kind.map(FileKind::label).unwrap_or("file")
+            t!(
+                "read.formatting.not_applicable",
+                kind = self
+                    .file_kind
+                    .map(FileKind::label)
+                    .unwrap_or_else(|| t!("filekind.unknown"))
             )
         });
         let _ = caption.labelled_by(combo.id);
@@ -1746,7 +1714,7 @@ impl SpeechApp {
     }
 
     fn action_field(&mut self, ui: &mut egui::Ui) {
-        let caption = Self::caption(ui, "What to do");
+        let caption = Self::caption(ui, &t!("read.action.caption"));
         let mut chosen = self.config.action;
 
         let combo = egui::ComboBox::from_id_salt("action")
@@ -1759,10 +1727,9 @@ impl SpeechApp {
                 }
             })
             .response;
-        let combo = combo.on_hover_text(format!(
-            "{}  ·  {}",
-            shortcut_text("{C}4"),
-            self.config.action.description()
+        let combo = combo.on_hover_text(t!(
+            "read.action.hint",
+            description = self.config.action.description()
         ));
         let _ = caption.labelled_by(combo.id);
         self.take_focus(Field::Action, &combo);
@@ -1775,7 +1742,7 @@ impl SpeechApp {
         // Only meaningful for a save, so it appears only then rather than
         // sitting there greyed out and unexplained.
         if self.config.action == Action::SaveAudio {
-            let caption = Self::caption(ui, "Audio format");
+            let caption = Self::caption(ui, &t!("read.format.caption"));
             let mut format = self.config.save_format;
             let combo = egui::ComboBox::from_id_salt("save_format")
                 .width(FORM_WIDTH)
@@ -1803,14 +1770,14 @@ impl SpeechApp {
         // the audio player is not this pane's business, and has its own Stop.
         if self.is_playing() && !self.playing_audio_file {
             let stop = ui.add(
-                egui::Button::new(RichText::new("⏹  Stop Reading").size(17.0))
+                egui::Button::new(RichText::new(t!("read.stop")).size(17.0))
                     .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT + 6.0)),
             );
-            let stop = stop.on_hover_text(shortcut_text("{C}. or Esc"));
+            let stop = stop.on_hover_text(t!("read.stop.hint"));
             self.take_focus(Field::Apply, &stop);
             if stop.clicked() {
                 self.stop_playback();
-                self.set_status("Stopped reading.", Tone::Info);
+                self.set_status(t!("status.stopped_reading"), Tone::Info);
             }
             return;
         }
@@ -1818,13 +1785,12 @@ impl SpeechApp {
         let ready = self.busy.is_none() && !self.text.trim().is_empty();
         let button = ui.add_enabled(
             ready,
-            egui::Button::new(RichText::new("Apply").size(17.0))
+            egui::Button::new(RichText::new(t!("read.apply")).size(17.0))
                 .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT + 6.0)),
         );
-        let button = button.on_hover_text(format!(
-            "{}  ·  {}",
-            shortcut_text("{C}Return"),
-            self.config.action.description()
+        let button = button.on_hover_text(t!(
+            "read.apply.hint",
+            description = self.config.action.description()
         ));
         self.take_focus(Field::Apply, &button);
         if button.clicked() {
@@ -1852,10 +1818,10 @@ impl SpeechApp {
             if cancellable
                 && ui
                     .add(
-                        egui::Button::new("Cancel")
+                        egui::Button::new(t!("status.cancel"))
                             .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
                     )
-                    .on_hover_text(shortcut_text("{C}. or Esc"))
+                    .on_hover_text(t!("read.stop.hint"))
                     .clicked()
             {
                 cancel.store(true, Ordering::Relaxed);
@@ -1880,7 +1846,7 @@ impl SpeechApp {
             }
             None => {
                 let muted = crate::theme::palette(ui.visuals()).muted;
-                ui.add(egui::Label::new(RichText::new(READY_HINT).color(muted)).wrap());
+                ui.add(egui::Label::new(RichText::new(t!("read.ready_hint")).color(muted)).wrap());
             }
         }
     }
@@ -1888,10 +1854,10 @@ impl SpeechApp {
     fn log_pane(&mut self, ui: &mut egui::Ui) {
         ui.separator();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Activity log"));
+            ui.label(RichText::new(t!("log.heading")));
             if ui
-                .button("Hide")
-                .on_hover_text(shortcut_text("{C}L"))
+                .button(t!("log.hide"))
+                .on_hover_text(t!("log.hide.hint"))
                 .clicked()
             {
                 self.show_log = false;
@@ -1929,11 +1895,8 @@ impl SpeechApp {
                     .selected(self.pane == pane)
                     .min_size(egui::vec2(TAB_WIDTH, CONTROL_HEIGHT + 4.0)),
             );
-            let response = response.on_hover_text(format!(
-                "{}  ·  {}",
-                shortcut_text(pane.shortcut()),
-                pane.hint()
-            ));
+            let response =
+                response.on_hover_text(format!("{}  ·  {}", pane.shortcut(), pane.hint()));
             if response.clicked() {
                 self.pane = pane;
             }
@@ -1994,23 +1957,19 @@ impl SpeechApp {
 
     fn api_key_dialog(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        ui.heading("ElevenLabs API Key");
+        ui.heading(t!("key.heading"));
         ui.add_space(6.0);
 
         match self.key_source {
             KeySource::Env => {
-                ui.label(format!(
-                    "The key in the {} environment variable is being used. \
-                     Unset it if you would rather manage the key here.",
-                    apikey::ENV_VAR
-                ));
+                ui.label(t!("key.from_env", variable = apikey::ENV_VAR));
             }
             KeySource::Stored => {
-                ui.label("A key is saved on this computer, so ElevenLabs voices are ready to use.");
+                ui.label(t!("key.stored"));
                 ui.add_space(8.0);
                 if ui
                     .add(
-                        egui::Button::new("Remove Saved Key")
+                        egui::Button::new(t!("key.remove"))
                             .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                     )
                     .clicked()
@@ -2020,7 +1979,7 @@ impl SpeechApp {
                             self.api_key = None;
                             self.key_source = KeySource::None;
                             self.elevenlabs_voices = VoiceList::default();
-                            self.set_status("API key removed.", Tone::Success);
+                            self.set_status(t!("status.key_removed"), Tone::Success);
                         }
                         Err(error) => self.set_status(format!("{error:#}"), Tone::Error),
                     }
@@ -2031,21 +1990,11 @@ impl SpeechApp {
                 // — so the dialog reopening explains itself rather than looking
                 // like it never closed.
                 if self.key_rejected {
-                    ui.colored_label(
-                        crate::theme::palette(ui.visuals()).bad,
-                        "ElevenLabs turned the last key down, so it has been removed. \
-                         Check the whole key was copied, then paste it again.",
-                    );
+                    ui.colored_label(crate::theme::palette(ui.visuals()).bad, t!("key.rejected"));
                     ui.add_space(8.0);
                 }
                 ui.add(
-                    egui::Label::new(format!(
-                        "Paste the key from your ElevenLabs account. It is kept {}, in a file only \
-                         your account can read. Without a key, choose System voices instead — \
-                         they need no account and work offline.",
-                        apikey::STORAGE_DESCRIPTION
-                    ))
-                    .wrap(),
+                    egui::Label::new(t!("key.ask", storage = apikey::STORAGE_DESCRIPTION)).wrap(),
                 );
                 ui.add_space(8.0);
 
@@ -2054,20 +2003,17 @@ impl SpeechApp {
                 // where it goes, since "click here" is no use read aloud.
                 if ui
                     .add(
-                        egui::Button::new("🌐  Get a Key From ElevenLabs…")
+                        egui::Button::new(t!("key.get"))
                             .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
                     )
-                    .on_hover_text(format!(
-                        "Opens {ELEVENLABS_KEYS_URL} in your browser. Sign in, copy the key, \
-                         then paste it below."
-                    ))
+                    .on_hover_text(t!("key.get.hint", url = ELEVENLABS_KEYS_URL))
                     .clicked()
                 {
                     ctx.open_url(egui::OpenUrl::same_tab(ELEVENLABS_KEYS_URL));
                 }
                 ui.add_space(10.0);
 
-                let caption = ui.label("API key");
+                let caption = ui.label(t!("key.caption"));
                 let entry = ui.add(
                     egui::TextEdit::singleline(&mut self.key_input)
                         .password(true)
@@ -2086,7 +2032,7 @@ impl SpeechApp {
                 let typed = !self.key_input.trim().is_empty();
                 let save = ui.add_enabled(
                     typed,
-                    egui::Button::new("Save Key").min_size(egui::vec2(200.0, CONTROL_HEIGHT)),
+                    egui::Button::new(t!("key.save")).min_size(egui::vec2(200.0, CONTROL_HEIGHT)),
                 );
                 if save.clicked() || (submitted && typed) {
                     let key = self.key_input.trim().to_string();
@@ -2102,7 +2048,7 @@ impl SpeechApp {
                             // any good, and a success chime here would be
                             // celebrating a key ElevenLabs is about to refuse.
                             // The sound belongs to the answer, below.
-                            self.set_status("API key saved. Checking it…", Tone::Info);
+                            self.set_status(t!("status.key_saved"), Tone::Info);
                             self.checking_key = true;
                             // Asked for here rather than left to the voice
                             // picker to notice, which only happens when the
@@ -2120,8 +2066,8 @@ impl SpeechApp {
         ui.add_space(12.0);
         ui.separator();
         if ui
-            .add(egui::Button::new("Close").min_size(egui::vec2(160.0, CONTROL_HEIGHT)))
-            .on_hover_text("Esc")
+            .add(egui::Button::new(t!("key.close")).min_size(egui::vec2(160.0, CONTROL_HEIGHT)))
+            .on_hover_text(t!("key.close.hint"))
             .clicked()
         {
             self.close_dialog();
@@ -2139,17 +2085,9 @@ impl SpeechApp {
         const REMOVE: f32 = 104.0;
         const GAP: f32 = 10.0;
 
-        ui.heading("Dictionary");
+        ui.heading(t!("dict.heading"));
         ui.add_space(6.0);
-        ui.add(
-            egui::Label::new(
-                "Words listed here are swapped before the document is spoken — to fix how a \
-                 name is pronounced, or to replace a word with a gentler one. Matching ignores \
-                 capitals, and a word that started a sentence still starts one afterwards. \
-                 The file on disk is never changed.",
-            )
-            .wrap(),
-        );
+        ui.add(egui::Label::new(t!("dict.intro")).wrap());
         ui.add_space(10.0);
 
         let mut remove = None;
@@ -2160,9 +2098,9 @@ impl SpeechApp {
             // Left-aligned in a fixed-width cell, so each heading starts exactly
             // where the field below it starts.
             for (width, text) in [
-                (CELL, "Say this word"),
-                (CELL, "as this"),
-                (WHOLE, "Whole word"),
+                (CELL, t!("dict.column.from")),
+                (CELL, t!("dict.column.to")),
+                (WHOLE, t!("dict.column.whole")),
             ] {
                 ui.allocate_ui_with_layout(
                     egui::vec2(width, 18.0),
@@ -2182,30 +2120,29 @@ impl SpeechApp {
                         let from = ui.add_sized(
                             [CELL, CONTROL_HEIGHT],
                             egui::TextEdit::singleline(&mut rule.from)
-                                .hint_text("word in the document"),
+                                .hint_text(t!("dict.hint.from")),
                         );
                         let to = ui.add_sized(
                             [CELL, CONTROL_HEIGHT],
-                            egui::TextEdit::singleline(&mut rule.to)
-                                .hint_text("what to say instead"),
+                            egui::TextEdit::singleline(&mut rule.to).hint_text(t!("dict.hint.to")),
                         );
                         let whole = ui.add_sized(
                             [WHOLE, CONTROL_HEIGHT],
                             egui::Checkbox::without_text(&mut rule.whole_word),
                         );
-                        let whole = whole.on_hover_text(
-                            "On: only complete words match. Off: the letters match \
-                             anywhere, including inside longer words.",
-                        );
+                        let whole = whole.on_hover_text(t!("dict.whole.hint"));
                         // Named for a screen reader, which would otherwise hear
                         // a column of identical "Remove" buttons.
                         let named = if rule.from.trim().is_empty() {
-                            format!("Remove row {}", index + 1)
+                            t!("dict.remove.row", number = index + 1)
                         } else {
-                            format!("Remove “{}”", rule.from.trim())
+                            t!("dict.remove.word", word = rule.from.trim())
                         };
                         if ui
-                            .add_sized([REMOVE, CONTROL_HEIGHT], egui::Button::new("Remove"))
+                            .add_sized(
+                                [REMOVE, CONTROL_HEIGHT],
+                                egui::Button::new(t!("dict.remove")),
+                            )
                             .on_hover_text(named)
                             .clicked()
                         {
@@ -2219,12 +2156,12 @@ impl SpeechApp {
         if self.config.dictionary.is_empty() {
             let muted = crate::theme::palette(ui.visuals()).muted;
             ui.add_space(6.0);
-            ui.label(RichText::new("No replacements yet.").color(muted));
+            ui.label(RichText::new(t!("dict.empty")).color(muted));
         }
 
         ui.add_space(10.0);
         if ui
-            .add(egui::Button::new("Add Replacement").min_size(egui::vec2(240.0, CONTROL_HEIGHT)))
+            .add(egui::Button::new(t!("dict.add")).min_size(egui::vec2(240.0, CONTROL_HEIGHT)))
             .clicked()
         {
             self.config
@@ -2255,15 +2192,9 @@ impl SpeechApp {
     fn player_pane(&mut self, ui: &mut egui::Ui) {
         const HALF: f32 = (FORM_WIDTH - 10.0) / 2.0;
 
-        ui.heading("Audio player");
+        ui.heading(t!("player.heading"));
         ui.add_space(6.0);
-        ui.add(
-            egui::Label::new(
-                "Plays a spoken-word WAV or MP3 — one saved by this app, or any other. \
-                 Nothing is uploaded and the file on disk is never changed.",
-            )
-            .wrap(),
-        );
+        ui.add(egui::Label::new(t!("player.intro")).wrap());
         ui.add_space(10.0);
 
         // Declared out here so the buttons can be acted on after the borrow of
@@ -2273,15 +2204,12 @@ impl SpeechApp {
         ui.vertical(|ui| {
             ui.set_max_width(FORM_WIDTH);
 
-            let caption = Self::caption(ui, "Audio file");
+            let caption = Self::caption(ui, &t!("player.file.caption"));
             let choose = ui.add(
-                egui::Button::new("📂  Choose Audio File…")
+                egui::Button::new(t!("player.file.button"))
                     .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
             );
-            let choose = choose.on_hover_text(format!(
-                "{}  ·  A WAV or MP3 file. You can also drop one on this window.",
-                shortcut_text("{C}O")
-            ));
+            let choose = choose.on_hover_text(t!("player.file.hint"));
             let _ = caption.labelled_by(choose.id);
             self.take_focus(Field::AudioFile, &choose);
             if choose.clicked() {
@@ -2289,11 +2217,11 @@ impl SpeechApp {
             }
 
             let chosen = match &self.audio_file {
-                Some(path) => format!(
-                    "Chosen: {}",
-                    path.file_name().unwrap_or_default().to_string_lossy()
+                Some(path) => t!(
+                    "player.file.chosen",
+                    name = path.file_name().unwrap_or_default().to_string_lossy()
                 ),
-                None => "No audio file chosen yet.".to_string(),
+                None => t!("player.file.none"),
             };
             let line = ui.add(egui::Label::new(RichText::new(chosen)).wrap());
             if let Some(path) = &self.audio_file {
@@ -2312,18 +2240,14 @@ impl SpeechApp {
                 let button = ui
                     .add_enabled(
                         has_file && (!active || paused),
-                        egui::Button::new(RichText::new("▶  Play").size(16.0))
+                        egui::Button::new(RichText::new(t!("player.play")).size(16.0))
                             .min_size(egui::vec2(HALF, CONTROL_HEIGHT + 6.0)),
                     )
-                    .on_hover_text(format!(
-                        "{}  ·  {}",
-                        shortcut_text("{C}P"),
-                        if paused {
-                            "Carry on from where it was paused"
-                        } else {
-                            "Play the chosen file from the beginning"
-                        }
-                    ));
+                    .on_hover_text(if paused {
+                        t!("player.play.hint_resume")
+                    } else {
+                        t!("player.play.hint_start")
+                    });
                 // Choosing a file sends the keyboard here, so the next thing
                 // after picking is the one thing you came to do.
                 self.take_focus(Field::Play, &button);
@@ -2332,37 +2256,28 @@ impl SpeechApp {
                 pause = ui
                     .add_enabled(
                         active && !paused,
-                        egui::Button::new(RichText::new("⏸  Pause").size(16.0))
+                        egui::Button::new(RichText::new(t!("player.pause")).size(16.0))
                             .min_size(egui::vec2(HALF, CONTROL_HEIGHT + 6.0)),
                     )
-                    .on_hover_text(format!(
-                        "{}  ·  Hold the file where it is; Play carries on from there",
-                        shortcut_text("{C}P")
-                    ))
+                    .on_hover_text(t!("player.pause.hint"))
                     .clicked();
             });
             ui.horizontal(|ui| {
                 stop = ui
                     .add_enabled(
                         active,
-                        egui::Button::new(RichText::new("⏹  Stop").size(16.0))
+                        egui::Button::new(RichText::new(t!("player.stop")).size(16.0))
                             .min_size(egui::vec2(HALF, CONTROL_HEIGHT + 6.0)),
                     )
-                    .on_hover_text(format!(
-                        "{}  ·  Stop and return to the beginning",
-                        shortcut_text("{C}. or Esc")
-                    ))
+                    .on_hover_text(t!("player.stop.hint"))
                     .clicked();
                 back = ui
                     .add_enabled(
                         active,
-                        egui::Button::new(RichText::new("⏪  Back 10 Seconds").size(16.0))
+                        egui::Button::new(RichText::new(t!("player.back")).size(16.0))
                             .min_size(egui::vec2(HALF, CONTROL_HEIGHT + 6.0)),
                     )
-                    .on_hover_text(format!(
-                        "{}  ·  Rewind ten seconds, or to the start if there is less than that",
-                        shortcut_text("{C}R")
-                    ))
+                    .on_hover_text(t!("player.back.hint"))
                     .clicked();
             });
 
@@ -2391,36 +2306,36 @@ impl SpeechApp {
         let Some(playback) = &self.playback else {
             let muted = crate::theme::palette(ui.visuals()).muted;
             let text = if self.audio_file.is_some() {
-                "Not playing. Press Play to start."
+                t!("player.idle_ready")
             } else {
-                "Not playing."
+                t!("player.idle")
             };
             ui.label(RichText::new(text).color(muted));
             return;
         };
         if !self.playing_audio_file {
             let muted = crate::theme::palette(ui.visuals()).muted;
-            ui.label(
-                RichText::new("A document is being read aloud; playing a file will stop it.")
-                    .color(muted),
-            );
+            ui.label(RichText::new(t!("player.reading_instead")).color(muted));
             return;
         }
 
         let position = playback.position();
         let duration = playback.duration();
-        let state = if playback.is_paused() {
-            "Paused at"
-        } else {
-            "Playing —"
-        };
-        let text = match duration {
-            Some(total) => format!(
-                "{state} {} of {}",
-                audio::spoken_time(position),
-                audio::spoken_time(total)
+        let paused = playback.is_paused();
+        let at = audio::spoken_time(position);
+        let text = match (duration, paused) {
+            (Some(total), true) => t!(
+                "player.position.paused_of",
+                at = at,
+                total = audio::spoken_time(total)
             ),
-            None => format!("{state} {}", audio::spoken_time(position)),
+            (Some(total), false) => t!(
+                "player.position.playing_of",
+                at = at,
+                total = audio::spoken_time(total)
+            ),
+            (None, true) => t!("player.position.paused", at = at),
+            (None, false) => t!("player.position.playing", at = at),
         };
         ui.label(RichText::new(text).size(15.0));
 
@@ -2432,7 +2347,11 @@ impl SpeechApp {
         // worse than no countdown.
         if let Some(total) = duration {
             let left = audio::spoken_time(audio::time_left(position, total));
-            ui.label(RichText::new(format!("{left} left")).size(17.0).strong());
+            ui.label(
+                RichText::new(t!("player.position.left", left = left))
+                    .size(17.0)
+                    .strong(),
+            );
         }
 
         if let Some(total) = duration.filter(|d| !d.is_zero()) {
@@ -2446,16 +2365,9 @@ impl SpeechApp {
     }
 
     fn shortcuts_pane(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Keyboard Shortcuts");
+        ui.heading(t!("shortcuts.heading"));
         ui.add_space(6.0);
-        ui.add(
-            egui::Label::new(
-                "Every part of this app can be operated without a mouse. Tab moves forward \
-                 through the controls, Shift+Tab moves back, and the control with focus is \
-                 drawn with a heavy outline.",
-            )
-            .wrap(),
-        );
+        ui.add(egui::Label::new(t!("shortcuts.intro")).wrap());
         ui.add_space(12.0);
 
         egui::Grid::new("shortcuts")
@@ -2463,40 +2375,37 @@ impl SpeechApp {
             .spacing([24.0, 10.0])
             .striped(true)
             .show(ui, |ui| {
-                for (keys, what) in SHORTCUTS {
+                for name in SHORTCUTS {
                     // Not monospaced: in a monospace face ⌘O reads as ⌘0.
-                    ui.label(shortcut_text(keys));
-                    ui.label(*what);
+                    ui.label(shortcut_text(name, "keys"));
+                    ui.label(shortcut_text(name, "what"));
                     ui.end_row();
                 }
             });
     }
 
     fn settings_pane(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Settings");
+        ui.heading(t!("settings.heading"));
         ui.add_space(6.0);
 
-        let caption = ui.label("ElevenLabs model");
+        let mut edited = self.language_setting(ui);
+
+        ui.add_space(12.0);
+        ui.separator();
+        let caption = ui.label(t!("settings.model.caption"));
         let model = ui.add(
             egui::TextEdit::singleline(&mut self.config.elevenlabs_model_id)
                 .desired_width(FORM_WIDTH),
         );
         let _ = caption.labelled_by(model.id);
-        let mut edited = model.changed();
-        model.on_hover_text("For example: eleven_multilingual_v2, eleven_turbo_v2_5");
+        edited |= model.changed();
+        model.on_hover_text(t!("settings.model.hint"));
 
         ui.add_space(12.0);
         ui.separator();
         let sounds = ui
-            .checkbox(
-                &mut self.config.sound_effects,
-                "Play a sound when an action starts, finishes or fails",
-            )
-            .on_hover_text(
-                "A short tone as the work begins, a chime for success and a lower tone for \
-                 a problem, so you do not have to watch the status line to know what \
-                 happened.",
-            );
+            .checkbox(&mut self.config.sound_effects, t!("settings.sounds"))
+            .on_hover_text(t!("settings.sounds.hint"));
         if sounds.changed() {
             edited = true;
             // The confirmation of turning them on is the sound itself, which
@@ -2512,16 +2421,9 @@ impl SpeechApp {
             let tick = ui
                 .add_enabled(
                     self.config.sound_effects,
-                    egui::Checkbox::new(
-                        &mut self.config.progress_tick,
-                        "Keep ticking while it works",
-                    ),
+                    egui::Checkbox::new(&mut self.config.progress_tick, t!("settings.tick")),
                 )
-                .on_hover_text(
-                    "A quiet sound every fifteen seconds while something is running, so a \
-                     long job can be told from a stuck one without watching the screen. It \
-                     never plays over a document being read aloud.",
-                );
+                .on_hover_text(t!("settings.tick.hint"));
             if tick.changed() {
                 edited = true;
                 // Same reasoning as the sound above: the answer to "what does
@@ -2535,50 +2437,35 @@ impl SpeechApp {
         if cfg!(target_os = "windows") {
             ui.add_space(12.0);
             ui.separator();
-            ui.add(
-                egui::Label::new(
-                    "Right-click a text, Word or CSV file in Explorer to speak it straight to \
-                     an audio file, using whatever engine and voice are set on the Read a File \
-                     page. Enabling this copies the app into your settings folder, so the \
-                     right-click entry keeps working even if this copy is deleted later.",
-                )
-                .wrap(),
-            );
+            ui.add(egui::Label::new(t!("settings.context_menu.intro")).wrap());
             ui.add_space(6.0);
 
             let muted = crate::theme::palette(ui.visuals()).muted;
             let status = if self.context_menu_installed {
                 match crate::context_menu::install_path() {
-                    Some(path) => {
-                        format!("Installed — the app is copied to {}.", path.display())
-                    }
-                    None => "Installed.".to_string(),
+                    Some(path) => t!("settings.context_menu.installed_at", path = path.display()),
+                    None => t!("settings.context_menu.installed"),
                 }
             } else {
-                "Not installed.".to_string()
+                t!("settings.context_menu.not_installed")
             };
             ui.add(egui::Label::new(RichText::new(status).color(muted)).wrap());
             ui.add_space(6.0);
 
             let label = if self.context_menu_installed {
-                "Disable Right-Click Menu"
+                t!("settings.context_menu.disable")
             } else {
-                "Enable Right-Click Menu"
+                t!("settings.context_menu.enable")
             };
             if ui
                 .add(egui::Button::new(label).min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)))
                 .clicked()
             {
                 let outcome = if self.context_menu_installed {
-                    crate::context_menu::uninstall()
-                        .map(|()| "Right-click menu disabled.".to_string())
+                    crate::context_menu::uninstall().map(|()| t!("settings.context_menu.disabled"))
                 } else {
-                    crate::context_menu::install().map(|path| {
-                        format!(
-                            "Right-click menu enabled — the app is copied to {}.",
-                            path.display()
-                        )
-                    })
+                    crate::context_menu::install()
+                        .map(|path| t!("settings.context_menu.enabled", path = path.display()))
                 };
                 match outcome {
                     Ok(message) => {
@@ -2592,13 +2479,7 @@ impl SpeechApp {
 
         ui.add_space(12.0);
         ui.separator();
-        ui.add(
-            egui::Label::new(
-                "Images are read by a vision model running on this computer through Ollama. \
-                 Nothing is uploaded anywhere.",
-            )
-            .wrap(),
-        );
+        ui.add(egui::Label::new(t!("settings.vision.intro")).wrap());
         ui.add_space(6.0);
 
         // A dropdown rather than a text field, because the name has to match a
@@ -2609,22 +2490,25 @@ impl SpeechApp {
         let listed = crate::config::VISION_MODELS
             .iter()
             .find(|(id, _)| *id == self.config.ollama_model);
-        let caption = ui.label("Vision model");
+        let caption = ui.label(t!("settings.vision.caption"));
         let mut chosen = self.config.ollama_model.clone();
         let vision = egui::ComboBox::from_id_salt("vision_model")
             .width(FORM_WIDTH)
             .selected_text(match listed {
                 Some((id, _)) => (*id).to_string(),
-                None => format!("Other: {}", self.config.ollama_model),
+                None => t!(
+                    "settings.vision.other_selected",
+                    model = self.config.ollama_model
+                ),
             })
             .show_ui(ui, |ui| {
                 for (id, description) in crate::config::VISION_MODELS {
                     ui.selectable_value(&mut chosen, (*id).to_string(), *id)
-                        .on_hover_text(*description);
+                        .on_hover_text(crate::config::vision_model_description(description));
                 }
                 if ui
-                    .selectable_label(listed.is_none(), "Other — type a model name")
-                    .on_hover_text("Any model in the Ollama library that can read images.")
+                    .selectable_label(listed.is_none(), t!("settings.vision.other"))
+                    .on_hover_text(t!("settings.vision.other.hint"))
                     .clicked()
                     && listed.is_some()
                 {
@@ -2643,13 +2527,14 @@ impl SpeechApp {
         let muted = crate::theme::palette(ui.visuals()).muted;
         match listed {
             Some((_, description)) => {
-                ui.add(egui::Label::new(RichText::new(*description).color(muted)).wrap());
+                let description = crate::config::vision_model_description(description);
+                ui.add(egui::Label::new(RichText::new(description).color(muted)).wrap());
             }
             None => {
-                let caption = ui.label("Model name");
+                let caption = ui.label(t!("settings.vision.name.caption"));
                 let typed = ui.add(
                     egui::TextEdit::singleline(&mut self.config.ollama_model)
-                        .hint_text("for example: llava:13b")
+                        .hint_text(t!("settings.vision.name.hint"))
                         .desired_width(FORM_WIDTH),
                 );
                 let _ = caption.labelled_by(typed.id);
@@ -2657,15 +2542,14 @@ impl SpeechApp {
                 if crate::config::is_retired(&self.config.ollama_model) {
                     ui.colored_label(
                         crate::theme::palette(ui.visuals()).bad,
-                        "Current versions of Ollama cannot run this model. Choose one of the \
-                         suggested ones instead.",
+                        t!("settings.vision.retired"),
                     );
                 }
             }
         }
 
         ui.add_space(6.0);
-        let caption = ui.label("Prompt sent with the image");
+        let caption = ui.label(t!("settings.vision.prompt.caption"));
         let prompt = ui.add(
             egui::TextEdit::multiline(&mut self.config.ollama_prompt)
                 .desired_rows(4)
@@ -2679,8 +2563,8 @@ impl SpeechApp {
         if edited {
             self.config_dirty = true;
         }
-        if ui.button("Reset Prompt To Default").clicked() {
-            self.config.ollama_prompt = DEFAULT_VISION_PROMPT.to_string();
+        if ui.button(t!("settings.vision.prompt.reset")).clicked() {
+            self.config.ollama_prompt = crate::config::default_vision_prompt();
             self.config_dirty = true;
         }
 
@@ -2690,18 +2574,11 @@ impl SpeechApp {
 
         ui.add_space(12.0);
         ui.separator();
-        ui.add(
-            egui::Label::new(
-                "Puts every setting on this page — and the engine, voice and action on the \
-                 Read a File page — back to how the app arrives. Your dictionary and your \
-                 API key are not touched.",
-            )
-            .wrap(),
-        );
+        ui.add(egui::Label::new(t!("settings.reset.intro")).wrap());
         ui.add_space(8.0);
         if ui
             .add(
-                egui::Button::new("Reset All Settings To Defaults")
+                egui::Button::new(t!("settings.reset.button"))
                     .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
             )
             .clicked()
@@ -2711,22 +2588,14 @@ impl SpeechApp {
 
         ui.add_space(12.0);
         ui.separator();
-        ui.add(
-            egui::Label::new(
-                "If something goes wrong, this copies a record of what the app did this \
-                 session — the files it read, the models it called and what they answered — \
-                 ready to paste into a bug report. It contains no part of your documents and \
-                 not your API key.",
-            )
-            .wrap(),
-        );
+        ui.add(egui::Label::new(t!("settings.diagnostics.intro")).wrap());
         ui.add_space(8.0);
         // Copied to the clipboard rather than revealed in a file manager: the
         // people this app is built for should not have to go and find a file
         // on disk to report a problem with it.
         if ui
             .add(
-                egui::Button::new("Copy Diagnostics To Clipboard")
+                egui::Button::new(t!("settings.diagnostics.button"))
                     .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
             )
             .clicked()
@@ -2734,10 +2603,7 @@ impl SpeechApp {
             let diagnostics = crate::log::contents();
             let lines = diagnostics.lines().count();
             ui.ctx().copy_text(diagnostics);
-            self.set_status(
-                format!("Diagnostics copied — {lines} lines. Paste them into your report."),
-                Tone::Success,
-            );
+            self.set_status(tn!("settings.diagnostics.copied", lines), Tone::Success);
         }
 
         ui.add_space(12.0);
@@ -2746,7 +2612,7 @@ impl SpeechApp {
         if let Some(path) = Config::path() {
             ui.add(
                 egui::Label::new(
-                    RichText::new(format!("Settings file: {}", path.display())).color(muted),
+                    RichText::new(t!("settings.file.config", path = path.display())).color(muted),
                 )
                 .wrap(),
             );
@@ -2754,11 +2620,197 @@ impl SpeechApp {
         if let Some(path) = crate::log::path() {
             ui.add(
                 egui::Label::new(
-                    RichText::new(format!("Log file: {}", path.display())).color(muted),
+                    RichText::new(t!("settings.file.log", path = path.display())).color(muted),
                 )
                 .wrap(),
             );
         }
+    }
+
+    /// The language picker, and the folder a translator works in.
+    ///
+    /// First on the page, deliberately. Someone who has opened the app in a
+    /// language they cannot read needs one control, and the only thing they can
+    /// rely on to find it is where it sits — not what it says.
+    ///
+    /// Returns whether anything changed.
+    fn language_setting(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut edited = false;
+        let caption = ui.label(t!("settings.language.caption"));
+
+        // Each language is named in its own language, since somebody looking
+        // for theirs is looking for the word they call it by, not ours.
+        let available = i18n::available();
+        let selected = if self.config.language == AUTO_LANGUAGE {
+            t!("settings.language.system")
+        } else {
+            available
+                .iter()
+                .find(|(code, _)| *code == self.config.language)
+                .map(|(_, name)| name.clone())
+                .unwrap_or_else(|| self.config.language.clone())
+        };
+
+        let mut chosen = self.config.language.clone();
+        let combo = egui::ComboBox::from_id_salt("language")
+            .width(FORM_WIDTH)
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut chosen,
+                    AUTO_LANGUAGE.to_string(),
+                    t!("settings.language.system"),
+                );
+                ui.separator();
+                for (code, name) in &available {
+                    ui.selectable_value(&mut chosen, code.clone(), name);
+                }
+            })
+            .response;
+        let combo = combo.on_hover_text(t!("settings.language.hint"));
+        let _ = caption.labelled_by(combo.id);
+
+        if chosen != self.config.language {
+            self.config.language = chosen;
+            edited = true;
+            self.switch_language();
+        }
+
+        // Whatever the current file could not be read as, said plainly: a
+        // translator's first draft always has a stray quote in it somewhere,
+        // and hunting for it without a line number is miserable.
+        let problems = i18n::current_problems();
+        if !problems.is_empty() {
+            let bad = crate::theme::palette(ui.visuals()).bad;
+            ui.add_space(4.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(tn!("settings.language.problem_count", problems.len()))
+                        .color(bad),
+                )
+                .wrap(),
+            );
+            for problem in problems.iter().take(10) {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(t!(
+                            "settings.language.problem",
+                            line = problem.line,
+                            what = problem.what
+                        ))
+                        .color(bad),
+                    )
+                    .wrap(),
+                );
+            }
+        }
+
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(t!("settings.language.help")).wrap());
+        ui.add_space(6.0);
+
+        if let Some(dir) = i18n::languages_dir() {
+            let muted = crate::theme::palette(ui.visuals()).muted;
+            ui.add(
+                egui::Label::new(
+                    RichText::new(t!("settings.language.folder", path = dir.display()))
+                        .color(muted),
+                )
+                .wrap(),
+            );
+            ui.add_space(6.0);
+            if ui
+                .add(
+                    egui::Button::new(t!("settings.language.open_folder"))
+                        .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
+                )
+                .clicked()
+            {
+                // Created on the way, so the button never opens nothing —
+                // "put a file in this folder" is no use if the folder is only
+                // made once a file is already in it.
+                if let Err(error) = std::fs::create_dir_all(&dir) {
+                    crate::log::line(format!(
+                        "languages: could not create {} — {error}",
+                        dir.display()
+                    ));
+                }
+                ui.ctx()
+                    .open_url(egui::OpenUrl::same_tab(format!("file://{}", dir.display())));
+            }
+        }
+
+        if ui
+            .add(
+                egui::Button::new(t!("settings.language.reload"))
+                    .min_size(egui::vec2(FORM_WIDTH, CONTROL_HEIGHT)),
+            )
+            .clicked()
+        {
+            i18n::reload();
+            let name = self.language_name();
+            self.set_status(t!("settings.language.reloaded", name = name), Tone::Success);
+        }
+
+        edited
+    }
+
+    /// Puts the newly chosen language into use, and moves the prompts with it.
+    fn switch_language(&mut self) {
+        i18n::apply_setting(&self.config.language);
+        let kept = self.retranslate_prompts();
+        let name = self.language_name();
+        let message = if kept {
+            t!("settings.language.prompts_kept", name = name)
+        } else {
+            t!("settings.language.changed", name = name)
+        };
+        self.set_status(message, Tone::Success);
+    }
+
+    /// The language in use, named in itself.
+    fn language_name(&self) -> String {
+        let code = i18n::current_code();
+        i18n::available()
+            .into_iter()
+            .find(|(candidate, _)| *candidate == code)
+            .map(|(_, name)| name)
+            .unwrap_or(code)
+    }
+
+    /// Moves the three model prompts to the new language, leaving anything the
+    /// user has written themselves exactly as they wrote it.
+    ///
+    /// Returns true if at least one prompt was left alone, which is worth
+    /// saying out loud: otherwise a French interface quietly goes on asking the
+    /// model in English and nothing on screen explains why.
+    fn retranslate_prompts(&mut self) -> bool {
+        let mut kept = false;
+        for (key, current, fresh) in [
+            (
+                "prompt.vision",
+                &mut self.config.ollama_prompt,
+                crate::config::default_vision_prompt(),
+            ),
+            (
+                "prompt.frame",
+                &mut self.config.video_frame_prompt,
+                crate::config::default_frame_prompt(),
+            ),
+            (
+                "prompt.narration",
+                &mut self.config.video_narration_prompt,
+                crate::config::default_narration_prompt(),
+            ),
+        ] {
+            if i18n::is_untouched_prompt(key, current) {
+                *current = fresh;
+            } else {
+                kept = true;
+            }
+        }
+        self.config_dirty = true;
+        kept
     }
 
     /// The video half of the Settings pane. Returns whether anything changed.
@@ -2772,51 +2824,31 @@ impl SpeechApp {
 
         ui.add_space(12.0);
         ui.separator();
-        ui.add(
-            egui::Label::new(
-                "Video is described by taking still frames out of it and reading each one with \
-                 the same vision model. Nothing is uploaded anywhere — but every frame is a \
-                 separate call to the model, so these settings decide how long a video takes \
-                 as much as how thorough it is.",
-            )
-            .wrap(),
-        );
+        ui.add(egui::Label::new(t!("settings.video.intro")).wrap());
         ui.add_space(6.0);
 
         let narrate = ui
-            .checkbox(
-                &mut self.config.video_narrate,
-                "Join the frames into a single description",
-            )
-            .on_hover_text(
-                "On, a model rewrites the frame descriptions as one continuous piece of \
-                 narration. Off, you get each frame described in turn under the time it \
-                 appears, which is slower to listen to but says exactly where everything \
-                 came from.",
-            );
+            .checkbox(&mut self.config.video_narrate, t!("settings.video.narrate"))
+            .on_hover_text(t!("settings.video.narrate.hint"));
         edited |= narrate.changed();
 
         if self.config.video_narrate {
-            let caption = ui.label("Model that writes the description");
+            let caption = ui.label(t!("settings.video.narrator.caption"));
             let narrator = ui.add(
                 egui::TextEdit::singleline(&mut self.config.narration_model)
-                    .hint_text(format!(
-                        "empty — use {}, the vision model",
-                        self.config.ollama_model
+                    .hint_text(t!(
+                        "settings.video.narrator.placeholder",
+                        model = self.config.ollama_model
                     ))
                     .desired_width(FORM_WIDTH),
             );
-            let narrator = narrator.on_hover_text(
-                "Left empty, the vision model writes it, which needs no further download. \
-                 A text model named here will usually write better prose, at the cost of \
-                 downloading it.",
-            );
+            let narrator = narrator.on_hover_text(t!("settings.video.narrator.hint"));
             let _ = caption.labelled_by(narrator.id);
             edited |= narrator.changed();
         }
 
         ui.add_space(6.0);
-        let caption = ui.label("How much of the picture must change for a new frame");
+        let caption = ui.label(t!("settings.video.scene.caption"));
         ui.spacing_mut().slider_width = FORM_WIDTH;
         let scene = ui.add_sized(
             [FORM_WIDTH, CONTROL_HEIGHT],
@@ -2824,10 +2856,7 @@ impl SpeechApp {
                 .show_value(false)
                 .clamping(egui::SliderClamping::Always),
         );
-        let scene = scene.on_hover_text(
-            "Low takes a frame whenever the camera moves, which describes more and takes \
-             longer. High takes one only at a clear cut between shots.",
-        );
+        let scene = scene.on_hover_text(t!("settings.video.scene.hint"));
         let _ = caption.labelled_by(scene.id);
         edited |= scene.changed();
         ui.label(
@@ -2836,29 +2865,27 @@ impl SpeechApp {
         );
 
         ui.add_space(6.0);
-        let caption = ui.label("Take a frame anyway after this long");
+        let caption = ui.label(t!("settings.video.interval.caption"));
         let interval = ui.add_sized(
             [FORM_WIDTH, CONTROL_HEIGHT],
             egui::Slider::new(&mut self.config.video_interval_secs, 5..=300)
                 .show_value(false)
                 .clamping(egui::SliderClamping::Always),
         );
-        let interval = interval.on_hover_text(
-            "A long shot that never cuts would otherwise be described by its opening \
-             frame alone.",
-        );
+        let interval = interval.on_hover_text(t!("settings.video.interval.hint"));
         let _ = caption.labelled_by(interval.id);
         edited |= interval.changed();
         ui.label(
-            RichText::new(format!(
-                "Every {}",
-                audio::spoken_time(Duration::from_secs(self.config.video_interval_secs as u64))
+            RichText::new(t!(
+                "settings.video.interval.value",
+                time =
+                    audio::spoken_time(Duration::from_secs(self.config.video_interval_secs as u64))
             ))
             .color(crate::theme::palette(ui.visuals()).muted),
         );
 
         ui.add_space(6.0);
-        let caption = ui.label("Most frames to describe from one video");
+        let caption = ui.label(t!("settings.video.max.caption"));
         let cap = ui.add_sized(
             [FORM_WIDTH, CONTROL_HEIGHT],
             egui::Slider::new(
@@ -2868,17 +2895,14 @@ impl SpeechApp {
             .show_value(false)
             .clamping(egui::SliderClamping::Always),
         );
-        let cap = cap.on_hover_text(
-            "The stop that keeps a long or busy video from taking the rest of the day. \
-             Frames past this are not described.",
-        );
+        let cap = cap.on_hover_text(t!("settings.video.max.hint"));
         let _ = caption.labelled_by(cap.id);
         edited |= cap.changed();
         ui.label(
-            RichText::new(format!(
-                "At most {} frames — around {} on a computer with no graphics card",
-                self.config.video_max_frames,
-                audio::spoken_time(Duration::from_secs(
+            RichText::new(t!(
+                "settings.video.max.value",
+                frames = self.config.video_max_frames,
+                time = audio::spoken_time(Duration::from_secs(
                     self.config.video_max_frames as u64 * SECONDS_PER_FRAME_ESTIMATE
                 ))
             ))
@@ -2886,7 +2910,7 @@ impl SpeechApp {
         );
 
         ui.add_space(6.0);
-        let caption = ui.label("Prompt sent with each frame");
+        let caption = ui.label(t!("settings.video.frame_prompt.caption"));
         let frame_prompt = ui.add(
             egui::TextEdit::multiline(&mut self.config.video_frame_prompt)
                 .desired_rows(3)
@@ -2897,7 +2921,7 @@ impl SpeechApp {
 
         if self.config.video_narrate {
             ui.add_space(6.0);
-            let caption = ui.label("Prompt that joins the frames together");
+            let caption = ui.label(t!("settings.video.narration_prompt.caption"));
             let narration_prompt = ui.add(
                 egui::TextEdit::multiline(&mut self.config.video_narration_prompt)
                     .desired_rows(3)
@@ -2907,10 +2931,9 @@ impl SpeechApp {
             edited |= narration_prompt.changed();
         }
 
-        if ui.button("Reset Video Prompts To Defaults").clicked() {
-            self.config.video_frame_prompt = crate::config::DEFAULT_FRAME_PROMPT.to_string();
-            self.config.video_narration_prompt =
-                crate::config::DEFAULT_NARRATION_PROMPT.to_string();
+        if ui.button(t!("settings.video.prompt.reset")).clicked() {
+            self.config.video_frame_prompt = crate::config::default_frame_prompt();
+            self.config.video_narration_prompt = crate::config::default_narration_prompt();
             self.config_dirty = true;
         }
 
@@ -2931,37 +2954,29 @@ impl SpeechApp {
 
         egui::Modal::new(egui::Id::new("confirm_reset")).show(ctx, |ui| {
             ui.set_max_width(560.0);
-            ui.heading("Reset Settings");
+            ui.heading(t!("reset.heading"));
             ui.add_space(6.0);
-            ui.add(
-                egui::Label::new(
-                    "This puts the speech engine, voice, speaking rate, action, audio format, \
-                     vision model and image prompt back to their original values.",
-                )
-                .wrap(),
-            );
+            ui.add(egui::Label::new(t!("reset.what")).wrap());
             ui.add_space(6.0);
             // Said plainly, because "reset" is exactly the word that makes
             // someone worry about the list of replacements they built up.
-            ui.add(
-                egui::Label::new(
-                    "Your dictionary is kept, and your ElevenLabs API key is kept. This cannot \
-                     be undone.",
-                )
-                .wrap(),
-            );
+            ui.add(egui::Label::new(t!("reset.kept")).wrap());
             ui.add_space(10.0);
 
             if ui
                 .add(
-                    egui::Button::new("Reset Settings").min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+                    egui::Button::new(t!("reset.confirm"))
+                        .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                 )
                 .clicked()
             {
                 decision = Some(true);
             }
             if ui
-                .add(egui::Button::new("Cancel").min_size(egui::vec2(240.0, CONTROL_HEIGHT)))
+                .add(
+                    egui::Button::new(t!("reset.cancel"))
+                        .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+                )
                 .clicked()
             {
                 decision = Some(false);
@@ -2973,7 +2988,7 @@ impl SpeechApp {
         };
         self.confirm_reset = false;
         if !confirmed {
-            self.set_status("Settings left as they were.", Tone::Info);
+            self.set_status(t!("status.settings_unchanged"), Tone::Info);
             return;
         }
 
@@ -2983,10 +2998,7 @@ impl SpeechApp {
         self.cached = None;
         self.config_dirty = true;
         crate::log::line("settings reset to defaults");
-        self.set_status(
-            "Settings reset. Your dictionary and API key were kept.",
-            Tone::Success,
-        );
+        self.set_status(t!("status.settings_reset"), Tone::Success);
     }
 
     fn prompt_dialog(&mut self, ctx: &egui::Context) {
@@ -2999,9 +3011,9 @@ impl SpeechApp {
         // The dialog is about whatever the user just opened, which is the only
         // reason any of it is being asked.
         let heading = if self.file_kind == Some(FileKind::Video) {
-            "Reading Video"
+            t!("install.heading.video")
         } else {
-            "Reading Images"
+            t!("install.heading.image")
         };
 
         egui::Modal::new(egui::Id::new("ollama_prompt")).show(ctx, |ui| {
@@ -3010,21 +3022,17 @@ impl SpeechApp {
             ui.add_space(6.0);
             match prompt {
                 Prompt::InstallOllama => {
-                    ui.add(
-                        egui::Label::new(
-                            "Reading text out of an image needs Ollama, which runs a vision \
-                         model on this computer. It is not installed yet.",
-                        )
-                        .wrap(),
-                    );
+                    ui.add(egui::Label::new(t!("install.ollama.what")).wrap());
                     ui.add_space(8.0);
                     if let Some(installer) = crate::ollama::install_command() {
-                        ui.label(RichText::new(format!("This runs: {installer}")).monospace());
+                        ui.label(
+                            RichText::new(t!("install.runs", command = installer)).monospace(),
+                        );
                         ui.add_space(8.0);
                         if ui
                             .add_enabled(
                                 !busy,
-                                egui::Button::new("Install Ollama")
+                                egui::Button::new(t!("install.ollama.button"))
                                     .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                             )
                             .clicked()
@@ -3032,14 +3040,17 @@ impl SpeechApp {
                             decision = Some(Some(Job::InstallOllama));
                         }
                     } else {
-                        ui.add(egui::Label::new(crate::ollama::MANUAL_INSTALL_ADVICE).wrap());
-                        ui.hyperlink_to("Download Ollama", "https://ollama.com/download");
+                        ui.add(egui::Label::new(crate::ollama::manual_install_advice()).wrap());
+                        ui.hyperlink_to(
+                            t!("install.ollama.download"),
+                            "https://ollama.com/download",
+                        );
                         if cfg!(target_os = "macos") {
                             ui.add_space(8.0);
                             ui.label(
-                                RichText::new(format!(
-                                    "This asks for your Mac's password, then runs: {}",
-                                    crate::homebrew::INSTALL_COMMAND
+                                RichText::new(t!(
+                                    "install.homebrew.runs",
+                                    command = crate::homebrew::INSTALL_COMMAND
                                 ))
                                 .monospace(),
                             );
@@ -3047,7 +3058,7 @@ impl SpeechApp {
                             if ui
                                 .add_enabled(
                                     !busy,
-                                    egui::Button::new("Install Homebrew")
+                                    egui::Button::new(t!("install.homebrew.button"))
                                         .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                                 )
                                 .clicked()
@@ -3059,7 +3070,7 @@ impl SpeechApp {
                     }
                     if ui
                         .add(
-                            egui::Button::new("Not Now")
+                            egui::Button::new(t!("install.not_now"))
                                 .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                         )
                         .clicked()
@@ -3068,21 +3079,17 @@ impl SpeechApp {
                     }
                 }
                 Prompt::InstallFfmpeg => {
-                    ui.add(
-                        egui::Label::new(
-                            "Describing a video means taking still frames out of it first, \
-                             which needs ffmpeg. It is not installed yet.",
-                        )
-                        .wrap(),
-                    );
+                    ui.add(egui::Label::new(t!("install.ffmpeg.what")).wrap());
                     ui.add_space(8.0);
                     if let Some(installer) = crate::ffmpeg::install_command() {
-                        ui.label(RichText::new(format!("This runs: {installer}")).monospace());
+                        ui.label(
+                            RichText::new(t!("install.runs", command = installer)).monospace(),
+                        );
                         ui.add_space(8.0);
                         if ui
                             .add_enabled(
                                 !busy,
-                                egui::Button::new("Install ffmpeg")
+                                egui::Button::new(t!("install.ffmpeg.button"))
                                     .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                             )
                             .clicked()
@@ -3090,14 +3097,14 @@ impl SpeechApp {
                             decision = Some(Some(Job::InstallFfmpeg));
                         }
                     } else {
-                        ui.add(egui::Label::new(crate::ffmpeg::MANUAL_INSTALL_ADVICE).wrap());
-                        ui.hyperlink_to("Download ffmpeg", crate::ffmpeg::DOWNLOAD_URL);
+                        ui.add(egui::Label::new(crate::ffmpeg::manual_install_advice()).wrap());
+                        ui.hyperlink_to(t!("install.ffmpeg.download"), crate::ffmpeg::DOWNLOAD_URL);
                         if cfg!(target_os = "macos") {
                             ui.add_space(8.0);
                             ui.label(
-                                RichText::new(format!(
-                                    "This asks for your Mac's password, then runs: {}",
-                                    crate::homebrew::INSTALL_COMMAND
+                                RichText::new(t!(
+                                    "install.homebrew.runs",
+                                    command = crate::homebrew::INSTALL_COMMAND
                                 ))
                                 .monospace(),
                             );
@@ -3105,7 +3112,7 @@ impl SpeechApp {
                             if ui
                                 .add_enabled(
                                     !busy,
-                                    egui::Button::new("Install Homebrew")
+                                    egui::Button::new(t!("install.homebrew.button"))
                                         .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                                 )
                                 .clicked()
@@ -3117,7 +3124,7 @@ impl SpeechApp {
                     }
                     if ui
                         .add(
-                            egui::Button::new("Not Now")
+                            egui::Button::new(t!("install.not_now"))
                                 .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                         )
                         .clicked()
@@ -3126,19 +3133,12 @@ impl SpeechApp {
                     }
                 }
                 Prompt::PullModel(model) => {
-                    ui.add(
-                        egui::Label::new(format!(
-                            "Ollama is installed, but the vision model “{model}” has not been \
-                         downloaded yet. It is typically several gigabytes and only needs \
-                         downloading once."
-                        ))
-                        .wrap(),
-                    );
+                    ui.add(egui::Label::new(t!("install.model.what", model = model)).wrap());
                     ui.add_space(8.0);
                     if ui
                         .add_enabled(
                             !busy,
-                            egui::Button::new(format!("Download {model}"))
+                            egui::Button::new(t!("install.model.button", model = model))
                                 .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                         )
                         .clicked()
@@ -3147,7 +3147,7 @@ impl SpeechApp {
                     }
                     if ui
                         .add(
-                            egui::Button::new("Not Now")
+                            egui::Button::new(t!("install.not_now"))
                                 .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                         )
                         .clicked()
@@ -3184,9 +3184,9 @@ impl SpeechApp {
             }
             None => {
                 let what = if self.file_kind == Some(FileKind::Video) {
-                    "Video not read."
+                    t!("status.video_skipped")
                 } else {
-                    "Image not read."
+                    t!("status.image_skipped")
                 };
                 self.deferred = None;
                 self.set_status(what, Tone::Info);
@@ -3204,7 +3204,7 @@ impl SpeechApp {
 
         egui::Modal::new(egui::Id::new("update_available")).show(ctx, |ui| {
             ui.set_max_width(560.0);
-            ui.heading(format!("Version {} is available", available.version));
+            ui.heading(t!("update.heading", version = available.version));
             ui.add_space(6.0);
             egui::ScrollArea::vertical()
                 .max_height(280.0)
@@ -3215,7 +3215,7 @@ impl SpeechApp {
 
             if ui
                 .add(
-                    egui::Button::new("Download Release")
+                    egui::Button::new(t!("update.download"))
                         .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
                 )
                 .clicked()
@@ -3223,7 +3223,10 @@ impl SpeechApp {
                 decision = Some(true);
             }
             if ui
-                .add(egui::Button::new("Not Right Now").min_size(egui::vec2(240.0, CONTROL_HEIGHT)))
+                .add(
+                    egui::Button::new(t!("update.not_now"))
+                        .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+                )
                 .clicked()
             {
                 decision = Some(false);
@@ -3252,15 +3255,16 @@ fn is_playable(path: &Path) -> bool {
         })
 }
 
-const READY_HINT: &str = "Choose a .txt, .docx, .csv or image file, then press Apply. \
-                          Press F1 for keyboard shortcuts.";
-
-const DEFAULT_VOICE_LABEL: &str = "This computer's default voice";
-
-#[cfg(target_os = "windows")]
-const SYSTEM_VOICE_NOTE: &str = "The voices built into Windows. No account needed.";
-#[cfg(not(target_os = "windows"))]
-const SYSTEM_VOICE_NOTE: &str = "The voices built into macOS. No account needed.";
+/// Which platform's voices the system engine offers. Two entries rather than
+/// one with a `{platform}` in it: a translator should not have to guess whether
+/// their language inflects around the name of an operating system.
+fn system_voice_note() -> String {
+    if cfg!(target_os = "windows") {
+        t!("read.engine.system_note_windows")
+    } else {
+        t!("read.engine.system_note_macos")
+    }
+}
 
 impl eframe::App for SpeechApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -3286,7 +3290,7 @@ impl eframe::App for SpeechApp {
 
         egui::Panel::top(egui::Id::new("header")).show(ui, |ui| {
             ui.add_space(8.0);
-            ui.heading("Speech Output Engine");
+            ui.heading(t!("app.title"));
             ui.add_space(8.0);
         });
 
@@ -3350,7 +3354,7 @@ impl eframe::App for SpeechApp {
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(&ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.heading("Drop to open");
+                        ui.heading(t!("app.drop_hint"));
                     });
                 });
         }

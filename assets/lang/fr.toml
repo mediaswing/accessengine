@@ -1,0 +1,531 @@
+# accessengine — fichier de langue française
+#
+# Traduction de départ, écrite en même temps que le système qui la charge. Elle
+# a besoin d'être relue par une personne dont le français est la langue
+# maternelle : voir la section « Traduire l'application » du README.
+#
+# Les clés à gauche du signe égal ne se traduisent jamais. {C} devient ⌘ sur un
+# Mac et Ctrl+ sous Windows. Les autres mots entre accolades sont remplacés par
+# l'application ; on peut les déplacer dans la phrase, jamais les renommer.
+
+code   = "fr"
+name   = "Français"
+
+# Le zéro prend le singulier, contrairement à l'anglais.
+plural = "french"
+
+
+# ------------------------------------------------------------- la fenêtre
+
+app.title = "Moteur de synthèse vocale"
+app.drop_hint = "Déposez pour ouvrir"
+
+
+# ------------------------------------------------------- la liste des volets
+
+pane.read.label = "📄  Lire un fichier"
+pane.read.hint = "Choisissez un fichier, une voix, et ce qu'il faut en faire"
+pane.player.label = "🔊  Lecteur audio"
+pane.player.hint = "Écouter un enregistrement de parole"
+pane.dictionary.label = "📖  Dictionnaire"
+pane.dictionary.hint = "Mots à remplacer avant la lecture du document"
+pane.settings.label = "⚙  Réglages"
+pane.settings.hint = "Le modèle ElevenLabs, et la lecture des images"
+pane.shortcuts.label = "？  Raccourcis"
+pane.shortcuts.hint = "Tous les raccourcis clavier de l'application"
+
+
+# ------------------------------------------------------- le volet de lecture
+
+read.file.caption = "Document ou image"
+read.file.button = "📂  Choisir un fichier…"
+read.file.hint = "{C}O  ·  Texte, documents Word et images. Vous pouvez aussi déposer un fichier sur cette fenêtre."
+read.file.chosen = "Choisi : {name}"
+read.file.chosen_note = "Choisi : {name} — {note}"
+read.file.none = "Aucun fichier choisi pour l'instant."
+
+read.formatting.caption = "Quoi lire"
+read.formatting.not_applicable = "Seuls les documents Word ont une mise en forme ; un {kind} n'en a pas."
+
+read.engine.caption = "Moteur de synthèse"
+read.engine.hint = "{C}2  ·  {description}"
+read.engine.key_from_env = "Clé d'API venant de l'environnement"
+read.engine.key_stored = "Clé d'API enregistrée sur cet ordinateur"
+read.engine.no_key = "Aucune clé d'API — ElevenLabs n'est pas encore utilisable."
+read.engine.enter_key = "Saisir la clé d'API…"
+read.engine.system_note_macos = "Les voix intégrées à macOS. Aucun compte nécessaire."
+read.engine.system_note_windows = "Les voix intégrées à Windows. Aucun compte nécessaire."
+
+read.voice.caption = "Voix"
+read.voice.hint_elevenlabs = "{C}3  ·  La voix ElevenLabs qui lit le document"
+read.voice.hint_system = "{C}3  ·  La voix installée qui lit le document"
+read.voice.default = "La voix par défaut de cet ordinateur"
+read.voice.needs_key = "Ajoutez une clé d'API pour charger les voix"
+read.voice.unavailable = "Voix indisponibles"
+read.voice.loading = "Chargement des voix…"
+read.voice.failed = "Voix : {error}"
+read.voice.retry = "Réessayer de charger les voix"
+read.voice.rate.caption = "Vitesse de lecture — {rate} mots par minute"
+read.voice.rate.hint = "Les flèches gauche et droite règlent ceci d'un mot par minute lorsque le curseur a le focus."
+
+read.action.caption = "Quoi faire"
+read.action.hint = "{C}4  ·  {description}"
+read.format.caption = "Format audio"
+
+read.apply = "Appliquer"
+read.apply.hint = "{C}Entrée  ·  {description}"
+read.stop = "⏹  Arrêter la lecture"
+read.stop.hint = "{C}. ou Échap"
+
+read.ready_hint = "Choisissez un fichier .txt, .docx, .csv ou une image, puis appuyez sur Appliquer. Appuyez sur F1 pour les raccourcis clavier."
+
+
+# --------------------------------------------------- le sélecteur de fichier
+
+chooser.document.title = "Choisir un document, une image ou une vidéo à lire"
+chooser.filter.all = "Tous les fichiers pris en charge"
+chooser.filter.text = "Fichiers texte"
+chooser.filter.docx = "Documents Word"
+chooser.filter.pdf = "Fichiers PDF"
+chooser.filter.table = "Tableaux"
+chooser.filter.image = "Images"
+chooser.filter.video = "Vidéo"
+chooser.audio.title = "Choisir un fichier audio à écouter"
+chooser.filter.audio = "Fichiers audio"
+chooser.save.title = "Enregistrer le fichier audio sous"
+chooser.save.fallback_name = "parole"
+
+
+# ---------------------------------------------------------- le lecteur audio
+
+player.heading = "Lecteur audio"
+player.intro = "Lit un fichier WAV ou MP3 de parole — enregistré par cette application ou par une autre. Rien n'est envoyé sur Internet et le fichier sur le disque n'est jamais modifié."
+player.file.caption = "Fichier audio"
+player.file.button = "📂  Choisir un fichier audio…"
+player.file.hint = "{C}O  ·  Un fichier WAV ou MP3. Vous pouvez aussi en déposer un sur cette fenêtre."
+player.file.chosen = "Choisi : {name}"
+player.file.none = "Aucun fichier audio choisi pour l'instant."
+
+player.play = "▶  Lire"
+player.play.hint_start = "{C}P  ·  Lire le fichier choisi depuis le début"
+player.play.hint_resume = "{C}P  ·  Reprendre là où la lecture s'est arrêtée"
+player.pause = "⏸  Pause"
+player.pause.hint = "{C}P  ·  Suspendre le fichier ; Lire reprend à cet endroit"
+player.stop = "⏹  Arrêter"
+player.stop.hint = "{C}. ou Échap  ·  Arrêter et revenir au début"
+player.back = "⏪  Reculer de 10 secondes"
+player.back.hint = "{C}R  ·  Reculer de dix secondes, ou jusqu'au début s'il en reste moins"
+
+player.idle = "Lecture arrêtée."
+player.idle_ready = "Lecture arrêtée. Appuyez sur Lire pour commencer."
+player.reading_instead = "Un document est en cours de lecture ; écouter un fichier l'interrompra."
+player.position.playing = "Lecture — {at}"
+player.position.playing_of = "Lecture — {at} sur {total}"
+player.position.paused = "En pause à {at}"
+player.position.paused_of = "En pause à {at} sur {total}"
+player.position.left = "il reste {left}"
+
+
+# ------------------------------------------------------------ le dictionnaire
+
+dict.heading = "Dictionnaire"
+dict.intro = "Les mots indiqués ici sont remplacés avant que le document ne soit lu — pour "
+             "corriger la prononciation d'un nom, ou pour remplacer un mot par un autre plus "
+             "doux. La correspondance ignore les majuscules, et un mot qui commençait une "
+             "phrase la commence toujours après. Le fichier sur le disque n'est jamais modifié."
+dict.column.from = "Dire ce mot"
+dict.column.to = "comme ceci"
+dict.column.whole = "Mot entier"
+dict.hint.from = "mot dans le document"
+dict.hint.to = "quoi dire à la place"
+dict.whole.hint = "Activé : seuls les mots entiers correspondent. Désactivé : les lettres correspondent partout, y compris à l'intérieur de mots plus longs."
+dict.remove = "Supprimer"
+dict.remove.row = "Supprimer la ligne {number}"
+dict.remove.word = "Supprimer « {word} »"
+dict.empty = "Aucun remplacement pour l'instant."
+dict.add = "Ajouter un remplacement"
+
+
+# ---------------------------------------------------------------- les réglages
+
+settings.heading = "Réglages"
+
+settings.language.caption = "Langue"
+settings.language.hint = "La langue des boutons et des messages de l'application. Elle ne change pas la langue du document qui est lu."
+settings.language.system = "Comme cet ordinateur"
+settings.language.folder = "Fichiers de langue : {path}"
+settings.language.open_folder = "Ouvrir le dossier des langues"
+settings.language.reload = "Recharger les fichiers de langue"
+settings.language.reloaded = "Fichiers de langue rechargés — langue actuelle : {name}."
+settings.language.help = "Pour traduire cette application, copiez un fichier de langue dans le dossier ci-dessus, changez le code et le nom en tête de fichier, puis traduisez les lignes. Appuyez sur Recharger pour voir vos modifications sans redémarrer."
+settings.language.problem_count.one = "Le fichier de langue contient {n} ligne que l'application n'a pas pu lire."
+settings.language.problem_count.other = "Le fichier de langue contient {n} lignes que l'application n'a pas pu lire."
+settings.language.problem = "Ligne {line} : {what}"
+settings.language.prompts_kept = "Langue changée pour {name}. Vos propres consignes d'image ont été conservées telles que vous les avez écrites."
+settings.language.changed = "Langue changée pour {name}."
+
+settings.model.caption = "Modèle ElevenLabs"
+settings.model.hint = "Par exemple : eleven_multilingual_v2, eleven_turbo_v2_5"
+
+settings.sounds = "Émettre un son au début, à la fin et en cas d'échec d'une action"
+settings.sounds.hint = "Une tonalité brève au démarrage, un carillon en cas de réussite et une "
+                       "tonalité plus grave en cas de problème, pour ne pas avoir à surveiller "
+                       "la ligne d'état pour savoir ce qui s'est passé."
+settings.tick = "Continuer à tinter pendant le travail"
+settings.tick.hint = "Un son discret toutes les quinze secondes pendant qu'une tâche s'exécute, "
+                     "pour distinguer une tâche longue d'une tâche bloquée sans regarder "
+                     "l'écran. Il ne se déclenche jamais pendant la lecture d'un document."
+
+settings.context_menu.intro = "Faites un clic droit sur un fichier texte, Word ou CSV dans l'Explorateur pour "
+                              "le convertir directement en fichier audio, avec le moteur et la voix réglés "
+                              "sur la page Lire un fichier. Activer cette option copie l'application dans "
+                              "votre dossier de réglages, afin que l'entrée du menu contextuel continue de "
+                              "fonctionner même si cette copie est supprimée plus tard."
+settings.context_menu.installed_at = "Installé — l'application est copiée dans {path}."
+settings.context_menu.installed = "Installé."
+settings.context_menu.not_installed = "Non installé."
+settings.context_menu.enable = "Activer le menu contextuel"
+settings.context_menu.disable = "Désactiver le menu contextuel"
+settings.context_menu.enabled = "Menu contextuel activé — l'application est copiée dans {path}."
+settings.context_menu.disabled = "Menu contextuel désactivé."
+
+settings.vision.intro = "Les images sont lues par un modèle de vision qui s'exécute sur cet ordinateur via Ollama. Rien n'est envoyé sur Internet."
+settings.vision.caption = "Modèle de vision"
+settings.vision.other_selected = "Autre : {model}"
+settings.vision.other = "Autre — saisir un nom de modèle"
+settings.vision.other.hint = "N'importe quel modèle de la bibliothèque Ollama capable de lire des images."
+settings.vision.name.caption = "Nom du modèle"
+settings.vision.name.hint = "par exemple : llava:13b"
+settings.vision.retired = "Les versions actuelles d'Ollama ne peuvent pas exécuter ce modèle. Choisissez-en un parmi ceux proposés."
+settings.vision.prompt.caption = "Consigne envoyée avec l'image"
+settings.vision.prompt.reset = "Rétablir la consigne par défaut"
+
+settings.video.intro = "Une vidéo est décrite en en extrayant des images fixes et en lisant chacune "
+                       "d'elles avec le même modèle de vision. Rien n'est envoyé sur Internet — mais "
+                       "chaque image est un appel distinct au modèle, si bien que ces réglages "
+                       "déterminent autant la durée du traitement que sa minutie."
+settings.video.narrate = "Réunir les images en une seule description"
+settings.video.narrate.hint = "Activé, un modèle réécrit les descriptions d'images en un récit continu. "
+                              "Désactivé, vous obtenez chaque image décrite tour à tour sous l'instant "
+                              "où elle apparaît, ce qui est plus long à écouter mais indique "
+                              "exactement d'où vient chaque élément."
+settings.video.narrator.caption = "Modèle qui rédige la description"
+settings.video.narrator.placeholder = "vide — utiliser {model}, le modèle de vision"
+settings.video.narrator.hint = "Laissé vide, c'est le modèle de vision qui rédige, ce qui n'exige aucun "
+                               "téléchargement supplémentaire. Un modèle de texte nommé ici écrira "
+                               "généralement une meilleure prose, au prix de son téléchargement."
+settings.video.scene.caption = "Ampleur du changement d'image nécessaire pour en extraire une nouvelle"
+settings.video.scene.hint = "Bas : une image est prise dès que la caméra bouge, ce qui décrit davantage et prend plus de temps. Haut : une image seulement à une coupure nette entre deux plans."
+settings.video.interval.caption = "Prendre une image malgré tout après ce délai"
+settings.video.interval.hint = "Un plan long sans coupure serait sinon décrit par sa seule première image."
+settings.video.interval.value = "Toutes les {time}"
+settings.video.max.caption = "Nombre maximal d'images décrites pour une vidéo"
+settings.video.max.hint = "La limite qui empêche une vidéo longue ou chargée d'occuper le reste de la journée. Les images au-delà ne sont pas décrites."
+settings.video.max.value = "Au plus {frames} images — environ {time} sur un ordinateur sans carte graphique"
+settings.video.frame_prompt.caption = "Consigne envoyée avec chaque image"
+settings.video.narration_prompt.caption = "Consigne qui réunit les images"
+settings.video.prompt.reset = "Rétablir les consignes vidéo par défaut"
+
+settings.reset.intro = "Rétablit tous les réglages de cette page — ainsi que le moteur, la voix et "
+                       "l'action de la page Lire un fichier — tels qu'ils sont à l'installation. "
+                       "Votre dictionnaire et votre clé d'API ne sont pas touchés."
+settings.reset.button = "Rétablir tous les réglages par défaut"
+
+settings.diagnostics.intro = "En cas de problème, ceci copie un compte rendu de ce que l'application a fait "
+                             "pendant cette session — les fichiers lus, les modèles appelés et leurs "
+                             "réponses — prêt à être collé dans un rapport d'anomalie. Il ne contient "
+                             "aucune partie de vos documents ni votre clé d'API."
+settings.diagnostics.button = "Copier le diagnostic dans le presse-papiers"
+settings.diagnostics.copied.one = "Diagnostic copié — {n} ligne. Collez-le dans votre rapport."
+settings.diagnostics.copied.other = "Diagnostic copié — {n} lignes. Collez-le dans votre rapport."
+
+settings.file.config = "Fichier de réglages : {path}"
+settings.file.log = "Fichier journal : {path}"
+
+
+# ------------------------------------------------------------ les raccourcis
+
+shortcuts.heading = "Raccourcis clavier"
+shortcuts.intro = "Toute cette application s'utilise sans souris. Tab avance dans les commandes, "
+                  "Maj+Tab recule, et la commande qui a le focus est entourée d'un contour épais."
+
+shortcuts.open.keys = "{C}O"
+shortcuts.open.what = "Choisir un fichier — un document, ou un fichier audio dans le lecteur"
+shortcuts.apply.keys = "{C}Entrée"
+shortcuts.apply.what = "Appliquer — exécuter l'action choisie"
+shortcuts.stop.keys = "{C}. ou Échap"
+shortcuts.stop.what = "Arrêter la lecture ou l'écoute, ou annuler la tâche en cours"
+shortcuts.panes.keys = "{C}1 … {C}5"
+shortcuts.panes.what = "Aller à Lire, Lecteur audio, Dictionnaire, Réglages ou Raccourcis"
+shortcuts.play.keys = "{C}P"
+shortcuts.play.what = "Lecteur audio : lire, ou mettre en pause si la lecture est en cours"
+shortcuts.back.keys = "{C}R"
+shortcuts.back.what = "Lecteur audio : reculer de dix secondes"
+shortcuts.rail.keys = "Haut / Bas"
+shortcuts.rail.what = "Parcourir la liste des volets, une fois qu'elle a le focus"
+shortcuts.tab.keys = "Tab / Maj+Tab"
+shortcuts.tab.what = "Se déplacer entre les commandes"
+shortcuts.operate.keys = "Espace ou Entrée"
+shortcuts.operate.what = "Actionner la commande qui a le focus"
+shortcuts.adjust.keys = "Gauche / Droite"
+shortcuts.adjust.what = "Changer la valeur d'une liste déroulante ouverte ou d'un curseur"
+shortcuts.key.keys = "{C}K"
+shortcuts.key.what = "Clé d'API ElevenLabs"
+shortcuts.log.keys = "{C}L"
+shortcuts.log.what = "Afficher ou masquer le journal d'activité"
+shortcuts.help.keys = "F1"
+shortcuts.help.what = "Le volet Raccourcis"
+
+
+# ------------------------------------------------------- le journal d'activité
+
+log.heading = "Journal d'activité"
+log.hide = "Masquer"
+log.hide.hint = "{C}L"
+
+
+# ------------------------------------------------ la boîte de dialogue de clé
+
+key.heading = "Clé d'API ElevenLabs"
+key.from_env = "La clé de la variable d'environnement {variable} est utilisée. Supprimez-la si vous préférez gérer la clé ici."
+key.stored = "Une clé est enregistrée sur cet ordinateur, les voix ElevenLabs sont donc prêtes à l'emploi."
+key.remove = "Supprimer la clé enregistrée"
+key.rejected = "ElevenLabs a refusé la dernière clé, elle a donc été supprimée. Vérifiez que la clé a été copiée en entier, puis collez-la de nouveau."
+key.ask = "Collez la clé de votre compte ElevenLabs. Elle est conservée {storage}, dans un fichier "
+          "que seul votre compte peut lire. Sans clé, choisissez plutôt les voix système — elles "
+          "ne demandent aucun compte et fonctionnent hors ligne."
+key.get = "🌐  Obtenir une clé auprès d'ElevenLabs…"
+key.get.hint = "Ouvre {url} dans votre navigateur. Connectez-vous, copiez la clé, puis collez-la ci-dessous."
+key.caption = "Clé d'API"
+key.save = "Enregistrer la clé"
+key.close = "Fermer"
+key.close.hint = "Échap"
+
+
+# --------------------------------------------------------- les autres dialogues
+
+reset.heading = "Rétablir les réglages"
+reset.what = "Ceci rétablit le moteur de synthèse, la voix, la vitesse de lecture, l'action, le format audio, le modèle de vision et la consigne d'image à leurs valeurs d'origine."
+reset.kept = "Votre dictionnaire est conservé, ainsi que votre clé d'API ElevenLabs. Cette opération est irréversible."
+reset.confirm = "Rétablir les réglages"
+reset.cancel = "Annuler"
+
+install.heading.image = "Lecture des images"
+install.heading.video = "Lecture de la vidéo"
+install.ollama.what = "Lire le texte d'une image nécessite Ollama, qui exécute un modèle de vision sur cet ordinateur. Il n'est pas encore installé."
+install.ollama.button = "Installer Ollama"
+install.ollama.download = "Télécharger Ollama"
+install.ffmpeg.what = "Décrire une vidéo suppose d'en extraire d'abord des images fixes, ce qui nécessite ffmpeg. Il n'est pas encore installé."
+install.ffmpeg.button = "Installer ffmpeg"
+install.ffmpeg.download = "Télécharger ffmpeg"
+install.runs = "Ceci exécute : {command}"
+install.homebrew.runs = "Ceci demande le mot de passe de votre Mac, puis exécute : {command}"
+install.homebrew.button = "Installer Homebrew"
+install.model.what = "Ollama est installé, mais le modèle de vision « {model} » n'a pas encore été téléchargé. Il pèse en général plusieurs gigaoctets et ne se télécharge qu'une fois."
+install.model.button = "Télécharger {model}"
+install.not_now = "Pas maintenant"
+install.advice.homebrew_missing.ollama = "Homebrew n'est pas installé, ceci ne peut donc pas encore être automatisé. Installez Homebrew ci-dessous, ou téléchargez Ollama et installez-le à la main."
+install.advice.no_manager.ollama = "Il n'y a ici aucun gestionnaire de paquets que l'application puisse piloter, ceci ne peut donc pas être automatisé. Ollama peut être téléchargé et installé à la main."
+install.advice.homebrew_missing.ffmpeg = "Homebrew n'est pas installé, ceci ne peut donc pas encore être automatisé. Installez Homebrew ci-dessous, ou téléchargez ffmpeg et installez-le à la main."
+install.advice.no_manager.ffmpeg = "Il n'y a ici aucun gestionnaire de paquets que l'application puisse piloter, ceci ne peut donc pas être automatisé. ffmpeg peut être téléchargé et installé à la main."
+
+update.heading = "La version {version} est disponible"
+update.download = "Télécharger la nouvelle version"
+update.not_now = "Pas tout de suite"
+
+
+# ------------------------------------------------------------ la ligne d'état
+
+status.prefix.success = "Terminé : "
+status.prefix.error = "Problème : "
+
+status.cancel = "Annuler"
+status.cancelling = "Annulation…"
+status.ready = "Prêt. Appuyez sur Appliquer pour le lire."
+status.unreadable_type = "{name} n'est pas un type de fichier que cette application sait lire"
+status.no_file = "Choisissez d'abord un fichier."
+status.no_text = "Il n'y a pas encore de texte à lire — le fichier est en cours de lecture, ou il était vide."
+status.no_key = "Ajoutez une clé d'API ElevenLabs, ou choisissez les voix système."
+status.no_voice = "Choisissez d'abord une voix ElevenLabs."
+status.reading.one = "Lecture… {n} mot remplacé par le dictionnaire."
+status.reading.other = "Lecture… {n} mots remplacés par le dictionnaire."
+status.reading_plain = "Lecture…"
+status.finished_reading = "Lecture terminée."
+status.stopped_reading = "Lecture arrêtée."
+status.loaded = "{name} chargé. Appuyez sur Lire."
+status.playing = "Lecture en cours."
+status.playing_file = "Lecture de {name}."
+status.paused_at = "En pause à {at}."
+status.resumed_playing = "Lecture depuis {at}."
+status.resumed_paused = "En pause à partir de {at}."
+status.stopped = "Arrêté."
+status.finished_playing = "Écoute terminée."
+status.no_audio_file = "Choisissez d'abord un fichier audio."
+status.nothing_saved = "Rien n'a été enregistré."
+status.saved = "Enregistré dans {path}"
+status.settings_unchanged = "Réglages laissés tels quels."
+status.settings_reset = "Réglages rétablis. Votre dictionnaire et votre clé d'API ont été conservés."
+status.config_failed = "Impossible d'enregistrer les réglages : {error}"
+status.key_saved = "Clé d'API enregistrée. Vérification…"
+status.key_accepted = "Clé d'API acceptée."
+status.key_removed = "Clé d'API supprimée."
+status.key_unchecked = "La clé a été enregistrée mais n'a pas pu être vérifiée : {error}"
+status.key_rejected = "ElevenLabs a refusé cette clé d'API, elle a donc été supprimée. Saisissez-en une autre, ou choisissez les voix système."
+status.key_rejected_env = "ElevenLabs a refusé la clé de {variable}. Supprimez-la, ou remplacez-la par une clé valide."
+status.image_skipped = "Image non lue."
+status.video_skipped = "Vidéo non lue."
+
+
+# ------------------------------------------------ ce que dit une tâche en cours
+
+job.reading = "Lecture de {name}…"
+job.looking = "Examen de {name}…"
+job.watching = "Visionnage de {name}…"
+job.installing.homebrew = "Installation de Homebrew…"
+job.installing.ollama = "Installation d'Ollama…"
+job.installing.ffmpeg = "Installation de ffmpeg…"
+job.downloading = "Téléchargement de {model}…"
+job.loading_voices = "Chargement des voix ElevenLabs…"
+job.synthesising = "Synthèse de la parole…"
+job.synthesising.part = "Synthèse de la parole — partie {current} sur {total}…"
+job.saving = "Enregistrement de {name}…"
+job.checking.ollama = "Recherche d'Ollama…"
+job.starting.ollama = "Démarrage d'Ollama…"
+job.checking.ffmpeg = "Recherche de ffmpeg…"
+job.encoding_image = "Encodage de l'image…"
+job.asking_model = "Demande à {model} de lire l'image…"
+job.asking_again = "Nouvelle demande à {model}…"
+job.geocoding = "Recherche du lieu de la photo…"
+job.taking_frames = "Extraction des images de {name}…"
+job.describing_frame = "Description de l'image {current} sur {total} — {at}…"
+job.narrating = "Demande à {narrator} de rédiger la description…"
+job.reusing_audio = "Réutilisation de l'audio qui vient d'être lu…"
+job.writing_file = "Écriture du fichier…"
+
+job.done.homebrew = "Homebrew est installé."
+job.done.ollama = "Ollama est prêt."
+job.done.ffmpeg = "ffmpeg est prêt."
+job.done.model = "{model} est prêt."
+
+job.note.characters = "{kind} · {characters} caractères"
+job.note.image = "image lue par {model} · {characters} caractères"
+job.note.video = "vidéo lue par {model} · {described} images décrites sur {total}"
+job.note.video_narrated = "vidéo lue par {model} à partir de {described} images sur {total}, décrite par {narrator}"
+job.note.frame_by_frame = " · image par image"
+job.frames.taken = "description de {total} images extraites de {name}"
+job.frames.taken_of = "{name} dure {length} — description de {total} images extraites"
+job.photo_taken_in = "Prise à "
+
+
+# ------------------------------------------- quand une tâche tourne mal
+
+error.no_readable_text = "{name} ne contient aucun texte lisible"
+error.no_vision_model = "aucun modèle de vision Ollama n'est configuré"
+error.image_unreadable = "{model} n'a rien pu lire dans cette image"
+error.video_unreadable = "{model} n'a pu décrire aucune des {total} images extraites de {name}"
+error.ollama_manual = "Ollama ne peut pas être installé automatiquement sur cet ordinateur. Téléchargez-le plutôt depuis https://ollama.com/download."
+error.ffmpeg_manual = "ffmpeg ne peut pas être installé automatiquement sur cet ordinateur. Téléchargez-le plutôt depuis {url}."
+error.unsupported_platform = "Les voix système sont disponibles sur macOS et Windows. Sur ce système, choisissez plutôt ElevenLabs."
+error.unreadable_type = "{name} n'est pas un type de fichier qu'accessengine sait lire"
+error.needs_ollama = "{name} nécessite Ollama pour être lu, ce qui peut prendre du temps et demander une installation — ouvrez-le dans accessengine plutôt que par le menu contextuel"
+
+log.model_empty = "{model} n'a rien renvoyé ; nouvel essai avec une consigne plus simple"
+log.model_truncated = "{model} a manqué de contexte et s'est arrêté tôt ; la fin de cette description manque"
+log.frame_truncated = "l'image {number} a été coupée avant que {model} n'ait fini de la décrire"
+log.frame_too_short = "{model} a été coupé avec trop peu de l'image {number} pour être conservé"
+log.frame_empty = "{model} n'avait rien à dire sur l'image {number}"
+log.geocode_failed = "impossible de retrouver le lieu de la photo : {error}"
+log.narration_unusable = "{narrator} n'a pas renvoyé de description utilisable ; retour au compte rendu image par image"
+log.narration_failed = "{narrator} n'a pas pu rédiger la description ({error}) ; retour au compte rendu image par image"
+log.frames_cleanup = "vidéo : impossible de nettoyer {path} — {error}"
+
+
+# ------------------------------------------------------------- les choix
+
+engine.system.label = "Voix système"
+engine.system.description = "Les voix intégrées à cet ordinateur. Aucun compte ni connexion Internet nécessaires."
+engine.elevenlabs.label = "ElevenLabs"
+engine.elevenlabs.description = "Voix en ligne de meilleure qualité. Nécessite une clé d'API ElevenLabs."
+
+formatting.ignore.label = "Les mots seulement"
+formatting.ignore.description = "Lire le texte et rien d'autre."
+formatting.announce.label = "Les mots et la mise en forme"
+formatting.announce.description = "Indiquer aussi où commencent et finissent le gras, l'italique, le "
+                                  "souligné, le barré, la couleur et le surlignage. Documents Word "
+                                  "uniquement."
+
+action.read.label = "Lire le texte à voix haute"
+action.read.description = "Prononcer le document par la sortie audio de cet ordinateur."
+action.save.label = "Enregistrer un fichier audio"
+action.save.description = "Écrire le document parlé dans un fichier audio sur le disque."
+
+format.wav.label = "WAV (non compressé)"
+format.mp3.label = "MP3 (compressé)"
+
+filekind.text = "fichier texte"
+filekind.docx = "document Word"
+filekind.pdf = "PDF"
+filekind.csv = "tableau"
+filekind.image = "image"
+filekind.video = "vidéo"
+filekind.unknown = "fichier"
+
+sensitivity.very_high = "Très sensible — prend une image au moindre mouvement de caméra, pas seulement aux coupures"
+sensitivity.high = "Sensible — capte les panoramiques et les changements progressifs"
+sensitivity.balanced = "Équilibré — environ une image par plan"
+sensitivity.low = "Sélectif — seulement les coupures nettes entre plans"
+sensitivity.very_low = "Très sélectif — seulement un changement complet d'image"
+
+
+# ------------------------------------------------------------ les durées
+
+time.seconds.one = "{n} seconde"
+time.seconds.other = "{n} secondes"
+time.minutes.one = "{n} minute"
+time.minutes.other = "{n} minutes"
+time.both = "{minutes} {seconds}"
+
+
+# ---------------------------------------------- les modèles de vision proposés
+
+model.qwen3b = "Qwen2.5-VL 3B — environ 3 Go. Lit bien le texte et se télécharge le plus vite."
+model.qwen7b = "Qwen2.5-VL 7B — environ 5,7 Go. Meilleur sur les pages denses ou manuscrites, plus lent à répondre."
+model.granite = "Granite Vision 2B — environ 2,3 Go. Le plus petit ; conçu pour les documents et les tableaux."
+model.gemma = "Gemma 3 4B — environ 3,2 Go. Décrit bien les photographies et les scènes."
+model.minicpm = "MiniCPM-V 8B — environ 5,2 Go. Un bon polyvalent, sur le texte comme sur les scènes."
+
+
+# ------------------------------ ce qui est demandé au modèle de vision
+#
+# Ces quatre consignes ne s'affichent pas : elles sont envoyées au modèle qui
+# lit les images et les vidéos. Écrites en français, elles produisent une
+# description en français, qu'une voix française peut lire. Gardez la dernière
+# phrase de chacune : sans elle le modèle répond en Markdown, et un synthétiseur
+# vocal lit les astérisques à voix haute.
+
+prompt.fallback = "Décrivez cette image, y compris tout texte qu'elle contient."
+
+prompt.vision = "Décrivez ce que montre cette image en deux ou trois phrases simples. Transcrivez "
+                "ensuite chaque mot du texte qui y figure, exactement tel qu'il est écrit, en "
+                "conservant l'ordre de lecture et les retours à la ligne. Si l'image est "
+                "essentiellement une page ou un écran de texte, limitez la description à une courte "
+                "phrase et donnez la transcription complète. Votre réponse sera lue à voix haute : "
+                "écrivez donc des phrases simples, sans titres, puces, markdown, astérisques ni "
+                "blocs de code."
+
+prompt.frame = "Ceci est une image isolée extraite d'une vidéo. Décrivez ce qu'elle montre en une ou "
+               "deux phrases simples : le lieu, qui ou quoi s'y trouve, et ce qu'ils semblent faire. "
+               "Si des mots apparaissent à l'écran, donnez-les exactement tels qu'ils sont écrits. "
+               "Ne commencez pas par une formule du type « cette image montre » — décrivez la scène "
+               "directement. Votre réponse sera lue à voix haute : écrivez donc des phrases simples, "
+               "sans titres, puces, markdown, astérisques ni blocs de code."
+
+prompt.narration = "Voici les descriptions d'images fixes extraites d'une vidéo, dans l'ordre, chacune "
+                   "accompagnée du moment où elle apparaît. Rédigez une description continue et fluide "
+                   "de la vidéo, destinée à quelqu'un qui ne peut pas la voir. Ne décrivez que ce que "
+                   "les images montrent réellement : n'inventez ni événements, ni dialogues, ni "
+                   "explications sur ce qui s'est passé entre elles, et lorsque les images ne disent "
+                   "pas ce qui relie deux moments, passez simplement au suivant. Ne mentionnez les "
+                   "horodatages que lorsqu'ils comptent. Votre réponse sera lue à voix haute : écrivez "
+                   "donc des phrases simples, sans titres, puces, markdown, astérisques ni blocs de "
+                   "code."

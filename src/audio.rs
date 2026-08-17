@@ -28,10 +28,10 @@ impl AudioFormat {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Wav => "WAV (uncompressed)",
-            Self::Mp3 => "MP3 (compressed)",
+            Self::Wav => crate::t!("format.wav.label"),
+            Self::Mp3 => crate::t!("format.mp3.label"),
         }
     }
 
@@ -344,15 +344,17 @@ impl Drop for Playback {
 pub fn spoken_time(time: Duration) -> String {
     let total = time.as_secs();
     let (minutes, seconds) = (total / 60, total % 60);
+    // Each half is counted separately and then joined, rather than written out
+    // as eight cases: a language with more plural forms than English would need
+    // far more than eight, and no translator should have to write them.
     match (minutes, seconds) {
-        (0, 1) => "1 second".to_string(),
-        (0, s) => format!("{s} seconds"),
-        (1, 0) => "1 minute".to_string(),
-        (m, 0) => format!("{m} minutes"),
-        (1, 1) => "1 minute 1 second".to_string(),
-        (1, s) => format!("1 minute {s} seconds"),
-        (m, 1) => format!("{m} minutes 1 second"),
-        (m, s) => format!("{m} minutes {s} seconds"),
+        (0, s) => crate::tn!("time.seconds", s),
+        (m, 0) => crate::tn!("time.minutes", m),
+        (m, s) => crate::t!(
+            "time.both",
+            minutes = crate::tn!("time.minutes", m),
+            seconds = crate::tn!("time.seconds", s)
+        ),
     }
 }
 

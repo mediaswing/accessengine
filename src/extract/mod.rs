@@ -44,14 +44,14 @@ impl FileKind {
         })
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Text => "text file",
-            Self::Docx => "Word document",
-            Self::Pdf => "PDF",
-            Self::Csv => "table",
-            Self::Image => "image",
-            Self::Video => "video",
+            Self::Text => crate::t!("filekind.text"),
+            Self::Docx => crate::t!("filekind.docx"),
+            Self::Pdf => crate::t!("filekind.pdf"),
+            Self::Csv => crate::t!("filekind.csv"),
+            Self::Image => crate::t!("filekind.image"),
+            Self::Video => crate::t!("filekind.video"),
         }
     }
 }

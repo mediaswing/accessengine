@@ -10,9 +10,10 @@ use crate::config::{Config, Formatting};
 use crate::extract::{self, FileKind};
 use crate::geocode;
 use crate::ollama;
+use crate::t;
 use crate::tts::{self, Voice};
 use anyhow::{Context, Result, bail};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -70,32 +71,29 @@ pub enum Job {
     },
 }
 
+/// The part of a path a status message names: the filename alone, since the
+/// directories above it are neither interesting nor short.
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
+}
+
 impl Job {
     /// Text shown in the progress bar while this job runs.
     pub fn status_label(&self) -> String {
         match self {
-            Self::ReadDocument { path, .. } => format!(
-                "Reading {}…",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ),
-            Self::ReadImage { path, .. } => format!(
-                "Looking at {}…",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ),
-            Self::ReadVideo { path, .. } => format!(
-                "Watching {}…",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ),
-            Self::InstallHomebrew => "Installing Homebrew…".to_string(),
-            Self::InstallOllama => "Installing Ollama…".to_string(),
-            Self::InstallFfmpeg => "Installing ffmpeg…".to_string(),
-            Self::PullModel(model) => format!("Downloading {model}…"),
-            Self::LoadElevenLabsVoices(_) => "Loading ElevenLabs voices…".to_string(),
-            Self::Synthesize { .. } => "Synthesising speech…".to_string(),
-            Self::Save { path, .. } => format!(
-                "Saving {}…",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ),
+            Self::ReadDocument { path, .. } => t!("job.reading", name = file_name(path)),
+            Self::ReadImage { path, .. } => t!("job.looking", name = file_name(path)),
+            Self::ReadVideo { path, .. } => t!("job.watching", name = file_name(path)),
+            Self::InstallHomebrew => t!("job.installing.homebrew"),
+            Self::InstallOllama => t!("job.installing.ollama"),
+            Self::InstallFfmpeg => t!("job.installing.ffmpeg"),
+            Self::PullModel(model) => t!("job.downloading", model = model),
+            Self::LoadElevenLabsVoices(_) => t!("job.loading_voices"),
+            Self::Synthesize { .. } => t!("job.synthesising"),
+            Self::Save { path, .. } => t!("job.saving", name = file_name(path)),
         }
     }
 
@@ -227,15 +225,16 @@ fn read_document(path: PathBuf, formatting: Formatting, tx: &Sender<Update>) -> 
     let extracted = extract::extract_document(&path, formatting)?;
     let text = extracted.text;
     if text.trim().is_empty() {
-        bail!(
-            "{} contains no readable text",
-            path.file_name().unwrap_or_default().to_string_lossy()
-        );
+        bail!("{}", t!("error.no_readable_text", name = file_name(&path)));
     }
     let kind = FileKind::from_path(&path)
         .map(FileKind::label)
-        .unwrap_or("file");
-    let mut note = format!("{} · {} characters", kind, text.chars().count());
+        .unwrap_or_else(|| t!("filekind.unknown"));
+    let mut note = t!(
+        "job.note.characters",
+        kind = kind,
+        characters = text.chars().count()
+    );
     // The status line is the only part a screen reader announces by itself, so
     // a warning that lives only in the log would not reach the person it is
     // for. The headline goes here; the reader has already logged the detail.
@@ -251,14 +250,14 @@ fn read_document(path: PathBuf, formatting: Formatting, tx: &Sender<Update>) -> 
 /// model, then ask it what the picture says. Each missing prerequisite stops
 /// the job and asks the UI to prompt, rather than installing things silently.
 fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
-    let _ = tx.send(Update::Status("Checking for Ollama…".into()));
+    let _ = tx.send(Update::Status(t!("job.checking.ollama")));
     match ollama::status() {
         ollama::Status::NotInstalled => {
             let _ = tx.send(Update::NeedsOllamaInstall);
             return Ok(());
         }
         ollama::Status::NotRunning => {
-            let _ = tx.send(Update::Status("Starting Ollama…".into()));
+            let _ = tx.send(Update::Status(t!("job.starting.ollama")));
             ollama::ensure_running()?;
         }
         ollama::Status::Running => {}
@@ -266,7 +265,7 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
 
     let model = config.ollama_model.trim();
     if model.is_empty() {
-        bail!("no Ollama vision model is configured");
+        bail!("{}", t!("error.no_vision_model"));
     }
     let installed = ollama::installed_models()?;
     if !ollama::has_model(&installed, model) {
@@ -277,23 +276,21 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
     if cancelled(cancel) {
         return Ok(());
     }
-    let _ = tx.send(Update::Status("Encoding the image…".into()));
+    let _ = tx.send(Update::Status(t!("job.encoding_image")));
     let encoded = extract::image::encode_for_ollama(&path)?;
 
-    let _ = tx.send(Update::Status(format!("Asking {model} to read the image…")));
+    let _ = tx.send(Update::Status(t!("job.asking_model", model = model)));
     let mut described = ollama::describe_image(model, &config.ollama_prompt, &encoded.base64)?;
 
     // Smaller vision models sometimes answer a long conditional prompt with
     // nothing at all. One retry with a plain question usually gets a real
     // answer, which is a better outcome than reporting failure.
     if described.text.is_empty() && !cancelled(cancel) {
-        let _ = tx.send(Update::Log(format!(
-            "{model} returned nothing; retrying with a simpler prompt"
-        )));
-        let _ = tx.send(Update::Status(format!("Asking {model} again…")));
+        let _ = tx.send(Update::Log(t!("log.model_empty", model = model)));
+        let _ = tx.send(Update::Status(t!("job.asking_again", model = model)));
         described = ollama::describe_image(
             model,
-            crate::config::FALLBACK_VISION_PROMPT,
+            &crate::config::fallback_vision_prompt(),
             &encoded.base64,
         )?;
     }
@@ -306,14 +303,12 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         if described.text.chars().count() < ollama::FRAGMENT_CHARS {
             bail!("{}", ollama::explain_truncation(model));
         }
-        let _ = tx.send(Update::Log(format!(
-            "{model} ran out of context and stopped early; the end of this description is missing"
-        )));
+        let _ = tx.send(Update::Log(t!("log.model_truncated", model = model)));
     }
 
     let mut text = extract::tidy(&described.text);
     if text.is_empty() {
-        bail!("{model} could not read anything from this image");
+        bail!("{}", t!("error.image_unreadable", model = model));
     }
 
     // A bonus, not a requirement: a photo with no location tag, or a lookup
@@ -321,26 +316,27 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
     if let Some(location) = encoded.location
         && !cancelled(cancel)
     {
-        let _ = tx.send(Update::Status(
-            "Looking up where the photo was taken…".into(),
-        ));
+        let _ = tx.send(Update::Status(t!("job.geocoding")));
         match geocode::place_name(location.latitude, location.longitude) {
             Ok(place) => {
-                text.push_str("\n\nTaken in ");
+                text.push_str("\n\n");
+                text.push_str(&t!("job.photo_taken_in"));
                 text.push_str(&place);
                 text.push('.');
             }
             Err(error) => {
-                let _ = tx.send(Update::Log(format!(
-                    "could not look up where the photo was taken: {error:#}"
+                let _ = tx.send(Update::Log(t!(
+                    "log.geocode_failed",
+                    error = format!("{error:#}")
                 )));
             }
         }
     }
 
-    let note = format!(
-        "image read by {model} · {} characters",
-        text.chars().count()
+    let note = t!(
+        "job.note.image",
+        model = model,
+        characters = text.chars().count()
     );
     let _ = tx.send(Update::TextReady { text, note });
     Ok(())
@@ -362,9 +358,10 @@ struct FrameDir(PathBuf);
 impl Drop for FrameDir {
     fn drop(&mut self) {
         if let Err(error) = std::fs::remove_dir_all(&self.0) {
-            crate::log::line(format!(
-                "video: could not clean up {} — {error}",
-                self.0.display()
+            crate::log::line(t!(
+                "log.frames_cleanup",
+                path = self.0.display(),
+                error = error
             ));
         }
     }
@@ -384,20 +381,20 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         .to_string_lossy()
         .to_string();
 
-    let _ = tx.send(Update::Status("Checking for ffmpeg…".into()));
+    let _ = tx.send(Update::Status(t!("job.checking.ffmpeg")));
     if crate::ffmpeg::status() == crate::ffmpeg::Status::NotInstalled {
         let _ = tx.send(Update::NeedsFfmpegInstall);
         return Ok(());
     }
 
-    let _ = tx.send(Update::Status("Checking for Ollama…".into()));
+    let _ = tx.send(Update::Status(t!("job.checking.ollama")));
     match ollama::status() {
         ollama::Status::NotInstalled => {
             let _ = tx.send(Update::NeedsOllamaInstall);
             return Ok(());
         }
         ollama::Status::NotRunning => {
-            let _ = tx.send(Update::Status("Starting Ollama…".into()));
+            let _ = tx.send(Update::Status(t!("job.starting.ollama")));
             ollama::ensure_running()?;
         }
         ollama::Status::Running => {}
@@ -405,7 +402,7 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
 
     let model = config.ollama_model.trim();
     if model.is_empty() {
-        bail!("no Ollama vision model is configured");
+        bail!("{}", t!("error.no_vision_model"));
     }
     let installed = ollama::installed_models()?;
     if !ollama::has_model(&installed, model) {
@@ -425,7 +422,7 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
     }
 
     let length = crate::ffmpeg::duration(&path);
-    let _ = tx.send(Update::Status(format!("Taking frames out of {name}…")));
+    let _ = tx.send(Update::Status(t!("job.taking_frames", name = name)));
     let _ = tx.send(Update::Progress(0.0));
 
     let dir = FrameDir(std::env::temp_dir().join(format!(
@@ -456,11 +453,13 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
 
     let total = frames.len();
     let _ = tx.send(Update::Log(match length {
-        Some(length) => format!(
-            "{name} runs for {} — describing {total} frames from it",
-            audio::spoken_time(length)
+        Some(length) => t!(
+            "job.frames.taken_of",
+            name = name,
+            length = audio::spoken_time(length),
+            total = total
         ),
-        None => format!("describing {total} frames from {name}"),
+        None => t!("job.frames.taken", total = total, name = name),
     }));
 
     let mut described: Vec<(std::time::Duration, String)> = Vec::with_capacity(total);
@@ -468,10 +467,11 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         if cancelled(cancel) {
             return Ok(());
         }
-        let _ = tx.send(Update::Status(format!(
-            "Describing frame {} of {total} — {}…",
-            index + 1,
-            extract::video::moment(frame.at).to_lowercase()
+        let _ = tx.send(Update::Status(t!(
+            "job.describing_frame",
+            current = index + 1,
+            total = total,
+            at = extract::video::moment(frame.at).to_lowercase()
         )));
 
         let encoded = extract::image::encode_for_ollama(&frame.path)?;
@@ -482,9 +482,10 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         // the same way rather than entering the transcript as a garbled word.
         let fragment = answer.truncated && answer.text.chars().count() < ollama::FRAGMENT_CHARS;
         if answer.truncated && !fragment {
-            let _ = tx.send(Update::Log(format!(
-                "frame {} was cut off before {model} finished describing it",
-                index + 1
+            let _ = tx.send(Update::Log(t!(
+                "log.frame_truncated",
+                number = index + 1,
+                model = model
             )));
         }
         // A frame the model had nothing to say about is one frame lost, not a
@@ -492,14 +493,16 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         // costs another minute and buys one sentence out of dozens.
         let text = extract::tidy(&answer.text);
         if fragment {
-            let _ = tx.send(Update::Log(format!(
-                "{model} was cut off with too little of frame {} to keep",
-                index + 1
+            let _ = tx.send(Update::Log(t!(
+                "log.frame_too_short",
+                model = model,
+                number = index + 1
             )));
         } else if text.is_empty() {
-            let _ = tx.send(Update::Log(format!(
-                "{model} had nothing to say about frame {}",
-                index + 1
+            let _ = tx.send(Update::Log(t!(
+                "log.frame_empty",
+                model = model,
+                number = index + 1
             )));
         } else {
             described.push((frame.at, text));
@@ -514,19 +517,27 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
     }
     let transcript = extract::video::transcript(&described);
     if transcript.is_empty() {
-        bail!("{model} could not describe any of the {total} frames taken from {name}");
+        bail!(
+            "{}",
+            t!(
+                "error.video_unreadable",
+                model = model,
+                total = total,
+                name = name
+            )
+        );
     }
 
-    let mut note = format!(
-        "video read by {model} · {} of {total} frames described",
-        described.len()
+    let mut note = t!(
+        "job.note.video",
+        model = model,
+        described = described.len(),
+        total = total
     );
     let mut text = transcript.clone();
 
     if config.video_narrate {
-        let _ = tx.send(Update::Status(format!(
-            "Asking {narrator} to write the description…"
-        )));
+        let _ = tx.send(Update::Status(t!("job.narrating", narrator = narrator)));
         let request =
             extract::video::narration_request(&config.video_narration_prompt, &transcript);
         // The narration is a rewrite of text the app already has. If it fails,
@@ -535,24 +546,28 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         match ollama::narrate(&narrator, &request) {
             Ok(narration) if extract::video::narration_is_usable(&narration.text, &transcript) => {
                 text = extract::tidy(&narration.text);
-                note = format!(
-                    "video read by {model} from {} of {total} frames, described by {narrator}",
-                    described.len()
+                note = t!(
+                    "job.note.video_narrated",
+                    model = model,
+                    described = described.len(),
+                    total = total,
+                    narrator = narrator
                 );
             }
             Ok(_) => {
-                let _ = tx.send(Update::Log(format!(
-                    "{narrator} did not return a usable description; \
-                     falling back to the frame-by-frame account"
+                let _ = tx.send(Update::Log(t!(
+                    "log.narration_unusable",
+                    narrator = narrator
                 )));
-                note.push_str(" · frame by frame");
+                note.push_str(&t!("job.note.frame_by_frame"));
             }
             Err(error) => {
-                let _ = tx.send(Update::Log(format!(
-                    "{narrator} could not write the description ({error:#}); \
-                     falling back to the frame-by-frame account"
+                let _ = tx.send(Update::Log(t!(
+                    "log.narration_failed",
+                    narrator = narrator,
+                    error = format!("{error:#}")
                 )));
-                note.push_str(" · frame by frame");
+                note.push_str(&t!("job.note.frame_by_frame"));
             }
         }
     }
@@ -567,41 +582,37 @@ fn install_homebrew(tx: &Sender<Update>) -> Result<()> {
     crate::homebrew::install(move |line| {
         let _ = log.send(Update::Log(line));
     })?;
-    let _ = tx.send(Update::SetupComplete("Homebrew is installed.".into()));
+    let _ = tx.send(Update::SetupComplete(t!("job.done.homebrew")));
     Ok(())
 }
 
 fn install_ollama(tx: &Sender<Update>) -> Result<()> {
     if ollama::install_command().is_none() {
-        bail!(
-            "Ollama cannot be installed automatically on this computer. \
-             Download it from https://ollama.com/download instead."
-        );
+        bail!("{}", t!("error.ollama_manual"));
     }
     let log = tx.clone();
     ollama::install(move |line| {
         let _ = log.send(Update::Log(line));
     })?;
 
-    let _ = tx.send(Update::Status("Starting Ollama…".into()));
+    let _ = tx.send(Update::Status(t!("job.starting.ollama")));
     ollama::ensure_running()?;
-    let _ = tx.send(Update::SetupComplete("Ollama is ready.".into()));
+    let _ = tx.send(Update::SetupComplete(t!("job.done.ollama")));
     Ok(())
 }
 
 fn install_ffmpeg(tx: &Sender<Update>) -> Result<()> {
     if crate::ffmpeg::install_command().is_none() {
         bail!(
-            "ffmpeg cannot be installed automatically on this computer. \
-             Download it from {} instead.",
-            crate::ffmpeg::DOWNLOAD_URL
+            "{}",
+            t!("error.ffmpeg_manual", url = crate::ffmpeg::DOWNLOAD_URL)
         );
     }
     let log = tx.clone();
     crate::ffmpeg::install(move |line| {
         let _ = log.send(Update::Log(line));
     })?;
-    let _ = tx.send(Update::SetupComplete("ffmpeg is ready.".into()));
+    let _ = tx.send(Update::SetupComplete(t!("job.done.ffmpeg")));
     Ok(())
 }
 
@@ -619,7 +630,7 @@ fn pull_model(model: String, tx: &Sender<Update>, cancel: &Cancel) -> Result<()>
             let _ = progress.send(Update::Progress(fraction));
         }
     })?;
-    let _ = tx.send(Update::SetupComplete(format!("{model} is ready.")));
+    let _ = tx.send(Update::SetupComplete(t!("job.done.model", model = model)));
     Ok(())
 }
 
@@ -635,8 +646,10 @@ fn report_parts(tx: &Sender<Update>, done: usize, total: usize, scale: f32) {
     if total > 1 {
         // `done` counts finished parts, so the one being waited on is the next.
         let current = (done + 1).min(total);
-        let _ = tx.send(Update::Status(format!(
-            "Synthesising speech — part {current} of {total}…"
+        let _ = tx.send(Update::Status(t!(
+            "job.synthesising.part",
+            current = current,
+            total = total
         )));
     }
     let fraction = if total == 0 {
@@ -688,7 +701,7 @@ fn save(
         } => {
             let mp3 = match cached_mp3 {
                 Some(cached) => {
-                    let _ = tx.send(Update::Status("Reusing the audio just played…".into()));
+                    let _ = tx.send(Update::Status(t!("job.reusing_audio")));
                     cached
                 }
                 None => {
@@ -708,7 +721,7 @@ fn save(
                 return Ok(());
             }
 
-            let _ = tx.send(Update::Status("Writing the file…".into()));
+            let _ = tx.send(Update::Status(t!("job.writing_file")));
             match format {
                 // Already MP3; no point decoding and re-encoding it.
                 AudioFormat::Mp3 => std::fs::write(&path, mp3.as_slice())
@@ -766,7 +779,7 @@ pub fn resolve_engine(config: &Config, api_key: Option<&str>) -> Result<Engine> 
         }
         crate::config::EnginePreference::System => {
             if !tts::system::SUPPORTED {
-                bail!("{}", tts::system::UNSUPPORTED_MESSAGE);
+                bail!("{}", tts::system::unsupported_message());
             }
             Ok(Engine::System {
                 voice: config.system_voice.clone(),
@@ -821,17 +834,15 @@ pub fn speak_to_file(
     match FileKind::from_path(path) {
         Some(FileKind::Text) | Some(FileKind::Docx) | Some(FileKind::Pdf) | Some(FileKind::Csv) => {
         }
-        Some(FileKind::Image) | Some(FileKind::Video) => bail!(
-            "{} needs Ollama to read, which can take a while and may need setup — open it in \
-             accessengine instead of using the right-click menu",
-            name()
-        ),
-        None => bail!("{} is not a file type accessengine can read", name()),
+        Some(FileKind::Image) | Some(FileKind::Video) => {
+            bail!("{}", t!("error.needs_ollama", name = name()))
+        }
+        None => bail!("{}", t!("error.unreadable_type", name = name())),
     }
 
     let extracted = extract::extract_document(path, config.formatting)?;
     if extracted.text.trim().is_empty() {
-        bail!("{} contains no readable text", name());
+        bail!("{}", t!("error.no_readable_text", name = name()));
     }
     // Nothing here has a window to report into, so the log is the whole of it —
     // which the reader has already written to. Saving still goes ahead: a

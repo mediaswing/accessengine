@@ -149,11 +149,13 @@ pub fn install_command() -> Option<String> {
 
 /// Advice for when there is no package manager to drive.
 #[cfg(target_os = "macos")]
-pub const MANUAL_INSTALL_ADVICE: &str = "Homebrew isn't installed, so this can't be automated yet. Install Homebrew below, or \
-     download ffmpeg and install it by hand.";
+pub fn manual_install_advice() -> String {
+    crate::t!("install.advice.homebrew_missing.ffmpeg")
+}
 #[cfg(not(target_os = "macos"))]
-pub const MANUAL_INSTALL_ADVICE: &str = "There is no package manager here that the app can drive, so this can't be automated. \
-     ffmpeg can be downloaded and installed by hand instead.";
+pub fn manual_install_advice() -> String {
+    crate::t!("install.advice.no_manager.ffmpeg")
+}
 
 /// Where to get ffmpeg without a package manager.
 pub const DOWNLOAD_URL: &str = "https://ffmpeg.org/download.html";

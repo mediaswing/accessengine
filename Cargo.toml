@@ -42,6 +42,16 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
+[dev-dependencies]
+# Only to ask a font file whether it has a glyph for a character, which is how
+# the language files are checked for characters the bundled fonts cannot draw —
+# see `i18n`. egui's own `Fonts::has_glyph` cannot answer this: it reports false
+# for every character that happens to live in the same face as the replacement
+# glyph, which is most of the arrows and symbols in the app's own labels.
+# Already in the tree via eframe, so this costs no extra build, and being a dev
+# dependency it is not in the shipped binary at all.
+ab_glyph = "0.2.32"
+
 [profile.release]
 lto = "thin"
 strip = true

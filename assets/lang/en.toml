@@ -1,0 +1,565 @@
+# accessengine language file — English
+#
+# This is the reference file. Every other language is checked against it by a
+# test: same keys, same {placeholders}. To start a new language, copy this file,
+# change `code`, `name` and `plural` at the top, and translate the right-hand
+# side of each line. Leave the keys alone.
+#
+# A few things worth knowing before you start:
+#
+#   {C}          becomes ⌘ on a Mac and Ctrl+ on Windows. Put it wherever the
+#                sentence needs it; you never have to write ⌘ yourself.
+#   {name}       and the other braced words are values the app fills in. You may
+#                move them anywhere in the sentence, but do not rename them.
+#   .one/.other  a counted message. Give every form your language uses — see
+#                `plural` below.
+#   "…" "…"      a long value continued on the next line. The two are joined
+#                exactly as written, so mind the space at the end of the first.
+#
+# You do not have to finish. Any line you have not translated falls back to the
+# English one here, so the app stays usable from your very first line.
+
+code   = "en"
+name   = "English"
+
+# Which plural rule this language follows. One of:
+#   one_other   one form for 1, another for everything else (English, German,
+#               Spanish, Italian, Dutch, Swedish)
+#   french      as above, but 0 also takes the singular (French, pt-BR)
+#   polish      one / few / many
+#   russian     one / few / many, counted differently (Russian, Ukrainian)
+plural = "one_other"
+
+
+# ---------------------------------------------------------------- the window
+
+app.title = "Speech Output Engine"
+app.drop_hint = "Drop to open"
+
+
+# ------------------------------------------------------- the list of panes
+
+pane.read.label = "📄  Read a File"
+pane.read.hint = "Choose a file, a voice, and what to do with it"
+pane.player.label = "🔊  Audio player"
+pane.player.hint = "Play back a spoken-word audio file"
+pane.dictionary.label = "📖  Dictionary"
+pane.dictionary.hint = "Words to swap before the document is spoken"
+pane.settings.label = "⚙  Settings"
+pane.settings.hint = "The ElevenLabs model, and how images are read"
+pane.shortcuts.label = "？  Shortcuts"
+pane.shortcuts.hint = "Every keyboard shortcut in the app"
+
+
+# ------------------------------------------------------------ the Read pane
+
+read.file.caption = "Document or image"
+read.file.button = "📂  Choose File…"
+read.file.hint = "{C}O  ·  Text, Word documents and images. You can also drop a file on this window."
+read.file.chosen = "Chosen: {name}"
+read.file.chosen_note = "Chosen: {name} — {note}"
+read.file.none = "No file chosen yet."
+
+read.formatting.caption = "What to read"
+# Shown when the open file has no formatting to read; {kind} is a file kind below.
+read.formatting.not_applicable = "Only Word documents carry formatting; a {kind} has none."
+
+read.engine.caption = "Speech engine"
+read.engine.hint = "{C}2  ·  {description}"
+read.engine.key_from_env = "API key from the environment"
+read.engine.key_stored = "API key saved on this computer"
+read.engine.no_key = "No API key set — ElevenLabs cannot be used yet."
+read.engine.enter_key = "Enter API Key…"
+read.engine.system_note_macos = "The voices built into macOS. No account needed."
+read.engine.system_note_windows = "The voices built into Windows. No account needed."
+
+read.voice.caption = "Voice"
+read.voice.hint_elevenlabs = "{C}3  ·  The ElevenLabs voice the document is read in"
+read.voice.hint_system = "{C}3  ·  The installed voice the document is read in"
+read.voice.default = "This computer's default voice"
+read.voice.needs_key = "Add an API key to load voices"
+read.voice.unavailable = "Voices unavailable"
+read.voice.loading = "Loading voices…"
+read.voice.failed = "Voices: {error}"
+read.voice.retry = "Try Loading Voices Again"
+read.voice.rate.caption = "Speaking speed — {rate} words per minute"
+read.voice.rate.hint = "Left and right arrows adjust this by one word per minute when it has focus."
+
+read.action.caption = "What to do"
+read.action.hint = "{C}4  ·  {description}"
+read.format.caption = "Audio format"
+
+read.apply = "Apply"
+read.apply.hint = "{C}Return  ·  {description}"
+read.stop = "⏹  Stop Reading"
+read.stop.hint = "{C}. or Esc"
+
+read.ready_hint = "Choose a .txt, .docx, .csv or image file, then press Apply. Press F1 for keyboard shortcuts."
+
+
+# --------------------------------------------------------- the file chooser
+
+chooser.document.title = "Choose a document, image or video to read"
+chooser.filter.all = "All supported files"
+chooser.filter.text = "Text files"
+chooser.filter.docx = "Word documents"
+chooser.filter.pdf = "PDF files"
+chooser.filter.table = "Tables"
+chooser.filter.image = "Images"
+chooser.filter.video = "Video"
+chooser.audio.title = "Choose an audio file to play"
+chooser.filter.audio = "Audio files"
+chooser.save.title = "Save the audio file as"
+# The name offered when the document has none of its own.
+chooser.save.fallback_name = "speech"
+
+
+# --------------------------------------------------------- the audio player
+
+player.heading = "Audio player"
+player.intro = "Plays a spoken-word WAV or MP3 — one saved by this app, or any other. Nothing is uploaded and the file on disk is never changed."
+player.file.caption = "Audio file"
+player.file.button = "📂  Choose Audio File…"
+player.file.hint = "{C}O  ·  A WAV or MP3 file. You can also drop one on this window."
+player.file.chosen = "Chosen: {name}"
+player.file.none = "No audio file chosen yet."
+
+player.play = "▶  Play"
+player.play.hint_start = "{C}P  ·  Play the chosen file from the beginning"
+player.play.hint_resume = "{C}P  ·  Carry on from where it was paused"
+player.pause = "⏸  Pause"
+player.pause.hint = "{C}P  ·  Hold the file where it is; Play carries on from there"
+player.stop = "⏹  Stop"
+player.stop.hint = "{C}. or Esc  ·  Stop and return to the beginning"
+player.back = "⏪  Back 10 Seconds"
+player.back.hint = "{C}R  ·  Rewind ten seconds, or to the start if there is less than that"
+
+player.idle = "Not playing."
+player.idle_ready = "Not playing. Press Play to start."
+player.reading_instead = "A document is being read aloud; playing a file will stop it."
+player.position.playing = "Playing — {at}"
+player.position.playing_of = "Playing — {at} of {total}"
+player.position.paused = "Paused at {at}"
+player.position.paused_of = "Paused at {at} of {total}"
+player.position.left = "{left} left"
+
+
+# ---------------------------------------------------------- the Dictionary
+
+dict.heading = "Dictionary"
+dict.intro = "Words listed here are swapped before the document is spoken — to fix how a "
+             "name is pronounced, or to replace a word with a gentler one. Matching ignores "
+             "capitals, and a word that started a sentence still starts one afterwards. "
+             "The file on disk is never changed."
+dict.column.from = "Say this word"
+dict.column.to = "as this"
+dict.column.whole = "Whole word"
+dict.hint.from = "word in the document"
+dict.hint.to = "what to say instead"
+dict.whole.hint = "On: only complete words match. Off: the letters match anywhere, including inside longer words."
+dict.remove = "Remove"
+# Named for a screen reader, which would otherwise hear a column of identical buttons.
+dict.remove.row = "Remove row {number}"
+dict.remove.word = "Remove “{word}”"
+dict.empty = "No replacements yet."
+dict.add = "Add Replacement"
+
+
+# ------------------------------------------------------------ the Settings
+
+settings.heading = "Settings"
+
+settings.language.caption = "Language"
+settings.language.hint = "The language this app's own buttons and messages are written in. It does not change the language of the document being read."
+settings.language.system = "Same as this computer"
+settings.language.folder = "Language files: {path}"
+settings.language.open_folder = "Open Language Folder"
+settings.language.reload = "Reload Language Files"
+settings.language.reloaded = "Language files reloaded — now using {name}."
+settings.language.help = "To translate this app, copy a language file into the folder above, change the code and name at its top, and translate the lines. Press Reload to see your changes without restarting."
+settings.language.problem_count.one = "The language file has {n} line the app could not read."
+settings.language.problem_count.other = "The language file has {n} lines the app could not read."
+settings.language.problem = "Line {line}: {what}"
+settings.language.prompts_kept = "Language changed to {name}. Your own image prompts were kept as you wrote them."
+settings.language.changed = "Language changed to {name}."
+
+settings.model.caption = "ElevenLabs model"
+settings.model.hint = "For example: eleven_multilingual_v2, eleven_turbo_v2_5"
+
+settings.sounds = "Play a sound when an action starts, finishes or fails"
+settings.sounds.hint = "A short tone as the work begins, a chime for success and a lower tone for "
+                       "a problem, so you do not have to watch the status line to know what "
+                       "happened."
+settings.tick = "Keep ticking while it works"
+settings.tick.hint = "A quiet sound every fifteen seconds while something is running, so a "
+                     "long job can be told from a stuck one without watching the screen. It "
+                     "never plays over a document being read aloud."
+
+settings.context_menu.intro = "Right-click a text, Word or CSV file in Explorer to speak it straight to "
+                              "an audio file, using whatever engine and voice are set on the Read a File "
+                              "page. Enabling this copies the app into your settings folder, so the "
+                              "right-click entry keeps working even if this copy is deleted later."
+settings.context_menu.installed_at = "Installed — the app is copied to {path}."
+settings.context_menu.installed = "Installed."
+settings.context_menu.not_installed = "Not installed."
+settings.context_menu.enable = "Enable Right-Click Menu"
+settings.context_menu.disable = "Disable Right-Click Menu"
+settings.context_menu.enabled = "Right-click menu enabled — the app is copied to {path}."
+settings.context_menu.disabled = "Right-click menu disabled."
+
+settings.vision.intro = "Images are read by a vision model running on this computer through Ollama. Nothing is uploaded anywhere."
+settings.vision.caption = "Vision model"
+settings.vision.other_selected = "Other: {model}"
+settings.vision.other = "Other — type a model name"
+settings.vision.other.hint = "Any model in the Ollama library that can read images."
+settings.vision.name.caption = "Model name"
+settings.vision.name.hint = "for example: llava:13b"
+settings.vision.retired = "Current versions of Ollama cannot run this model. Choose one of the suggested ones instead."
+settings.vision.prompt.caption = "Prompt sent with the image"
+settings.vision.prompt.reset = "Reset Prompt To Default"
+
+settings.video.intro = "Video is described by taking still frames out of it and reading each one with "
+                       "the same vision model. Nothing is uploaded anywhere — but every frame is a "
+                       "separate call to the model, so these settings decide how long a video takes "
+                       "as much as how thorough it is."
+settings.video.narrate = "Join the frames into a single description"
+settings.video.narrate.hint = "On, a model rewrites the frame descriptions as one continuous piece of "
+                              "narration. Off, you get each frame described in turn under the time it "
+                              "appears, which is slower to listen to but says exactly where everything "
+                              "came from."
+settings.video.narrator.caption = "Model that writes the description"
+settings.video.narrator.placeholder = "empty — use {model}, the vision model"
+settings.video.narrator.hint = "Left empty, the vision model writes it, which needs no further download. "
+                               "A text model named here will usually write better prose, at the cost of "
+                               "downloading it."
+settings.video.scene.caption = "How much of the picture must change for a new frame"
+settings.video.scene.hint = "Low takes a frame whenever the camera moves, which describes more and takes longer. High takes one only at a clear cut between shots."
+settings.video.interval.caption = "Take a frame anyway after this long"
+settings.video.interval.hint = "A long shot that never cuts would otherwise be described by its opening frame alone."
+settings.video.interval.value = "Every {time}"
+settings.video.max.caption = "Most frames to describe from one video"
+settings.video.max.hint = "The stop that keeps a long or busy video from taking the rest of the day. Frames past this are not described."
+settings.video.max.value = "At most {frames} frames — around {time} on a computer with no graphics card"
+settings.video.frame_prompt.caption = "Prompt sent with each frame"
+settings.video.narration_prompt.caption = "Prompt that joins the frames together"
+settings.video.prompt.reset = "Reset Video Prompts To Defaults"
+
+settings.reset.intro = "Puts every setting on this page — and the engine, voice and action on the "
+                       "Read a File page — back to how the app arrives. Your dictionary and your "
+                       "API key are not touched."
+settings.reset.button = "Reset All Settings To Defaults"
+
+settings.diagnostics.intro = "If something goes wrong, this copies a record of what the app did this "
+                             "session — the files it read, the models it called and what they answered — "
+                             "ready to paste into a bug report. It contains no part of your documents and "
+                             "not your API key."
+settings.diagnostics.button = "Copy Diagnostics To Clipboard"
+settings.diagnostics.copied.one = "Diagnostics copied — {n} line. Paste them into your report."
+settings.diagnostics.copied.other = "Diagnostics copied — {n} lines. Paste them into your report."
+
+settings.file.config = "Settings file: {path}"
+settings.file.log = "Log file: {path}"
+
+
+# ----------------------------------------------------------- the Shortcuts
+
+shortcuts.heading = "Keyboard Shortcuts"
+shortcuts.intro = "Every part of this app can be operated without a mouse. Tab moves forward "
+                  "through the controls, Shift+Tab moves back, and the control with focus is "
+                  "drawn with a heavy outline."
+
+# The left-hand column is a key combination. Translate the key names — Shift,
+# Space, Return, Up, Left — to whatever your keyboards have printed on them, and
+# leave {C} alone.
+#
+# Written as words rather than as arrow characters on purpose: no font this app
+# bundles can draw ← ↑ → ↓, and a screen reader announces a word far better than
+# it announces an arrow.
+shortcuts.open.keys = "{C}O"
+shortcuts.open.what = "Choose a file — a document, or an audio file in the player"
+shortcuts.apply.keys = "{C}Return"
+shortcuts.apply.what = "Apply — run the chosen action"
+shortcuts.stop.keys = "{C}. or Esc"
+shortcuts.stop.what = "Stop reading or playing, or cancel what is running"
+shortcuts.panes.keys = "{C}1 … {C}5"
+shortcuts.panes.what = "Go to Read, Audio player, Dictionary, Settings or Shortcuts"
+shortcuts.play.keys = "{C}P"
+shortcuts.play.what = "Audio player: play, or pause if already playing"
+shortcuts.back.keys = "{C}R"
+shortcuts.back.what = "Audio player: skip back ten seconds"
+shortcuts.rail.keys = "Up / Down"
+shortcuts.rail.what = "Move along the list of panes, once it has focus"
+shortcuts.tab.keys = "Tab / Shift+Tab"
+shortcuts.tab.what = "Move between controls"
+shortcuts.operate.keys = "Space or Return"
+shortcuts.operate.what = "Operate the focused control"
+shortcuts.adjust.keys = "Left / Right"
+shortcuts.adjust.what = "Change the value in an open dropdown or a slider"
+shortcuts.key.keys = "{C}K"
+shortcuts.key.what = "ElevenLabs API key"
+shortcuts.log.keys = "{C}L"
+shortcuts.log.what = "Show or hide the activity log"
+shortcuts.help.keys = "F1"
+shortcuts.help.what = "The Shortcuts pane"
+
+
+# ------------------------------------------------------------- the log pane
+
+log.heading = "Activity log"
+log.hide = "Hide"
+log.hide.hint = "{C}L"
+
+
+# ---------------------------------------------------- the API key dialog
+
+key.heading = "ElevenLabs API Key"
+key.from_env = "The key in the {variable} environment variable is being used. Unset it if you would rather manage the key here."
+key.stored = "A key is saved on this computer, so ElevenLabs voices are ready to use."
+key.remove = "Remove Saved Key"
+key.rejected = "ElevenLabs turned the last key down, so it has been removed. Check the whole key was copied, then paste it again."
+key.ask = "Paste the key from your ElevenLabs account. It is kept {storage}, in a file only "
+          "your account can read. Without a key, choose System voices instead — they need no "
+          "account and work offline."
+key.get = "🌐  Get a Key From ElevenLabs…"
+key.get.hint = "Opens {url} in your browser. Sign in, copy the key, then paste it below."
+key.caption = "API key"
+key.save = "Save Key"
+key.close = "Close"
+key.close.hint = "Esc"
+
+
+# --------------------------------------------------------- other dialogs
+
+reset.heading = "Reset Settings"
+reset.what = "This puts the speech engine, voice, speaking rate, action, audio format, vision model and image prompt back to their original values."
+reset.kept = "Your dictionary is kept, and your ElevenLabs API key is kept. This cannot be undone."
+reset.confirm = "Reset Settings"
+reset.cancel = "Cancel"
+
+install.heading.image = "Reading Images"
+install.heading.video = "Reading Video"
+install.ollama.what = "Reading text out of an image needs Ollama, which runs a vision model on this computer. It is not installed yet."
+install.ollama.button = "Install Ollama"
+install.ollama.download = "Download Ollama"
+install.ffmpeg.what = "Describing a video means taking still frames out of it first, which needs ffmpeg. It is not installed yet."
+install.ffmpeg.button = "Install ffmpeg"
+install.ffmpeg.download = "Download ffmpeg"
+install.runs = "This runs: {command}"
+install.homebrew.runs = "This asks for your Mac's password, then runs: {command}"
+install.homebrew.button = "Install Homebrew"
+install.model.what = "Ollama is installed, but the vision model “{model}” has not been downloaded yet. It is typically several gigabytes and only needs downloading once."
+install.model.button = "Download {model}"
+install.not_now = "Not Now"
+install.advice.homebrew_missing.ollama = "Homebrew isn't installed, so this can't be automated yet. Install Homebrew below, or download Ollama and install it by hand."
+install.advice.no_manager.ollama = "There is no package manager here that the app can drive, so this can't be automated. Ollama can be downloaded and installed by hand instead."
+install.advice.homebrew_missing.ffmpeg = "Homebrew isn't installed, so this can't be automated yet. Install Homebrew below, or download ffmpeg and install it by hand."
+install.advice.no_manager.ffmpeg = "There is no package manager here that the app can drive, so this can't be automated. ffmpeg can be downloaded and installed by hand instead."
+
+update.heading = "Version {version} is available"
+update.download = "Download Release"
+update.not_now = "Not Right Now"
+
+
+# ------------------------------------------------------- the status line
+
+# The word in front of a message, because colour alone is invisible to a screen
+# reader and to roughly one in twelve men. Keep the trailing space.
+status.prefix.success = "Done: "
+status.prefix.error = "Problem: "
+
+status.cancel = "Cancel"
+status.cancelling = "Cancelling…"
+status.ready = "Ready. Press Apply to read it."
+status.unreadable_type = "{name} is not a file type this app can read"
+status.no_file = "Choose a file first."
+status.no_text = "There is no text to read yet — the file is still being read, or it was empty."
+status.no_key = "Add an ElevenLabs API key, or choose System voices."
+status.no_voice = "Choose an ElevenLabs voice first."
+status.reading.one = "Reading aloud… {n} word replaced by the dictionary."
+status.reading.other = "Reading aloud… {n} words replaced by the dictionary."
+status.reading_plain = "Reading aloud…"
+status.finished_reading = "Finished reading."
+status.stopped_reading = "Stopped reading."
+status.loaded = "Loaded {name}. Press Play."
+status.playing = "Playing."
+status.playing_file = "Playing {name}."
+status.paused_at = "Paused at {at}."
+status.resumed_playing = "Playing from {at}."
+status.resumed_paused = "Paused from {at}."
+status.stopped = "Stopped."
+status.finished_playing = "Finished playing."
+status.no_audio_file = "Choose an audio file first."
+status.nothing_saved = "Nothing saved."
+status.saved = "Saved to {path}"
+status.settings_unchanged = "Settings left as they were."
+status.settings_reset = "Settings reset. Your dictionary and API key were kept."
+status.config_failed = "Could not save settings: {error}"
+status.key_saved = "API key saved. Checking it…"
+status.key_accepted = "API key accepted."
+status.key_removed = "API key removed."
+status.key_unchecked = "The key was saved but could not be checked: {error}"
+status.key_rejected = "ElevenLabs rejected that API key, so it has been removed. Enter another, or choose System voices."
+status.key_rejected_env = "ElevenLabs rejected the key in {variable}. Unset it, or replace it with one that works."
+status.image_skipped = "Image not read."
+status.video_skipped = "Video not read."
+
+
+# ----------------------------------------------- what a running job says
+
+job.reading = "Reading {name}…"
+job.looking = "Looking at {name}…"
+job.watching = "Watching {name}…"
+job.installing.homebrew = "Installing Homebrew…"
+job.installing.ollama = "Installing Ollama…"
+job.installing.ffmpeg = "Installing ffmpeg…"
+job.downloading = "Downloading {model}…"
+job.loading_voices = "Loading ElevenLabs voices…"
+job.synthesising = "Synthesising speech…"
+job.synthesising.part = "Synthesising speech — part {current} of {total}…"
+job.saving = "Saving {name}…"
+job.checking.ollama = "Checking for Ollama…"
+job.starting.ollama = "Starting Ollama…"
+job.checking.ffmpeg = "Checking for ffmpeg…"
+job.encoding_image = "Encoding the image…"
+job.asking_model = "Asking {model} to read the image…"
+job.asking_again = "Asking {model} again…"
+job.geocoding = "Looking up where the photo was taken…"
+job.taking_frames = "Taking frames out of {name}…"
+job.describing_frame = "Describing frame {current} of {total} — {at}…"
+job.narrating = "Asking {narrator} to write the description…"
+job.reusing_audio = "Reusing the audio just played…"
+job.writing_file = "Writing the file…"
+
+job.done.homebrew = "Homebrew is installed."
+job.done.ollama = "Ollama is ready."
+job.done.ffmpeg = "ffmpeg is ready."
+job.done.model = "{model} is ready."
+
+# The note beside a file once it has been read: what was extracted, and how much.
+job.note.characters = "{kind} · {characters} characters"
+job.note.image = "image read by {model} · {characters} characters"
+job.note.video = "video read by {model} · {described} of {total} frames described"
+job.note.video_narrated = "video read by {model} from {described} of {total} frames, described by {narrator}"
+job.note.frame_by_frame = " · frame by frame"
+job.frames.taken = "describing {total} frames from {name}"
+job.frames.taken_of = "{name} runs for {length} — describing {total} frames from it"
+job.photo_taken_in = "Taken in "
+
+
+# ---------------------------------------------------- when a job goes wrong
+
+error.no_readable_text = "{name} contains no readable text"
+error.no_vision_model = "no Ollama vision model is configured"
+error.image_unreadable = "{model} could not read anything from this image"
+error.video_unreadable = "{model} could not describe any of the {total} frames taken from {name}"
+error.ollama_manual = "Ollama cannot be installed automatically on this computer. Download it from https://ollama.com/download instead."
+error.ffmpeg_manual = "ffmpeg cannot be installed automatically on this computer. Download it from {url} instead."
+error.unsupported_platform = "System voices are available on macOS and Windows. On this system, choose ElevenLabs instead."
+error.unreadable_type = "{name} is not a file type accessengine can read"
+error.needs_ollama = "{name} needs Ollama to read, which can take a while and may need setup — open it in accessengine instead of using the right-click menu"
+
+# Warnings that go to the activity log rather than the status line.
+log.model_empty = "{model} returned nothing; retrying with a simpler prompt"
+log.model_truncated = "{model} ran out of context and stopped early; the end of this description is missing"
+log.frame_truncated = "frame {number} was cut off before {model} finished describing it"
+log.frame_too_short = "{model} was cut off with too little of frame {number} to keep"
+log.frame_empty = "{model} had nothing to say about frame {number}"
+log.geocode_failed = "could not look up where the photo was taken: {error}"
+log.narration_unusable = "{narrator} did not return a usable description; falling back to the frame-by-frame account"
+log.narration_failed = "{narrator} could not write the description ({error}); falling back to the frame-by-frame account"
+log.frames_cleanup = "video: could not clean up {path} — {error}"
+
+
+# ------------------------------------------------------------ the choices
+
+engine.system.label = "System voices"
+engine.system.description = "The voices built into this computer. No account or internet needed."
+engine.elevenlabs.label = "ElevenLabs"
+engine.elevenlabs.description = "Higher-quality online voices. Needs an ElevenLabs API key."
+
+formatting.ignore.label = "Words only"
+formatting.ignore.description = "Read the text and nothing else."
+formatting.announce.label = "Words and formatting"
+formatting.announce.description = "Also say where bold, italic, underline, strikethrough, colour and "
+                                  "highlighting start and end. Word documents only."
+
+action.read.label = "Read Text Aloud"
+action.read.description = "Speak the document through this computer's audio output."
+action.save.label = "Save Audio File"
+action.save.description = "Write the spoken document to an audio file on disk."
+
+format.wav.label = "WAV (uncompressed)"
+format.mp3.label = "MP3 (compressed)"
+
+filekind.text = "text file"
+filekind.docx = "Word document"
+filekind.pdf = "PDF"
+filekind.csv = "table"
+filekind.image = "image"
+filekind.video = "video"
+# Used when the kind is not known — "a file has none".
+filekind.unknown = "file"
+
+sensitivity.very_high = "Very sensitive — takes a frame on camera movement, not just cuts"
+sensitivity.high = "Sensitive — catches pans and gradual changes"
+sensitivity.balanced = "Balanced — roughly one frame per shot"
+sensitivity.low = "Selective — only clear cuts between shots"
+sensitivity.very_low = "Very selective — only a complete change of picture"
+
+
+# --------------------------------------------------- how long things take
+
+# Spoken durations, read aloud as often as they are seen. Every one of the four
+# below is counted, so give each the forms your language uses.
+time.seconds.one = "{n} second"
+time.seconds.other = "{n} seconds"
+time.minutes.one = "{n} minute"
+time.minutes.other = "{n} minutes"
+# Minutes and seconds together: "3 minutes 20 seconds".
+time.both = "{minutes} {seconds}"
+
+
+# ------------------------------------------------ the vision models offered
+
+model.qwen3b = "Qwen2.5-VL 3B — about 3 GB. Reads text well and is the quickest to download."
+model.qwen7b = "Qwen2.5-VL 7B — about 5.7 GB. Better on dense or handwritten pages, slower to answer."
+model.granite = "Granite Vision 2B — about 2.3 GB. The smallest; tuned for documents and tables."
+model.gemma = "Gemma 3 4B — about 3.2 GB. Describes photographs and scenes well."
+model.minicpm = "MiniCPM-V 8B — about 5.2 GB. A strong all-rounder on both text and scenes."
+
+
+# ------------------------------------------- what the vision model is asked
+#
+# These three are not interface text: they are sent to the model that reads
+# images and video. Write them in the language you want the descriptions read
+# back in — a French app with a French prompt gets a French description that a
+# French voice can read. Keep the instructions themselves, especially the last
+# sentence of each: without it the model answers in Markdown, and a speech
+# synthesiser reads the asterisks out.
+#
+# A prompt the user has edited in Settings is never overwritten by these.
+
+# Sent instead when a model answers the full prompt with silence, which small
+# ones do on a long conditional instruction. Keep it as plain as this.
+prompt.fallback = "Describe this image, including any text it contains."
+
+prompt.vision = "Describe what this image shows in two or three plain sentences. Then transcribe every "
+                "word of any text that appears in it, exactly as written, preserving the reading order "
+                "and line breaks. If the image is mainly a page or screen of text, keep the description "
+                "to one short sentence and give the full transcription. Your answer will be read aloud, "
+                "so write plain sentences with no headings, bullet points, markdown, asterisks or code "
+                "blocks."
+
+prompt.frame = "This is a single frame from a video. Describe what it shows in one or two plain sentences: "
+               "where it is, who or what is in it, and what they appear to be doing. If words appear on "
+               "screen, give them exactly as written. Do not begin with a phrase like \"this image shows\" — "
+               "describe the scene directly. Your answer will be read aloud, so write plain sentences with "
+               "no headings, bullet points, markdown, asterisks or code blocks."
+
+prompt.narration = "Below are descriptions of still frames taken from a video, in order, each labelled with when "
+                   "it appears. Write a single flowing description of the video for someone who cannot see it. "
+                   "Describe only what the frames actually show: do not invent events, dialogue or explanations "
+                   "for what happened between them, and where the frames do not say what connects two moments, "
+                   "simply move on to the next. Mention the timings only where they matter. Your answer will be "
+                   "read aloud, so write plain sentences with no headings, bullet points, markdown, asterisks or "
+                   "code blocks."
