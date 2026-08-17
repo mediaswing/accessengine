@@ -650,7 +650,10 @@ mod tests {
     #[test]
     fn reads_strings_with_escapes_and_nesting() {
         assert_eq!(parse(br"(a\(b\)c)"), Object::Str(b"a(b)c".to_vec()));
-        assert_eq!(parse(b"(outer (inner) end)"), Object::Str(b"outer (inner) end".to_vec()));
+        assert_eq!(
+            parse(b"(outer (inner) end)"),
+            Object::Str(b"outer (inner) end".to_vec())
+        );
         assert_eq!(parse(br"(\101\102)"), Object::Str(b"AB".to_vec()));
         // A backslash before a newline continues the line without adding one.
         assert_eq!(parse(b"(one\\\ntwo)"), Object::Str(b"onetwo".to_vec()));

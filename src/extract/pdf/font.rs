@@ -300,9 +300,7 @@ impl Widths {
             // A composite font's widths are keyed by glyph number, which is
             // what the code already is under `Identity-H` — the encoding all
             // but a handful of these files use.
-            Self::Composite { default, widths } => {
-                widths.get(&code).copied().unwrap_or(*default)
-            }
+            Self::Composite { default, widths } => widths.get(&code).copied().unwrap_or(*default),
             Self::Assumed(width) => *width,
         }
     }
@@ -336,7 +334,8 @@ fn simple_table(doc: &Document, dict: &Dict, base_font: &str) -> [char; 256] {
     };
     // The Courier/Helvetica/Times built-ins predate WinAnsi and use the
     // Standard set unless told otherwise.
-    let base_name = base_name.or_else(|| is_standard_base_font(base_font).then_some("StandardEncoding"));
+    let base_name =
+        base_name.or_else(|| is_standard_base_font(base_font).then_some("StandardEncoding"));
 
     let mut table = encodings::base_table(base_name);
     let Some(differences) = differences else {
@@ -419,8 +418,7 @@ fn parse_cmap(data: &[u8]) -> HashMap<u32, String> {
                             lexer.next_object(),
                             lexer.next_object(),
                         ) {
-                            let (Some(low), Some(high)) = (low.as_bytes(), high.as_bytes())
-                            else {
+                            let (Some(low), Some(high)) = (low.as_bytes(), high.as_bytes()) else {
                                 break;
                             };
                             let (low, high) = (code_of(low), code_of(high));

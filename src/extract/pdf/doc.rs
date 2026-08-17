@@ -82,9 +82,9 @@ impl<'a> Document<'a> {
     /// and the strings and streams inside are still unreadable without
     /// undoing it.
     pub fn is_encrypted(&self) -> bool {
-        self.trailers
-            .iter()
-            .any(|trailer| matches!(trailer.get("Encrypt"), Some(object) if *object != Object::Null))
+        self.trailers.iter().any(
+            |trailer| matches!(trailer.get("Encrypt"), Some(object) if *object != Object::Null),
+        )
     }
 
     /// Follows a reference to the object it names. Chains are bounded: a file
@@ -250,7 +250,10 @@ impl<'a> Document<'a> {
                 continue;
             };
             let count = self.get(dict, "N").and_then(Object::as_i64).unwrap_or(0);
-            let first = self.get(dict, "First").and_then(Object::as_i64).unwrap_or(0);
+            let first = self
+                .get(dict, "First")
+                .and_then(Object::as_i64)
+                .unwrap_or(0);
             let (Ok(count), Ok(first)) = (usize::try_from(count), usize::try_from(first)) else {
                 continue;
             };

@@ -381,13 +381,16 @@ impl<'a> Extractor<'a> {
         text.advance(distance);
         let (end_x, ..) = text.placement(ctm);
 
-        writer.show(&decoded.text, Shown {
-            x,
-            y,
-            size,
-            end_x,
-            measured: font.has_widths(),
-        });
+        writer.show(
+            &decoded.text,
+            Shown {
+                x,
+                y,
+                size,
+                end_x,
+                measured: font.has_widths(),
+            },
+        );
     }
 
     /// The font a resource name refers to, read once and then remembered: the
@@ -484,7 +487,11 @@ impl TextState {
         let scale = (placement[0] * placement[3] - placement[1] * placement[2])
             .abs()
             .sqrt();
-        (placement[4], placement[5], (self.size.abs() * scale).max(0.01))
+        (
+            placement[4],
+            placement[5],
+            (self.size.abs() * scale).max(0.01),
+        )
     }
 }
 
@@ -729,7 +736,9 @@ mod tests {
     #[test]
     fn the_size_comes_from_the_matrix_as_well_as_the_font() {
         assert_eq!(
-            text_of("BT /F1 1 Tf 24 0 0 24 72 700 Tm (first) Tj 24 0 0 24 72 672 Tm (second) Tj ET"),
+            text_of(
+                "BT /F1 1 Tf 24 0 0 24 72 700 Tm (first) Tj 24 0 0 24 72 672 Tm (second) Tj ET"
+            ),
             "first\nsecond"
         );
     }

@@ -26,11 +26,7 @@ const MAX_DECODED_BYTES: usize = 128 * 1024 * 1024;
 /// Decodes one stream's data through whatever chain of filters its dictionary
 /// names. `resolve` supplies the value of any indirect reference, since both
 /// `/Filter` and `/DecodeParms` are allowed to be one.
-pub fn decode(
-    dict: &Dict,
-    raw: &[u8],
-    resolve: &dyn Fn(&Object) -> Object,
-) -> Result<Vec<u8>> {
+pub fn decode(dict: &Dict, raw: &[u8], resolve: &dyn Fn(&Object) -> Object) -> Result<Vec<u8>> {
     let filters = names(dict.get("Filter"), resolve);
     let parms = parameter_dicts(dict.get("DecodeParms"), resolve, filters.len());
 
@@ -464,7 +460,10 @@ mod tests {
     fn applies_a_chain_of_filters_in_order() {
         // Hex on the outside, flate underneath — the order `/Filter` lists.
         let compressed = deflate(b"nested");
-        let hex: String = compressed.iter().map(|byte| format!("{byte:02X}")).collect();
+        let hex: String = compressed
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect();
         let decoded = decode(
             &dict(&[(
                 "Filter",
@@ -491,7 +490,10 @@ mod tests {
     #[test]
     fn decodes_run_length_runs_and_literals() {
         // 2 → three literal bytes; 254 → three copies of the next byte.
-        assert_eq!(run_length(&[2, b'a', b'b', b'c', 254, b'z', 128]), b"abczzz");
+        assert_eq!(
+            run_length(&[2, b'a', b'b', b'c', 254, b'z', 128]),
+            b"abczzz"
+        );
     }
 
     #[test]
@@ -509,10 +511,7 @@ mod tests {
     fn undoes_a_png_up_predictor() {
         // Two rows of three columns; the second is stored as deltas from the
         // first with filter type 2 ("up").
-        let parms = dict(&[
-            ("Predictor", Object::Int(12)),
-            ("Columns", Object::Int(3)),
-        ]);
+        let parms = dict(&[("Predictor", Object::Int(12)), ("Columns", Object::Int(3))]);
         let data = vec![0, 10, 20, 30, 2, 1, 1, 1];
         assert_eq!(
             undo_predictor(data, &parms, &no_references),

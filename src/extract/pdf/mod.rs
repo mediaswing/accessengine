@@ -169,7 +169,10 @@ pub fn extract(path: &Path) -> Result<Extracted> {
     ));
 
     if with_text == 0 {
-        bail!("{}", nothing_to_read(&name(), pages.len(), extractor.dropped));
+        bail!(
+            "{}",
+            nothing_to_read(&name(), pages.len(), extractor.dropped)
+        );
     }
 
     // Some pages read and some did not, which is the case that needs saying out
@@ -433,7 +436,10 @@ mod tests {
         assert!(!is_garbled(4381, 3), "a clean page is not garbled");
         assert!(!is_garbled(3661, 39), "1% lost is not garbled");
         assert!(is_garbled(1225, 518), "30% lost is garbled");
-        assert!(is_garbled(0, 1593), "a page that lost everything is garbled");
+        assert!(
+            is_garbled(0, 1593),
+            "a page that lost everything is garbled"
+        );
         // A handful of undecodable glyphs on a nearly empty page is a symbol in
         // a logo, not a sentence, and saying otherwise would cry wolf.
         assert!(!is_garbled(0, 4), "a stray glyph is not garbled");
@@ -541,8 +547,14 @@ mod tests {
             page("", true),
         ];
         let assembled = assemble(&pages);
-        assert!(assembled.starts_with("[Page 1 could not be read"), "{assembled}");
-        assert!(assembled.contains("[Pages 3 to 4 could not be read"), "{assembled}");
+        assert!(
+            assembled.starts_with("[Page 1 could not be read"),
+            "{assembled}"
+        );
+        assert!(
+            assembled.contains("[Pages 3 to 4 could not be read"),
+            "{assembled}"
+        );
     }
 
     /// A garbled page that still has some text keeps it, with the warning ahead
@@ -591,4 +603,3 @@ mod tests {
         );
     }
 }
-
