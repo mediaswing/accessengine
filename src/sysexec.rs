@@ -198,7 +198,10 @@ pub fn ps_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SEQUENCE, create_scratch_dir, create_scratch_file, ps_quote};
+    use super::{create_scratch_dir, create_scratch_file, ps_quote};
+    // Only the symlink test below needs these, and that test is Unix-only.
+    #[cfg(unix)]
+    use super::SEQUENCE;
     #[cfg(unix)]
     use std::sync::atomic::Ordering;
 
