@@ -281,6 +281,39 @@ fn floor_after(
     }
 }
 
+/// Marks a widget as a live region, so a screen reader speaks its text whenever
+/// it changes instead of only when something moves the focus onto it.
+///
+/// This is the one thing the app was missing for the user it exists for. The
+/// status line is an ordinary label: not focusable, not in the Tab order, and
+/// silent unless somebody goes looking for it with a review cursor. Everything
+/// the app has to say about how an action ended arrives there — including every
+/// failure — so a blind user got the error *chime* and never the error. They
+/// heard that something went wrong and were not told what.
+///
+/// Nothing else on screen is a live region, and that restraint is the point.
+/// The running commentary while a job works — "describing frame 3 of 40" —
+/// deliberately stays out: it is replaced several times a second, and a reader
+/// that recited every one of those would be worse than one that said nothing.
+/// That job already has a channel of its own in the progress tick. What lands
+/// here is only the settled outcome, which is the thing worth interrupting for.
+///
+/// `Assertive` for a failure and `Polite` for everything else, matching what
+/// `role="alert"` and `role="status"` mean on the web: an error interrupts
+/// whatever the reader is part-way through, a success waits its turn.
+fn announce_changes(ui: &egui::Ui, id: egui::Id, tone: Tone) {
+    use egui::accesskit::Live;
+
+    let urgency = match tone {
+        Tone::Error => Live::Assertive,
+        Tone::Info | Tone::Success => Live::Polite,
+    };
+    // `None` when the platform has no accessibility tree attached, which is the
+    // normal case when no assistive technology is running. Nothing to do then.
+    ui.ctx()
+        .accesskit_node_builder(id, |node| node.set_live(urgency));
+}
+
 /// Writes the percentage across the middle of a progress bar.
 ///
 /// Painted here rather than left to `ProgressBar::show_percentage`, which puts
@@ -294,10 +327,19 @@ fn percentage_across(ui: &egui::Ui, bar: egui::Rect, progress: f32) {
     let text = format!("{}%", (progress * 100.0).round() as u32);
     let font = egui::TextStyle::Button.resolve(ui.style());
     let painter = ui.painter().with_clip_rect(bar);
+    // All eight neighbours, not just the four diagonals. The halo is the only
+    // thing standing between this text and 1.45:1 against the light theme's
+    // white track, and a halo with gaps in it is not a halo — with the corners
+    // alone, every vertical stroke had bare yellow along both its sides. See
+    // [`theme::PROGRESS_TEXT`] for the measurements.
     for offset in [
         egui::vec2(-1.0, -1.0),
+        egui::vec2(0.0, -1.0),
         egui::vec2(1.0, -1.0),
+        egui::vec2(-1.0, 0.0),
+        egui::vec2(1.0, 0.0),
         egui::vec2(-1.0, 1.0),
+        egui::vec2(0.0, 1.0),
         egui::vec2(1.0, 1.0),
     ] {
         painter.text(
@@ -419,6 +461,10 @@ impl SpeechApp {
         let (update_tx, update_rx) = channel();
         let (api_key, key_source) = apikey::load();
         let config = Config::load();
+        // Before the first frame, so the window is never painted in the theme
+        // the user turned off — a light flash on the way to a dark app is
+        // exactly what somebody choosing dark is trying to avoid.
+        crate::theme::apply_appearance(&cc.egui_ctx, config.appearance);
 
         let mut app = Self {
             config,
@@ -1829,7 +1875,13 @@ impl SpeechApp {
             return;
         }
 
-        match &self.status {
+        // One `push_id` around both arms so the label underneath keeps the same
+        // accessibility id from frame to frame. A live region is recognised by
+        // its node changing *text*, so a node that changed *identity* every
+        // frame would either be announced constantly or not at all, depending
+        // on the platform — and egui's automatic ids shift as soon as the arm
+        // taken here changes.
+        ui.push_id("status_line", |ui| match &self.status {
             Some((message, tone)) => {
                 let palette = crate::theme::palette(ui.visuals());
                 let colour = match tone {
@@ -1837,18 +1889,22 @@ impl SpeechApp {
                     Tone::Success => palette.ok,
                     Tone::Error => palette.bad,
                 };
-                ui.add(
+                let label = ui.add(
                     egui::Label::new(
                         RichText::new(format!("{}{message}", tone.prefix())).color(colour),
                     )
                     .wrap(),
                 );
+                announce_changes(ui, label.id, *tone);
             }
             None => {
                 let muted = crate::theme::palette(ui.visuals()).muted;
-                ui.add(egui::Label::new(RichText::new(t!("read.ready_hint")).color(muted)).wrap());
+                let label = ui.add(
+                    egui::Label::new(RichText::new(t!("read.ready_hint")).color(muted)).wrap(),
+                );
+                announce_changes(ui, label.id, Tone::Info);
             }
-        }
+        });
     }
 
     fn log_pane(&mut self, ui: &mut egui::Ui) {
@@ -2392,6 +2448,10 @@ impl SpeechApp {
 
         ui.add_space(12.0);
         ui.separator();
+        edited |= self.appearance_setting(ui);
+
+        ui.add_space(12.0);
+        ui.separator();
         let caption = ui.label(t!("settings.model.caption"));
         let model = ui.add(
             egui::TextEdit::singleline(&mut self.config.elevenlabs_model_id)
@@ -2480,6 +2540,19 @@ impl SpeechApp {
         ui.add_space(12.0);
         ui.separator();
         ui.add(egui::Label::new(t!("settings.vision.intro")).wrap());
+        ui.add_space(6.0);
+
+        // Directly under the sentence promising that reading an image happens
+        // on this computer, because this is the single exception to it and the
+        // two belong in the same glance. Off unless it is deliberately turned
+        // on: what gets sent is where the photograph was taken.
+        let location = ui
+            .checkbox(
+                &mut self.config.lookup_photo_location,
+                t!("settings.location"),
+            )
+            .on_hover_text(t!("settings.location.hint"));
+        edited |= location.changed();
         ui.add_space(6.0);
 
         // A dropdown rather than a text field, because the name has to match a
@@ -2625,6 +2698,51 @@ impl SpeechApp {
                 .wrap(),
             );
         }
+    }
+
+    /// The light/dark picker.
+    ///
+    /// Second on the page, under the language: both answer "how does this app
+    /// present itself", and neither has anything to do with the voice or the
+    /// document. Returns whether anything changed.
+    ///
+    /// The choice takes effect on the next frame — which is this one — so the
+    /// window changes colour under the cursor as the answer is picked, rather
+    /// than needing a restart to show what was chosen.
+    fn appearance_setting(&mut self, ui: &mut egui::Ui) -> bool {
+        let caption = ui.label(t!("settings.appearance.caption"));
+
+        let mut chosen = self.config.appearance;
+        let combo = egui::ComboBox::from_id_salt("appearance")
+            .width(FORM_WIDTH)
+            .selected_text(chosen.label())
+            .show_ui(ui, |ui| {
+                for option in crate::config::Appearance::ALL {
+                    // The description is the hover text on each row rather than
+                    // a second line inside it: a screen reader announces the
+                    // label, and a row that reads out its own explanation every
+                    // time the arrow keys pass over it is slower to walk, not
+                    // clearer.
+                    ui.selectable_value(&mut chosen, option, option.label())
+                        .on_hover_text(option.description());
+                }
+            })
+            .response;
+        let combo = combo.on_hover_text(t!("settings.appearance.hint"));
+        let _ = caption.labelled_by(combo.id);
+
+        if chosen != self.config.appearance {
+            self.config.appearance = chosen;
+            crate::theme::apply_appearance(ui.ctx(), chosen);
+            // Said out loud as well as shown, because the one user who cannot
+            // check the result by looking at it is the one this app is for.
+            self.set_status_quietly(
+                t!("status.appearance_changed", name = chosen.label()),
+                Tone::Success,
+            );
+            return true;
+        }
+        false
     }
 
     /// The language picker, and the folder a translator works in.

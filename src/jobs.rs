@@ -311,9 +311,18 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         bail!("{}", t!("error.image_unreadable", model = model));
     }
 
-    // A bonus, not a requirement: a photo with no location tag, or a lookup
-    // that fails, still leaves the description the model already gave.
-    if let Some(location) = encoded.location
+    // A bonus, not a requirement: a photo with no location tag, a lookup turned
+    // off, or a lookup that fails, all still leave the description the model
+    // already gave.
+    //
+    // `lookup_photo_location` is checked first and is off unless the user went
+    // and turned it on. Reading an image is otherwise entirely local — the
+    // vision model runs here — and this one call would quietly post the
+    // coordinates of wherever the photo was taken, frequently somebody's home,
+    // to a server on the other side of the internet. That is a thing to be
+    // asked about, not a default.
+    if config.lookup_photo_location
+        && let Some(location) = encoded.location
         && !cancelled(cancel)
     {
         let _ = tx.send(Update::Status(t!("job.geocoding")));
@@ -425,16 +434,15 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
     let _ = tx.send(Update::Status(t!("job.taking_frames", name = name)));
     let _ = tx.send(Update::Progress(0.0));
 
-    let dir = FrameDir(std::env::temp_dir().join(format!(
-        "accessengine-frames-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or_default()
-    )));
-    std::fs::create_dir_all(&dir.0)
-        .with_context(|| format!("could not create {}", dir.0.display()))?;
+    // Created exclusively rather than with `create_dir_all`, which would happily
+    // accept a directory — or a symlink to one — that somebody else had put
+    // there first. See [`crate::sysexec::create_scratch_dir`]; the frames of the
+    // user's video go in here, and everything in here is read back out and
+    // described to them.
+    let dir = FrameDir(
+        crate::sysexec::create_scratch_dir("accessengine-frames")
+            .context("could not make somewhere to put the frames")?,
+    );
 
     let log = tx.clone();
     let frames = crate::ffmpeg::extract_frames(

@@ -31,9 +31,18 @@ This is the point of the app rather than a feature of it.
 - **Colour is never the only signal.** Status messages are prefixed with
   "Done:" or "Problem:" as well as coloured, and — unless you turn it off —
   starting, finishing and failing each make their own sound.
+- **The status line speaks for itself.** It is a live region, so a screen reader
+  reads out how an action ended as it happens, rather than waiting for you to go
+  looking for it. A failure interrupts; anything else waits its turn. The
+  running commentary while a long job works is deliberately left out of that —
+  it changes several times a second, and the progress tick is its channel.
 - **Contrast is designed, not inherited.** Every text colour in `src/theme.rs`
   is written down as a pair with the surface it sits on, and clears 4.5:1 in
-  both the light and dark themes. The app follows your system appearance.
+  both the light and dark themes — most clear 7:1.
+- **Light or dark, your choice.** Under **Settings → Appearance**: follow the
+  computer, or pin the app to light or dark whatever the rest of the machine is
+  doing. It changes as you pick it, with no restart. A dark window on a bright
+  desktop is an ordinary thing to want if screens are hard on your eyes.
 - **One column, one width.** Every control in the form is the same width and
   the layout never reflows, so a screen magnifier parked on the left edge stays
   useful all the way down.
@@ -453,12 +462,23 @@ treated as untrusted.
   kilobytes on disk, and an app that dies on one is an app that fails the person
   relying on it to read their post. PDF streams are compressed too, and a
   malformed one can describe an endless page.
-- **Scratch files are created exclusively** and, on macOS, readable only by their
-  owner, so a name guessed in advance is an error rather than a write through
-  someone else's symlink.
+- **Scratch files and directories are created exclusively** and, on macOS,
+  readable only by their owner, so a name guessed in advance is an error rather
+  than a write through someone else's symlink. Directories matter as much as
+  files here: the stills taken out of a video are written into one and every
+  image found there is read back and described, so a directory somebody else had
+  already put at that name would be both a copy of what you were watching and a
+  way to put a picture in front of the model that never came out of your video.
 - **Nothing is uploaded except to ElevenLabs**, and only when you have chosen it.
-  Images are read by a model on your own machine. TLS certificate verification is
-  never disabled.
+  Images are read by a model on your own machine, and the picture itself never
+  leaves it. TLS certificate verification is never disabled.
+- **Your photos' locations stay put unless you ask otherwise.** Most cameras and
+  phones write the exact spot a photo was taken into it, and turning that into a
+  place name needs a service — there is no local database of them. So **Look up
+  where a photo was taken** is off until you turn it on, under **Settings →
+  Vision**. With it on, the coordinate alone — never the photo — goes to
+  OpenStreetMap's Nominatim and comes back as something like "Ambleside,
+  England", which is then read out with the description.
 
 ## How it is put together
 

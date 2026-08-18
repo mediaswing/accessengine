@@ -38,8 +38,19 @@ pub const PROGRESS_HEIGHT: f32 = 24.0;
 /// rather than the page. It needs the outline because that surface is two
 /// surfaces: the text sits over the empty track while the job is less than half
 /// done and over the filled part after that, and no single colour is legible on
-/// both the white track of the light theme and the blue fill. Outlined, the
-/// yellow clears 4.5:1 on either.
+/// both the white track of the light theme and the blue fill.
+///
+/// Be precise about what carries the contrast here, because the obvious reading
+/// is wrong and an earlier version of this comment got it wrong: the yellow
+/// against the white track is **1.45:1**, nowhere near legible on its own. What
+/// makes the glyph readable is the dark halo — yellow on that outline is
+/// 13.5:1, and the outline on white is 18.9:1 — so the eye reads a light shape
+/// with a dark edge, the way a subtitle stays readable over any picture.
+///
+/// That only holds if the halo actually closes. It is drawn at all eight
+/// neighbouring offsets in [`crate::app::percentage_across`]; with the four
+/// diagonals alone, the top, bottom and sides of every stroke touched the white
+/// track directly and the 1.45:1 was exactly what you saw there.
 pub const PROGRESS_TEXT: Color32 = Color32::from_rgb(255, 209, 74);
 pub const PROGRESS_TEXT_OUTLINE: Color32 = Color32::from_rgb(10, 12, 16);
 
@@ -206,6 +217,26 @@ fn dark_visuals() -> Visuals {
     visuals
 }
 
+/// Puts the user's light/dark choice into effect.
+///
+/// Both palettes are registered either way by [`apply`]; all this decides is
+/// which of them egui reaches for. `System` hands the question back to the
+/// operating system, which is what the app did unconditionally before there was
+/// anything to ask.
+///
+/// Cheap enough to call every frame — it sets one enum in egui's options and
+/// rebuilds no fonts — which is what lets the setting take effect the instant it
+/// is changed rather than at the next launch.
+pub fn apply_appearance(ctx: &egui::Context, appearance: crate::config::Appearance) {
+    use crate::config::Appearance;
+
+    ctx.set_theme(match appearance {
+        Appearance::System => egui::ThemePreference::System,
+        Appearance::Light => egui::ThemePreference::Light,
+        Appearance::Dark => egui::ThemePreference::Dark,
+    });
+}
+
 /// Applies fonts, both palettes and the spacing. Rebuilding the glyph atlas is
 /// expensive, so this runs once, from the constructor — never per frame.
 pub fn apply(ctx: &egui::Context) {
@@ -249,4 +280,54 @@ pub fn apply(ctx: &egui::Context) {
         // on both themes. Weak text here is a shade, not a whisper.
         style.visuals.weak_text_alpha = 0.85;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Appearance;
+
+    /// Each choice reaches the theme it names. Worth pinning down because the
+    /// two enums have the same three variants in a different order, so getting
+    /// this mapping backwards would compile perfectly and hand somebody who
+    /// asked for dark a white screen.
+    #[test]
+    fn each_appearance_selects_the_theme_it_names() {
+        for (appearance, expected) in [
+            (Appearance::System, egui::ThemePreference::System),
+            (Appearance::Light, egui::ThemePreference::Light),
+            (Appearance::Dark, egui::ThemePreference::Dark),
+        ] {
+            let ctx = egui::Context::default();
+            apply_appearance(&ctx, appearance);
+            assert_eq!(
+                ctx.options(|options| options.theme_preference),
+                expected,
+                "{appearance:?} chose the wrong theme"
+            );
+        }
+    }
+
+    /// Both palettes stay registered whichever way the preference points, since
+    /// the choice only picks between them — a `Light` preference that had left
+    /// the dark visuals unset would go back to egui's defaults, contrast
+    /// measurements and all, the moment the user switched over.
+    #[test]
+    fn both_palettes_survive_a_choice_of_either() {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        apply_appearance(&ctx, Appearance::Dark);
+
+        assert!(ctx.style_of(Theme::Dark).visuals.dark_mode);
+        assert!(!ctx.style_of(Theme::Light).visuals.dark_mode);
+        // The app's own panel fills, not egui's, in both directions.
+        assert_eq!(
+            ctx.style_of(Theme::Light).visuals.panel_fill,
+            light_visuals().panel_fill
+        );
+        assert_eq!(
+            ctx.style_of(Theme::Dark).visuals.panel_fill,
+            dark_visuals().panel_fill
+        );
+    }
 }

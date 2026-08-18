@@ -178,6 +178,46 @@ impl Action {
     }
 }
 
+/// Whether the app draws itself light, dark, or however this computer is set.
+///
+/// Both palettes have always existed — see [`crate::theme`] — but until now the
+/// only way to reach the dark one was to change the whole operating system over,
+/// which is not a reasonable thing to ask of somebody who wants one window
+/// dimmer. Light sensitivity and glare are ordinary reasons to want a dark
+/// window on a light desktop, and the reverse — a light window for someone who
+/// finds low-contrast dark themes harder to read — is just as ordinary.
+///
+/// `System` stays the default, because following the machine is right for most
+/// people and it is what every previous version did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+
+    pub fn label(self) -> String {
+        match self {
+            Self::System => t!("appearance.system.label"),
+            Self::Light => t!("appearance.light.label"),
+            Self::Dark => t!("appearance.dark.label"),
+        }
+    }
+
+    pub fn description(self) -> String {
+        match self {
+            Self::System => t!("appearance.system.description"),
+            Self::Light => t!("appearance.light.description"),
+            Self::Dark => t!("appearance.dark.description"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -190,6 +230,9 @@ pub struct Config {
     /// "whatever this computer says" would be a reset that hides its own
     /// confirmation dialog behind a language they did not choose.
     pub language: String,
+
+    /// Light, dark, or whatever this computer is set to. See [`Appearance`].
+    pub appearance: Appearance,
 
     #[serde(deserialize_with = "deserialize_engine")]
     pub engine: EnginePreference,
@@ -225,6 +268,17 @@ pub struct Config {
 
     /// Words to swap out before the document is spoken. See [`crate::dictionary`].
     pub dictionary: Vec<Replacement>,
+
+    /// Whether a photo's GPS tag is sent away to be turned into a place name.
+    ///
+    /// **Off by default, and the only setting on this page that reaches the
+    /// internet on the image path.** Everything else about reading an image
+    /// happens on this computer: the vision model runs locally through Ollama
+    /// and the picture itself never leaves. A coordinate is different in kind
+    /// from a preference — it is where somebody was standing, often their own
+    /// home — so it is not something to send to a third party because a
+    /// checkbox was already ticked when they arrived. See [`crate::geocode`].
+    pub lookup_photo_location: bool,
 
     /// Ollama vision model used to turn an image into readable text.
     #[serde(deserialize_with = "deserialize_vision_model")]
@@ -266,6 +320,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             language: AUTO_LANGUAGE.to_string(),
+            appearance: Appearance::System,
             engine: EnginePreference::System,
             action: Action::ReadAloud,
             formatting: Formatting::Ignore,
@@ -278,6 +333,7 @@ impl Default for Config {
             system_voice: String::new(),
             system_rate: 175,
             dictionary: Vec::new(),
+            lookup_photo_location: false,
             ollama_model: DEFAULT_VISION_MODEL.to_string(),
             ollama_prompt: default_vision_prompt(),
             video_frame_prompt: default_frame_prompt(),
@@ -468,6 +524,56 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Sending a coordinate off this computer is opt-in, and stays opt-in. If
+    /// this default ever flips, every existing user starts uploading the
+    /// position their photos were taken at without being asked once.
+    #[test]
+    fn looking_up_a_photos_location_is_off_until_it_is_asked_for() {
+        assert!(!Config::default().lookup_photo_location);
+
+        // Including for somebody upgrading from a version that had no such
+        // setting: an old config has no such line, and a missing line must read
+        // as "off" rather than as "whatever serde felt like".
+        let old: Config = serde_json::from_str("{}").expect("an empty config should parse");
+        assert!(!old.lookup_photo_location);
+    }
+
+    /// The appearance survives a save and a load, which is the whole point of
+    /// it being a setting rather than a toggle that forgets.
+    #[test]
+    fn the_appearance_is_remembered_and_defaults_to_following_the_computer() {
+        assert_eq!(Config::default().appearance, Appearance::System);
+
+        for appearance in Appearance::ALL {
+            let config = Config {
+                appearance,
+                ..Config::default()
+            };
+            let json = serde_json::to_string(&config).expect("the config should serialise");
+            let read_back: Config = serde_json::from_str(&json).expect("and parse back");
+            assert_eq!(read_back.appearance, appearance);
+        }
+
+        // An old config predating the setting opens in the mode the app has
+        // always used, rather than failing to parse and taking every other
+        // saved setting down with it.
+        let old: Config = serde_json::from_str("{}").expect("an empty config should parse");
+        assert_eq!(old.appearance, Appearance::System);
+    }
+
+    /// Every appearance has to be nameable, or the dropdown has a blank row that
+    /// a screen reader announces as nothing at all.
+    #[test]
+    fn every_appearance_has_a_label_and_a_description() {
+        for appearance in Appearance::ALL {
+            assert!(!appearance.label().trim().is_empty(), "{appearance:?}");
+            assert!(
+                !appearance.description().trim().is_empty(),
+                "{appearance:?}"
+            );
+        }
+    }
 
     #[test]
     fn the_default_vision_model_is_one_of_the_offered_ones() {

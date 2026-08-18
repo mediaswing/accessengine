@@ -25,7 +25,7 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Stops a runaway job filling the disk. A session that hits this has already
@@ -158,14 +158,78 @@ pub fn contents() -> String {
         .unwrap_or_else(|error| format!("The log at {} could not be read: {error}", path.display()))
 }
 
-/// Removes anything shaped like an ElevenLabs API key.
+/// The key this session is actually using, so a line that quotes it can be
+/// scrubbed no matter what shape the key is.
+static SECRET: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+
+fn secret() -> &'static RwLock<Option<String>> {
+    SECRET.get_or_init(|| RwLock::new(None))
+}
+
+/// Below this a "secret" is too short to blank out safely: scrubbing every
+/// occurrence of a four-character string would take chunks out of ordinary
+/// words and make the log worse rather than safer. Nothing ElevenLabs issues is
+/// remotely this short.
+const SHORTEST_SECRET: usize = 12;
+
+/// Tells the log a value it must never write down, whatever surrounds it.
 ///
-/// The key is never deliberately logged, so this is a backstop rather than the
-/// main defence — but it guards the case that matters, which is a key arriving
-/// inside an error message quoted back from somewhere else. Keys are `sk_`
-/// followed by a run of key characters; the prefix is left in place so the log
-/// still shows that a key was present.
+/// Call this with the API key as soon as it is known. [`redact`] recognises the
+/// `sk_` keys by shape, but ElevenLabs also issued plain 32-character hex keys
+/// with no prefix at all, and there is no pattern that tells one of those from
+/// any other hex string in a log — a request id, a hash, a colour. Matching the
+/// exact value is what covers those, and every key format that comes later.
+pub fn keep_out_of_the_log(value: &str) {
+    let value = value.trim();
+    if value.len() < SHORTEST_SECRET {
+        return;
+    }
+    if let Ok(mut guard) = secret().write() {
+        *guard = Some(value.to_string());
+    }
+}
+
+/// Forgets the registered key, for when the user removes it.
+pub fn forget_the_secret() {
+    if let Ok(mut guard) = secret().write() {
+        *guard = None;
+    }
+}
+
+/// Removes the API key from a line about to be written.
+///
+/// Two passes, because neither alone is enough. The exact value registered
+/// through [`keep_out_of_the_log`] catches any key format, including the old
+/// prefixless ones — but only the key this session loaded. The `sk_` shape then
+/// catches a key that was never loaded at all, which is the realistic remaining
+/// case: one typed into the dialog, rejected, and quoted back inside the error.
+///
+/// The prefix and the length are left in place so the log still shows that a key
+/// was there and roughly what it looked like, which is usually the thing being
+/// diagnosed.
 fn redact(message: &str) -> String {
+    let known = secret().read().ok().and_then(|guard| guard.clone());
+    redact_with(message, known.as_deref())
+}
+
+/// The scrubbing itself, with the registered key passed in rather than read from
+/// the global. Split out so it can be tested exactly: the tests run in parallel
+/// in one process, and a test that had to install a global secret could change
+/// what a different test saw.
+fn redact_with(message: &str, known: Option<&str>) -> String {
+    // Held out here so the borrow below outlives the match that creates it.
+    let scrubbed;
+    let message = match known {
+        Some(key) if !key.is_empty() && message.contains(key) => {
+            scrubbed = message.replace(
+                key,
+                &format!("<redacted, {} characters>", key.chars().count()),
+            );
+            scrubbed.as_str()
+        }
+        _ => message,
+    };
+
     const PREFIX: &str = "sk_";
     if !message.contains(PREFIX) {
         return message.to_string();
@@ -257,6 +321,63 @@ mod tests {
     fn short_sk_words_are_left_alone() {
         assert_eq!(redact("the sk_test fixture"), "the sk_test fixture");
         assert_eq!(redact("nothing to do here"), "nothing to do here");
+    }
+
+    /// The gap the `sk_` rule alone leaves: ElevenLabs issued plain
+    /// 32-character hex keys for years, and those have no shape that tells them
+    /// apart from a request id or a hash. Matching the known value is what
+    /// covers them.
+    #[test]
+    fn a_prefixless_key_is_scrubbed_once_it_is_registered() {
+        let old_style = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
+        let line = format!("elevenlabs rejected {old_style} — check the key");
+
+        // Without it registered there is nothing to go on, and the line goes in
+        // as it stands. This is the behaviour being fixed, pinned so the fix
+        // cannot quietly stop applying.
+        assert!(redact_with(&line, None).contains(old_style));
+
+        let scrubbed = redact_with(&line, Some(old_style));
+        assert!(!scrubbed.contains(old_style), "{scrubbed}");
+        assert!(scrubbed.contains("<redacted, 32 characters>"), "{scrubbed}");
+        assert!(scrubbed.starts_with("elevenlabs rejected "));
+        assert!(scrubbed.ends_with(" — check the key"));
+    }
+
+    /// Every occurrence, not just the first — a line can quote the key twice.
+    #[test]
+    fn a_registered_key_is_scrubbed_everywhere_it_appears() {
+        let key = "0123456789abcdef0123456789abcdef";
+        let scrubbed = redact_with(&format!("{key} then again {key}"), Some(key));
+        assert!(!scrubbed.contains(key), "{scrubbed}");
+        assert_eq!(scrubbed.matches("<redacted, 32 characters>").count(), 2);
+    }
+
+    /// Both rules apply to the same line: the registered key and a different
+    /// `sk_` one quoted alongside it.
+    #[test]
+    fn the_registered_key_and_the_sk_shape_are_both_removed() {
+        let key = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
+        let scrubbed = redact_with(
+            &format!("stored {key} but sent sk_zzzzzzzzzzzzzzzz"),
+            Some(key),
+        );
+        assert!(!scrubbed.contains(key), "{scrubbed}");
+        assert!(!scrubbed.contains("zzzzzzzz"), "{scrubbed}");
+        assert!(scrubbed.contains("<redacted, 32 characters>"), "{scrubbed}");
+        assert!(scrubbed.contains("sk_<redacted"), "{scrubbed}");
+    }
+
+    /// A value too short to be a key is never registered, because blanking out
+    /// every occurrence of a few characters would eat ordinary words.
+    #[test]
+    fn a_value_too_short_to_be_a_key_is_not_registered() {
+        keep_out_of_the_log("short");
+        let installed = secret().read().unwrap().clone();
+        assert!(
+            installed.is_none() || installed.as_deref() != Some("short"),
+            "a five-character string was installed as a secret"
+        );
     }
 
     #[test]

@@ -123,6 +123,26 @@ fn describe(labels: &std::collections::BTreeMap<String, String>, category: &str)
     }
 }
 
+/// Whether a string is shaped like an ElevenLabs voice id, and so is safe to
+/// put in a URL path unescaped.
+///
+/// ElevenLabs issues these as short alphanumeric strings — `21m00Tcm4TlvDq8ikWAM`
+/// and the like. The set allowed here is deliberately a little wider than that
+/// (underscore and hyphen too, in case the format ever grows one) and still
+/// contains nothing with meaning in a URL: no `/` to climb to another endpoint,
+/// no `?` or `#` to end the path early, no `%` to smuggle any of those in
+/// encoded, and no space.
+///
+/// It matters because the id does not only come back from the API. It is saved
+/// in `config.json`, which is a file the user can edit and a file this app will
+/// happily load whatever it finds in.
+fn is_voice_id(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 /// Turns an ElevenLabs error response into a message worth showing a user.
 fn check(response: reqwest::blocking::Response) -> Result<reqwest::blocking::Response> {
     let status = response.status();
@@ -170,8 +190,21 @@ pub fn synthesize(
     cancel: &Arc<AtomicBool>,
     mut on_progress: impl FnMut(usize, usize),
 ) -> Result<Vec<u8>> {
-    if voice_id.trim().is_empty() {
+    let voice_id = voice_id.trim();
+    if voice_id.is_empty() {
         bail!("choose an ElevenLabs voice first");
+    }
+    // Checked rather than escaped, because a voice id with a `/`, a `?` or a `#`
+    // in it is not a voice id somebody mistyped — it is the only value on this
+    // request that gets pasted straight into the URL path, and those three
+    // characters are what decides which endpoint the key is sent to. Refusing is
+    // also the more useful answer: escaping would turn it into a puzzling 404,
+    // and there is no legitimate id this rejects. See `is_voice_id`.
+    if !is_voice_id(voice_id) {
+        bail!(
+            "\"{voice_id}\" is not a valid ElevenLabs voice id — choose a voice from the list \
+             rather than typing one in"
+        );
     }
     let chunks = super::chunk_text(text, MAX_CHARS_PER_REQUEST);
     if chunks.is_empty() {
@@ -245,7 +278,7 @@ fn tail(text: &str, chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{describe, head, tail};
+    use super::{describe, head, is_voice_id, tail};
 
     /// Mirrors a real `labels` map from `GET /v1/voices`.
     fn labels(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
@@ -275,6 +308,35 @@ mod tests {
         );
         assert_eq!(describe(&labels(&[]), "cloned"), "cloned");
         assert_eq!(describe(&labels(&[("accent", "")]), "premade"), "premade");
+    }
+
+    /// The ids ElevenLabs actually issues have to keep working, or the check is
+    /// worse than the problem it fixes.
+    #[test]
+    fn real_voice_ids_are_accepted() {
+        assert!(is_voice_id("21m00Tcm4TlvDq8ikWAM"));
+        assert!(is_voice_id("EXAVITQu4vr4xnSDxMaL"));
+        assert!(is_voice_id("voice-with-hyphens"));
+        assert!(is_voice_id("voice_with_underscores"));
+    }
+
+    /// Everything that could make the request go somewhere other than this one
+    /// voice's endpoint. The id reaches the URL path from `config.json`, which
+    /// is an ordinary editable file.
+    #[test]
+    fn an_id_that_could_reshape_the_url_is_refused() {
+        assert!(!is_voice_id(""));
+        // Climbing out of the endpoint.
+        assert!(!is_voice_id("../../v1/user"));
+        assert!(!is_voice_id("abc/def"));
+        // Ending the path early, so the rest becomes query or fragment.
+        assert!(!is_voice_id("abc?output_format=mp3_22050_32"));
+        assert!(!is_voice_id("abc#fragment"));
+        // Smuggling any of the above in encoded.
+        assert!(!is_voice_id("abc%2F..%2Fuser"));
+        // Whitespace and control characters have no business in a URL either.
+        assert!(!is_voice_id("abc def"));
+        assert!(!is_voice_id("abc\ndef"));
     }
 
     #[test]

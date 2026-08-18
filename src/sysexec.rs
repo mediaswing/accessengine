@@ -77,6 +77,62 @@ pub fn create_scratch_file(prefix: &str, extension: &str) -> Result<(File, PathB
         .context("could not create a temporary file with a free name")
 }
 
+/// Creates a new, empty, private directory in the temporary directory and
+/// returns its path.
+///
+/// The directory counterpart of [`create_scratch_file`], and it exists for the
+/// same reason. `create_dir_all` — the obvious call — succeeds when the path is
+/// already there, *including when it is a symlink to somewhere else*, and then
+/// everything written into it lands wherever the link pointed. `create_dir`
+/// fails on a name that is taken, which is what makes the directory this
+/// process's own.
+///
+/// That matters more here than it looks, because the caller writes stills from
+/// the user's video into this directory and then reads back every `.jpg` it
+/// finds. A directory somebody else controls is both a copy of what the user
+/// was watching and a way to put a picture in front of the vision model that
+/// never came out of their video.
+pub fn create_scratch_dir(prefix: &str) -> Result<PathBuf> {
+    let directory = std::env::temp_dir();
+    let mut collision = None;
+
+    for _ in 0..8 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_nanos())
+            .unwrap_or_default();
+        let path = directory.join(format!(
+            "{prefix}-{}-{nanos}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+
+        match std::fs::create_dir(&path) {
+            Ok(()) => {
+                // Only this user can look inside. `create_dir` has no mode
+                // argument, so unlike the file above this is a second step —
+                // the window between the two is this process's own and the
+                // directory is empty throughout it.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+                }
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                collision = Some(error);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("could not create {}", path.display()));
+            }
+        }
+    }
+
+    Err(collision.expect("the loop only exits here after a collision"))
+        .context("could not create a temporary directory with a free name")
+}
+
 /// The absolute path of a program in the Windows system directory.
 ///
 /// `SystemRoot` is set by the kernel for every process and cannot be inherited
@@ -142,7 +198,9 @@ pub fn ps_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_scratch_file, ps_quote};
+    use super::{SEQUENCE, create_scratch_dir, create_scratch_file, ps_quote};
+    #[cfg(unix)]
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn ps_quote_doubles_embedded_quotes() {
@@ -203,6 +261,74 @@ mod tests {
 
         std::fs::remove_file(&path).ok();
         std::fs::remove_file(&other).ok();
+    }
+
+    /// The property the directory version exists for, and the one
+    /// `create_dir_all` does not have: a name that is already taken is never
+    /// adopted. This is what keeps the frames of somebody's video out of a
+    /// directory another account put there first.
+    #[test]
+    fn an_existing_directory_is_never_adopted() {
+        let first = create_scratch_dir("accessengine-dir").unwrap();
+        let second = create_scratch_dir("accessengine-dir").unwrap();
+        assert_ne!(first, second, "two calls must not share a directory");
+        assert!(first.is_dir() && second.is_dir());
+
+        // What the old `create_dir_all` did on a name that was already there —
+        // it succeeded, and everything written afterwards went into somebody
+        // else's directory. The stricter call refuses.
+        assert_eq!(
+            std::fs::create_dir(&first).unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert!(
+            std::fs::create_dir_all(&first).is_ok(),
+            "the loose call still accepts it"
+        );
+
+        std::fs::remove_dir_all(&first).ok();
+        std::fs::remove_dir_all(&second).ok();
+    }
+
+    /// A symlink planted at the name is not followed, so nothing the app writes
+    /// afterwards lands wherever it pointed.
+    #[test]
+    #[cfg(unix)]
+    fn a_symlink_at_the_name_is_refused_rather_than_followed() {
+        let elsewhere = create_scratch_dir("accessengine-elsewhere").unwrap();
+        let link = std::env::temp_dir().join(format!(
+            "accessengine-link-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+
+        // `create_dir_all` is the call this replaced: it sees a directory at the
+        // end of the link and reports success, which is exactly the bug.
+        assert!(std::fs::create_dir_all(&link).is_ok());
+        // `create_dir` — what `create_scratch_dir` uses — does not.
+        assert_eq!(
+            std::fs::create_dir(&link).unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+
+        std::fs::remove_file(&link).ok();
+        std::fs::remove_dir_all(&elsewhere).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn scratch_directories_are_private_to_their_owner() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let path = create_scratch_dir("accessengine-dirmode").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        std::fs::remove_dir_all(&path).ok();
+        assert_eq!(
+            mode & 0o777,
+            0o700,
+            "staged frames were left readable by other accounts"
+        );
     }
 
     #[test]

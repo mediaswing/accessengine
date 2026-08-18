@@ -64,17 +64,24 @@ pub fn load() -> (Option<String>, KeySource) {
     if let Ok(key) = std::env::var(ENV_VAR) {
         let key = key.trim().to_string();
         if !key.is_empty() {
+            // Registered before the first line that could ever quote it. The
+            // log is written to be pasted into bug reports, and a key with no
+            // `sk_` prefix — which is what ElevenLabs issued for years — has no
+            // shape the scrubber could otherwise recognise.
+            crate::log::keep_out_of_the_log(&key);
             crate::log::line(format!("api key: using the key from {ENV_VAR}"));
             return (Some(key), KeySource::Env);
         }
     }
     match read() {
         Ok(Some(key)) => {
+            crate::log::keep_out_of_the_log(&key);
             crate::log::line("api key: loaded the saved key");
             (Some(key), KeySource::Stored)
         }
         Ok(None) => match legacy::migrate() {
             Ok(Some(key)) => {
+                crate::log::keep_out_of_the_log(&key);
                 crate::log::line("api key: moved the key out of the old secure storage");
                 (Some(key), KeySource::Stored)
             }
@@ -118,6 +125,10 @@ fn read() -> Result<Option<String>> {
 /// app told them the key was saved. Confirming it is on disk costs a few
 /// microseconds.
 pub fn store(key: &str) -> Result<()> {
+    // Before anything below can fail and report the failure, since a message
+    // about a key that would not save is a plausible place for the key itself
+    // to end up.
+    crate::log::keep_out_of_the_log(key);
     let path = path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -147,12 +158,36 @@ pub fn store(key: &str) -> Result<()> {
 /// leaves the previous key intact rather than a truncated one — and on Unix the
 /// mode is set by `OpenOptions` as the file is created, so there is never an
 /// instant where the key exists as a world-readable file.
+///
+/// The temporary is created with `create_new`, the same discipline
+/// [`crate::sysexec::create_scratch_file`] applies and for the same reason.
+/// `create(true)` would open whatever already answered to that name — following
+/// a symlink somewhere else, or keeping permissions somebody else chose, since
+/// `mode` only applies to a file this call actually creates. A leftover from a
+/// crashed run is cleared first, so the stricter flag cannot turn "the app
+/// exited badly once" into "the key can never be saved again".
 fn write_private(path: &std::path::Path, key: &str) -> Result<()> {
     use std::io::Write as _;
 
     let temporary = temporary_path(path);
+    // Ours by name, from a previous run of this same function; nothing else
+    // writes here. Removed rather than opened, so what happens next is a
+    // creation and not an inheritance.
+    //
+    // Removed unconditionally rather than after an `exists()` check, because
+    // `exists()` follows symlinks and answers `false` for one pointing at
+    // nothing — which is the single case where getting this wrong would be
+    // worst. `create_new` refuses a dangling symlink just as firmly as a real
+    // file, so that check would have left the key permanently unsaveable.
+    match std::fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not clear {}", temporary.display()));
+        }
+    }
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
@@ -194,6 +229,7 @@ fn temporary_path(path: &std::path::Path) -> PathBuf {
 /// rather than removing the copy and leaving one behind to be migrated back in
 /// at the next launch.
 pub fn clear() -> Result<()> {
+    crate::log::forget_the_secret();
     legacy::clear();
     let path = path()?;
     match std::fs::remove_file(&path) {
@@ -380,6 +416,85 @@ mod tests {
             !temporary_exists,
             "the temporary file should have been renamed away"
         );
+    }
+
+    /// A leftover temporary from a crashed run must not stop the key ever being
+    /// saved again — `create_new` fails on a name that is taken, so the stale
+    /// file has to be cleared rather than opened.
+    #[test]
+    fn a_leftover_temporary_file_does_not_block_saving() {
+        let path = scratch("accessengine-key-leftover.key");
+        let temporary = temporary_path(&path);
+        std::fs::write(&temporary, b"junk from a crashed run").unwrap();
+
+        let result = write_private(&path, "sk_after_a_crash");
+        let read_back = std::fs::read_to_string(&path);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&temporary);
+
+        assert!(
+            result.is_ok(),
+            "a stale temporary blocked the save: {result:?}"
+        );
+        assert_eq!(
+            read_back.expect("reading back should succeed").trim(),
+            "sk_after_a_crash"
+        );
+    }
+
+    /// A symlink pointing at nothing is the case `exists()` gets wrong: it
+    /// reports `false`, so a check-then-remove would skip it, and `create_new`
+    /// would then refuse the name for good. The key has to still save.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_does_not_block_saving_forever() {
+        let path = scratch("accessengine-key-dangling.key");
+        let temporary = temporary_path(&path);
+        let _ = std::fs::remove_file(&temporary);
+        std::os::unix::fs::symlink(scratch("accessengine-key-nowhere.txt"), &temporary).unwrap();
+
+        let result = write_private(&path, "sk_despite_the_link");
+        let read_back = std::fs::read_to_string(&path);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&temporary);
+
+        assert!(
+            result.is_ok(),
+            "a dangling symlink blocked the save: {result:?}"
+        );
+        assert_eq!(
+            read_back.expect("reading back should succeed").trim(),
+            "sk_despite_the_link"
+        );
+    }
+
+    /// The key is never written through a symlink somebody else planted at the
+    /// temporary's name. `create(true)` would have followed it and dropped the
+    /// key wherever it pointed; `create_new` on a freshly cleared path cannot.
+    #[cfg(unix)]
+    #[test]
+    fn the_key_is_not_written_through_a_planted_symlink() {
+        let path = scratch("accessengine-key-symlink.key");
+        let target = scratch("accessengine-key-symlink-target.txt");
+        let temporary = temporary_path(&path);
+        let _ = std::fs::remove_file(&temporary);
+        let _ = std::fs::remove_file(&target);
+        std::fs::write(&target, b"not the key").unwrap();
+        std::os::unix::fs::symlink(&target, &temporary).unwrap();
+
+        write_private(&path, "sk_secret_value").expect("the key should still write");
+
+        let leaked = std::fs::read_to_string(&target).unwrap_or_default();
+        let stored = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_file(&temporary);
+
+        assert!(
+            !leaked.contains("sk_secret_value"),
+            "the key was written through the symlink to {leaked:?}"
+        );
+        assert_eq!(stored.trim(), "sk_secret_value");
     }
 
     /// The file holds a secret, so it must not be readable by other accounts on
