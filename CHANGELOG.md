@@ -3,6 +3,81 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [2.0.0] - 2026-08-18
+
+The major number moves because one default changes: a photo's location is no
+longer looked up unless you ask for it. Nothing else here takes anything away,
+and no setting you have saved is lost.
+
+### Added
+
+- **Light or dark, whichever you want.** **Settings → Appearance** now offers
+  **Same as this computer**, **Light** or **Dark**. The dark palette is not
+  new — it has shipped since 1.0.0 — but the only way to reach it was to switch
+  the whole machine over, which is not a reasonable thing to ask of somebody who
+  wants one window dimmer. A bright screen is uncomfortable for plenty of people
+  who have no wish to run their whole desktop dark, and the reverse is just as
+  true for anyone who reads a light theme more easily. It changes as you pick
+  it, with no restart, and defaults to following the computer exactly as before.
+
+### Changed
+
+- **A photo's location is no longer looked up unless you turn it on.** Most
+  cameras and phones record the exact spot a photo was taken, and previous
+  versions sent that coordinate to OpenStreetMap to be turned into a place name
+  every time such a photo was read — with no setting, no prompt, and no mention
+  of it anywhere. That is the one thing on the image path that ever left the
+  computer, which made "images are read on this machine" true of the picture and
+  not of where you were standing when you took it.
+
+  It is now **Look up where a photo was taken**, under **Settings → Vision**,
+  and it is off until you turn it on. Turned on, it behaves exactly as it did:
+  the coordinate alone — never the photo — goes to OpenStreetMap and comes back
+  as a place name that is read out with the description. If you want it, one
+  checkbox brings it back for good.
+
+### Fixed
+
+- **A screen reader now says how an action ended.** The status line is where
+  every outcome lands, including every failure, and it was an ordinary label:
+  not focusable, not in the Tab order, and silent unless somebody went looking
+  for it. So the app that exists to read things to people who cannot see them
+  answered a failure with a chime — you were told that something had gone wrong
+  and never what. It is now a live region: a failure interrupts, anything else
+  waits its turn. The running commentary while a long job works is deliberately
+  left out, since it changes several times a second and the progress tick is
+  already its channel.
+- **The percentage on the progress bar was hard to read for the first half of
+  every job.** It is yellow, and against the light theme's white track that is
+  1.45:1 — nowhere near legible. What made it work was the dark outline under
+  it, and the outline was drawn only at the four corners, so the top, bottom and
+  sides of every stroke touched bare white. The outline now closes all the way
+  round.
+
+### Security
+
+- **The frames taken out of a video go somewhere this app owns.** The directory
+  was created with a call that quietly accepts a directory — or a symlink to
+  one — that something else put there first. Everything found in that directory
+  is read back and described aloud, so the wrong one would be both a copy of
+  what you were watching and a way to put a picture in front of the model that
+  never came out of your video. It is now created exclusively, and on macOS
+  nobody else can look inside.
+- **The API key file is no longer written through whatever it finds.** The key
+  is written to a temporary name and renamed into place; that temporary was
+  opened with a call that follows a symlink and keeps permissions somebody else
+  set. It is now created fresh, and a leftover from a crashed run is cleared
+  first so the stricter rule cannot lock you out of saving a key.
+- **Old-style API keys are kept out of the log.** The log is written to be
+  pasted into bug reports and scrubs anything shaped like a key, but that shape
+  was `sk_…`, and ElevenLabs issued plain 32-character keys with no prefix for
+  years — nothing tells one of those from any other run of hex. The key in use
+  is now removed from the log by value, whatever it looks like.
+- **A voice id can no longer reshape a request.** It is the one value pasted
+  straight into the URL path, and it is read from `config.json`, which is an
+  ordinary editable file. Anything that is not a voice id is refused rather than
+  sent.
+
 ## [1.9.0] - 2026-08-17
 
 ### Added
