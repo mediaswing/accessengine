@@ -279,6 +279,15 @@ pub fn apply(ctx: &egui::Context) {
         // egui's default is 60% alpha, which drops supporting text below 4.5:1
         // on both themes. Weak text here is a shade, not a whisper.
         style.visuals.weak_text_alpha = 0.85;
+
+        // Same argument, for the controls that are present but not currently
+        // usable. egui's default of 0.5 composites a disabled label to 3.38:1
+        // on the light theme and its border to 1.38:1, which very nearly hides
+        // the control — and the player pane keeps its four transport buttons
+        // greyed rather than hidden precisely so that they can still be seen
+        // and counted. 0.7 is 6.50:1 light and 8.35:1 dark, still unmistakably
+        // dimmer than the 16.76:1 of the same label enabled.
+        style.visuals.disabled_alpha = 0.7;
     });
 }
 

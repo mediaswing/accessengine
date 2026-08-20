@@ -26,6 +26,7 @@ mod i18n;
 mod jobs;
 mod log;
 mod ollama;
+mod playlist;
 mod sysexec;
 mod theme;
 mod tts;

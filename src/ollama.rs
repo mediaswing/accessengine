@@ -28,48 +28,33 @@ pub enum Status {
 ///
 /// The usual install locations are checked explicitly as well as `PATH`,
 /// because a GUI app launched from Finder or the Start menu inherits a minimal
-/// environment that often doesn't include them.
+/// environment that often doesn't include them. The lookup itself is
+/// [`crate::sysexec::locate`], which refuses an answer nominated by the folder
+/// this app happens to be sitting in.
 pub fn binary_path() -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
-    let (locator, fallbacks) = (
-        crate::sysexec::system32("where.exe"),
-        vec![
-            std::env::var("LOCALAPPDATA")
-                .map(|dir| format!("{dir}\\Programs\\Ollama\\ollama.exe"))
-                .unwrap_or_default(),
-            std::env::var("ProgramFiles")
-                .map(|dir| format!("{dir}\\Ollama\\ollama.exe"))
-                .unwrap_or_default(),
-        ],
-    );
+    let fallbacks = vec![
+        std::env::var("LOCALAPPDATA")
+            .map(|dir| format!("{dir}\\Programs\\Ollama\\ollama.exe"))
+            .unwrap_or_default(),
+        std::env::var("ProgramFiles")
+            .map(|dir| format!("{dir}\\Ollama\\ollama.exe"))
+            .unwrap_or_default(),
+    ];
     #[cfg(not(target_os = "windows"))]
-    let (locator, fallbacks) = (
-        std::path::PathBuf::from("/usr/bin/which"),
-        vec![
-            "/opt/homebrew/bin/ollama".to_string(),
-            "/usr/local/bin/ollama".to_string(),
-            "/Applications/Ollama.app/Contents/Resources/ollama".to_string(),
-        ],
-    );
+    let fallbacks = vec![
+        "/opt/homebrew/bin/ollama".to_string(),
+        "/usr/local/bin/ollama".to_string(),
+        "/Applications/Ollama.app/Contents/Resources/ollama".to_string(),
+    ];
 
-    if let Ok(out) = Command::new(&locator).arg("ollama").output()
-        && out.status.success()
-    {
-        // `where` can report several matches, one per line; take the first.
-        let found = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map(str::to_string);
-        if let Some(path) = found {
-            return Some(path.into());
-        }
-    }
-    fallbacks
-        .into_iter()
-        .filter(|path| !path.is_empty())
-        .map(std::path::PathBuf::from)
-        .find(|path| path.exists())
+    crate::sysexec::locate("ollama").or_else(|| {
+        fallbacks
+            .into_iter()
+            .filter(|path| !path.is_empty())
+            .map(std::path::PathBuf::from)
+            .find(|path| path.exists())
+    })
 }
 
 /// Builds a client for the local server. A zero `timeout` means "no limit",
@@ -463,18 +448,12 @@ fn package_manager() -> Option<Installer> {
         // winget ships with Windows 11 and recent Windows 10, but not with
         // every install, so its presence is checked rather than assumed. The
         // agreement flags are what stop it stopping for a prompt nobody can see.
-        let found = Command::new(crate::sysexec::system32("where.exe"))
-            .arg("winget")
-            .output()
-            .ok()
-            .filter(|out| out.status.success())?;
-        let path = String::from_utf8_lossy(&found.stdout)
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())?
-            .to_string();
+        //
+        // Found the same way `ollama` is, and it matters more here: this one is
+        // handed a package name and told to install it.
+        let path = crate::sysexec::locate("winget")?;
         Some(Installer {
-            program: path.into(),
+            program: path,
             args: &[
                 "install",
                 "--id",

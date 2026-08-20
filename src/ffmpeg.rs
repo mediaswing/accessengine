@@ -47,46 +47,29 @@ pub fn probe_path() -> Option<PathBuf> {
 
 fn find(tool: &str) -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
-    let (locator, fallbacks) = (
-        crate::sysexec::system32("where.exe"),
-        vec![
-            format!("C:\\ffmpeg\\bin\\{tool}.exe"),
-            std::env::var("LOCALAPPDATA")
-                .map(|dir| format!("{dir}\\Microsoft\\WinGet\\Links\\{tool}.exe"))
-                .unwrap_or_default(),
-            std::env::var("ProgramFiles")
-                .map(|dir| format!("{dir}\\ffmpeg\\bin\\{tool}.exe"))
-                .unwrap_or_default(),
-        ],
-    );
+    let fallbacks = vec![
+        format!("C:\\ffmpeg\\bin\\{tool}.exe"),
+        std::env::var("LOCALAPPDATA")
+            .map(|dir| format!("{dir}\\Microsoft\\WinGet\\Links\\{tool}.exe"))
+            .unwrap_or_default(),
+        std::env::var("ProgramFiles")
+            .map(|dir| format!("{dir}\\ffmpeg\\bin\\{tool}.exe"))
+            .unwrap_or_default(),
+    ];
     #[cfg(not(target_os = "windows"))]
-    let (locator, fallbacks) = (
-        PathBuf::from("/usr/bin/which"),
-        vec![
-            format!("/opt/homebrew/bin/{tool}"),
-            format!("/usr/local/bin/{tool}"),
-            format!("/usr/bin/{tool}"),
-        ],
-    );
+    let fallbacks = vec![
+        format!("/opt/homebrew/bin/{tool}"),
+        format!("/usr/local/bin/{tool}"),
+        format!("/usr/bin/{tool}"),
+    ];
 
-    if let Ok(out) = Command::new(&locator).arg(tool).output()
-        && out.status.success()
-    {
-        // `where` can report several matches, one per line; take the first.
-        let found = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map(str::to_string);
-        if let Some(path) = found {
-            return Some(path.into());
-        }
-    }
-    fallbacks
-        .into_iter()
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .find(|path| path.exists())
+    crate::sysexec::locate(tool).or_else(|| {
+        fallbacks
+            .into_iter()
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .find(|path| path.exists())
+    })
 }
 
 /// A package manager and the arguments that install ffmpeg with it.
@@ -101,18 +84,9 @@ struct Installer {
 fn package_manager() -> Option<Installer> {
     #[cfg(target_os = "windows")]
     {
-        let found = Command::new(crate::sysexec::system32("where.exe"))
-            .arg("winget")
-            .output()
-            .ok()
-            .filter(|out| out.status.success())?;
-        let path = String::from_utf8_lossy(&found.stdout)
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())?
-            .to_string();
+        let path = crate::sysexec::locate("winget")?;
         Some(Installer {
-            program: path.into(),
+            program: path,
             args: &[
                 "install",
                 "--id",
@@ -227,6 +201,18 @@ pub fn duration(video: &Path) -> Option<Duration> {
             "-of",
             "default=noprint_wrappers=1:nokey=1",
         ])
+        // Behind `-i`, rather than as the trailing positional argument ffprobe
+        // also accepts, which is what this used to be.
+        //
+        // Hardening rather than a fix: as a positional argument ffprobe parses
+        // the path as an option whenever it begins with a dash — `-h.mp4` is
+        // answered with the help text — but every path that reaches here comes
+        // from a file chooser or a drop and is therefore absolute, so it begins
+        // with a slash or a drive letter and never with a dash. This removes
+        // the dependence on that being true, at the cost of two words, and
+        // makes the measurement pass agree with `one_pass` below, which has
+        // always handed the file to ffmpeg this way.
+        .arg("-i")
         .arg(video)
         .stdin(Stdio::null());
     no_console_window(&mut command);

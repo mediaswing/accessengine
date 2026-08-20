@@ -20,6 +20,7 @@ use crate::extract::{
     VIDEO_EXTENSIONS,
 };
 use crate::jobs::{self, Cancel, Job, Update};
+use crate::playlist::Playlist;
 use crate::theme::{self, CONTROL_HEIGHT, FORM_WIDTH, PROGRESS_HEIGHT};
 use crate::tts::{self, Voice};
 use crate::update;
@@ -390,6 +391,10 @@ pub struct SpeechApp {
     /// from the document in the Read pane: auditioning a saved recording
     /// should not throw away the document you just extracted.
     audio_file: Option<PathBuf>,
+    /// How many tracks that file holds, when it is a playlist rather than a
+    /// single recording. Worked out when it is chosen rather than when Play is
+    /// pressed, so a zip with nothing playable in it says so straight away.
+    audio_tracks: Option<usize>,
 
     status: Option<(String, Tone)>,
     /// The success or failure sound currently playing, held only because
@@ -411,6 +416,20 @@ pub struct SpeechApp {
     /// [`Prompt`], whose answers all end in a job being started.
     confirm_reset: bool,
     prompt: Option<Prompt>,
+    /// True on the frame each of those two opens, so it can hand the keyboard
+    /// to its first button once rather than every frame — the same one-shot
+    /// [`SpeechApp::dialog_opened`] gives the API key dialog, and for a reason
+    /// that matters more here.
+    ///
+    /// egui keeps the keyboard inside the top modal layer, so nothing behind a
+    /// dialog is reachable while it is open. What it does not do is *move* the
+    /// focus in: it drops it. A dialog that claims nothing therefore opens with
+    /// the focus nowhere, and a screen reader is told nothing at all — no
+    /// heading, no buttons, no dialog. The install prompt is the one that opens
+    /// by itself, in answer to a file being opened, which makes it the one most
+    /// likely to arrive unnoticed.
+    reset_opened: bool,
+    prompt_opened: bool,
     /// Re-run after the user resolves a [`Prompt`].
     deferred: Option<Job>,
 
@@ -481,6 +500,7 @@ impl SpeechApp {
             playing_audio_file: false,
             cached: None,
             audio_file: None,
+            audio_tracks: None,
             status: None,
             cue: None,
             cue_at: None,
@@ -489,6 +509,8 @@ impl SpeechApp {
             show_log: false,
             confirm_reset: false,
             prompt: None,
+            reset_opened: false,
+            prompt_opened: false,
             deferred: None,
             pane: Pane::Read,
             show_api_key: false,
@@ -944,9 +966,18 @@ impl SpeechApp {
     }
 
     fn choose_audio_file(&mut self) {
+        // One filter rather than two. A second entry in the dialog's dropdown
+        // is a second place to look for your own file, and someone who has
+        // been handed a playlist should not have to know that a zip is a
+        // different kind of thing from an MP3 to be able to open it.
+        let openable: Vec<&str> = audio::PLAYABLE_EXTENSIONS
+            .iter()
+            .chain(crate::playlist::PLAYLIST_EXTENSIONS)
+            .copied()
+            .collect();
         let mut dialog = rfd::FileDialog::new()
             .set_title(t!("chooser.audio.title"))
-            .add_filter(t!("chooser.filter.audio"), audio::PLAYABLE_EXTENSIONS);
+            .add_filter(t!("chooser.filter.audio"), &openable);
         if let Some(dir) = self
             .config
             .last_audio_dir
@@ -964,15 +995,71 @@ impl SpeechApp {
 
     /// Loads a file into the player, ready to play but not yet playing —
     /// shared by the chooser and by a file dropped on the window.
+    ///
+    /// A playlist is opened here and then closed again, rather than being kept
+    /// until Play: what matters is that "this zip holds nothing I can play" is
+    /// said at the moment the file is chosen, while the chooser it came from is
+    /// still the thing the user has in mind.
     fn load_audio_file(&mut self, path: PathBuf) {
         // A new file replaces whatever was playing, rather than joining it.
         self.stop_playback();
         self.config.last_audio_dir = path.parent().map(Path::to_path_buf);
         self.config_dirty = true;
+        self.audio_tracks = None;
+
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        self.set_status_quietly(t!("status.loaded", name = name), Tone::Success);
+        if Playlist::is_playlist(&path) {
+            let list = match Playlist::open(&path) {
+                Ok(list) => list,
+                Err(error) => {
+                    // The old file is left in place: a zip that cannot be
+                    // opened is no reason to lose the recording that was
+                    // loaded and playable a moment ago.
+                    self.set_status(format!("{error:#}"), Tone::Error);
+                    self.focus = Some(Field::AudioFile);
+                    return;
+                }
+            };
+            self.note_playlist(&list);
+            let tracks = list.len();
+            self.audio_tracks = Some(tracks);
+            self.set_status_quietly(
+                tn!("status.loaded_playlist", tracks, name = name),
+                Tone::Success,
+            );
+        } else {
+            self.set_status_quietly(t!("status.loaded", name = name), Tone::Success);
+        }
         self.audio_file = Some(path);
         self.focus = Some(Field::Play);
+    }
+
+    /// Puts what the playlist made of its own contents in the log — which
+    /// tracks a `media.txt` asked for and the archive does not hold, and which
+    /// files it never mentioned and are being played anyway.
+    fn note_playlist(&mut self, list: &Playlist) {
+        crate::log::line(format!(
+            "playlist: {} — {} track(s), order from {}",
+            list.name,
+            list.len(),
+            if list.ordered {
+                "media.txt"
+            } else {
+                "file name"
+            }
+        ));
+        if !list.missing.is_empty() {
+            crate::log::line(format!(
+                "playlist: media.txt asks for {}, which the zip does not hold",
+                list.missing.join(", ")
+            ));
+        }
+        if !list.unlisted.is_empty() {
+            crate::log::line(format!(
+                "playlist: {} not listed in media.txt; played after the ones that are",
+                list.unlisted.join(", ")
+            ));
+        }
     }
 
     /// Play, or resume from where Pause left off.
@@ -996,19 +1083,55 @@ impl SpeechApp {
         // Reading a document aloud and playing a file are both "sound out of
         // this app", so starting one ends the other.
         self.stop_playback();
-        match Playback::play_file(&path) {
-            Ok(playback) => {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let started = if Playlist::is_playlist(&path) {
+            Playback::play_playlist(&path)
+        } else {
+            Playback::play_file(&path).map(|playback| (playback, Vec::new()))
+        };
+        match started {
+            Ok((playback, events)) => {
                 self.playback = Some(playback);
                 self.playing_audio_file = true;
-                self.set_status(
-                    t!(
-                        "status.playing_file",
-                        name = path.file_name().unwrap_or_default().to_string_lossy()
-                    ),
-                    Tone::Info,
-                );
+                // A playlist says which track it has started, which is more use
+                // than the name of the zip it came out of — and the zip's name
+                // is on the pane above either way. Anything else says what is
+                // playing, because nothing else here will.
+                let announced = events
+                    .iter()
+                    .any(|event| matches!(event, audio::PlaylistEvent::Started(_)));
+                if !announced {
+                    self.set_status(t!("status.playing_file", name = name), Tone::Info);
+                }
+                self.announce_tracks(events);
             }
             Err(error) => self.set_status(format!("{error:#}"), Tone::Error),
+        }
+    }
+
+    /// Says which track a playlist has moved on to, and which it passed over.
+    ///
+    /// Through the status line rather than only in the pane: it is the one
+    /// place in the app that a screen reader is already watching, and a track
+    /// change is exactly the kind of thing that happens while the listener is
+    /// looking somewhere else entirely.
+    fn announce_tracks(&mut self, events: Vec<audio::PlaylistEvent>) {
+        for event in events {
+            match event {
+                audio::PlaylistEvent::Started(track) => self.set_status(
+                    t!(
+                        "status.playing_track",
+                        number = track.number,
+                        total = track.total,
+                        name = track.name
+                    ),
+                    Tone::Info,
+                ),
+                audio::PlaylistEvent::Skipped { name, error } => {
+                    crate::log::line(format!("playlist: skipped {name} — {error}"));
+                    self.set_status(t!("status.track_skipped", name = name), Tone::Error);
+                }
+            }
         }
     }
 
@@ -1140,6 +1263,13 @@ impl SpeechApp {
         self.dialog_opened = true;
     }
 
+    /// Raises a question the app cannot carry on past, and arranges for the
+    /// keyboard to land inside it — see [`SpeechApp::prompt_opened`].
+    fn ask(&mut self, prompt: Prompt) {
+        self.prompt = Some(prompt);
+        self.prompt_opened = true;
+    }
+
     /// Throws away a key ElevenLabs has refused, and asks for another one.
     ///
     /// A refused key is worth nothing: every request made with it fails the
@@ -1250,15 +1380,9 @@ impl SpeechApp {
                     crate::log::line(format!("saved {}", path.display()));
                     self.set_status(t!("status.saved", path = path.display()), Tone::Success);
                 }
-                Update::NeedsFfmpegInstall => {
-                    self.prompt = Some(Prompt::InstallFfmpeg);
-                }
-                Update::NeedsOllamaInstall => {
-                    self.prompt = Some(Prompt::InstallOllama);
-                }
-                Update::NeedsModel(model) => {
-                    self.prompt = Some(Prompt::PullModel(model));
-                }
+                Update::NeedsFfmpegInstall => self.ask(Prompt::InstallFfmpeg),
+                Update::NeedsOllamaInstall => self.ask(Prompt::InstallOllama),
+                Update::NeedsModel(model) => self.ask(Prompt::PullModel(model)),
                 // Whatever was waiting on Ollama is in `deferred` and starts as
                 // soon as the setup job sends `Finished`.
                 Update::SetupComplete(message) => self.set_status(message, Tone::Success),
@@ -1294,6 +1418,16 @@ impl SpeechApp {
             }
         }
 
+        // A playlist moves itself along between tracks, and says so. Collected
+        // before they are acted on because saying anything borrows all of
+        // `self`, and the playlist is part of it.
+        let events = self
+            .playback
+            .as_mut()
+            .map(Playback::poll)
+            .unwrap_or_default();
+        self.announce_tracks(events);
+
         // Playback has no completion signal, so poll it.
         if let Some(playback) = &mut self.playback
             && playback.is_finished()
@@ -1313,6 +1447,21 @@ impl SpeechApp {
         }
     }
 
+    /// Takes a file dropped on the window, and refuses a handful.
+    ///
+    /// One file is an instruction. Several is a question this app has no way to
+    /// answer: it opens one file at a time, and the order the operating system
+    /// hands them over in is not the order they looked in on screen — so
+    /// "the first one" is not the one anybody pointed at. It used to take that
+    /// first one anyway and say nothing about the rest, which is the worst of
+    /// the three options: the user who can see gets a file they did not choose,
+    /// and the user who cannot is never told there were others.
+    ///
+    /// So several files are counted and refused, in one sentence that says how
+    /// many arrived and what to do instead. Refusing also keeps the message on
+    /// screen: opening a document starts a job, and a job replaces the status
+    /// line with its own label, so anything said here would be gone before it
+    /// could be read out.
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|input| {
             input
@@ -1322,6 +1471,10 @@ impl SpeechApp {
                 .map(|f| f.path().to_path_buf())
                 .collect()
         });
+        if dropped.len() > 1 {
+            self.set_status(tn!("status.dropped_several", dropped.len()), Tone::Error);
+            return;
+        }
         let Some(path) = dropped.into_iter().next() else {
             return;
         };
@@ -1339,9 +1492,12 @@ impl SpeechApp {
     /// Reads and consumes the global shortcuts. Consuming rather than observing
     /// means a shortcut never also reaches the control underneath it.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        // The dialog owns the keyboard while it is open, so the shortcuts
-        // behind it stay inert and Escape unambiguously means "close this".
-        if self.show_api_key || self.prompt.is_some() {
+        // A dialog owns the keyboard while it is open, so the shortcuts behind
+        // it stay inert and Escape unambiguously means "close this". All three
+        // of them: a shortcut that still fired under the reset confirmation
+        // would raise a file chooser behind the backdrop, or switch to a pane
+        // nobody can see.
+        if self.show_api_key || self.prompt.is_some() || self.confirm_reset {
             return;
         }
 
@@ -2272,12 +2428,17 @@ impl SpeechApp {
                 self.choose_audio_file();
             }
 
-            let chosen = match &self.audio_file {
-                Some(path) => t!(
+            let chosen = match (&self.audio_file, self.audio_tracks) {
+                (Some(path), Some(tracks)) => tn!(
+                    "player.file.chosen_playlist",
+                    tracks,
+                    name = path.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                (Some(path), None) => t!(
                     "player.file.chosen",
                     name = path.file_name().unwrap_or_default().to_string_lossy()
                 ),
-                None => t!("player.file.none"),
+                (None, _) => t!("player.file.none"),
             };
             let line = ui.add(egui::Label::new(RichText::new(chosen)).wrap());
             if let Some(path) = &self.audio_file {
@@ -2373,6 +2534,22 @@ impl SpeechApp {
             let muted = crate::theme::palette(ui.visuals()).muted;
             ui.label(RichText::new(t!("player.reading_instead")).color(muted));
             return;
+        }
+
+        // Which track, before how far into it: a listener who has just been
+        // handed a playlist needs to know where they are in it, and the
+        // countdown underneath means nothing without that.
+        if let Some(track) = playback.track() {
+            ui.label(
+                RichText::new(t!(
+                    "player.track",
+                    number = track.number,
+                    total = track.total,
+                    name = track.name
+                ))
+                .size(15.0)
+                .strong(),
+            );
         }
 
         let position = playback.position();
@@ -2657,6 +2834,7 @@ impl SpeechApp {
             .clicked()
         {
             self.confirm_reset = true;
+            self.reset_opened = true;
         }
 
         ui.add_space(12.0);
@@ -2853,8 +3031,7 @@ impl SpeechApp {
                         dir.display()
                     ));
                 }
-                ui.ctx()
-                    .open_url(egui::OpenUrl::same_tab(format!("file://{}", dir.display())));
+                ui.ctx().open_url(egui::OpenUrl::same_tab(file_url(&dir)));
             }
         }
 
@@ -3069,8 +3246,11 @@ impl SpeechApp {
             return;
         }
         let mut decision: Option<bool> = None;
+        // Taken out here because the closure below borrows `self` for nothing
+        // else, and one `bool` is cheaper than making it borrow the app.
+        let opening = std::mem::take(&mut self.reset_opened);
 
-        egui::Modal::new(egui::Id::new("confirm_reset")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new("confirm_reset")).show(ctx, |ui| {
             ui.set_max_width(560.0);
             ui.heading(t!("reset.heading"));
             ui.add_space(6.0);
@@ -3090,16 +3270,28 @@ impl SpeechApp {
             {
                 decision = Some(true);
             }
-            if ui
-                .add(
-                    egui::Button::new(t!("reset.cancel"))
-                        .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
-                )
-                .clicked()
-            {
+            let cancel = ui.add(
+                egui::Button::new(t!("reset.cancel")).min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+            );
+            // Cancel, not Reset. The keyboard has to land somewhere for the
+            // dialog to be announced at all, and on a question whose wrong
+            // answer takes back a voice and a speaking rate invisibly, the
+            // place for it is the answer that changes nothing — so a Return
+            // pressed out of habit is the safe one.
+            if opening {
+                cancel.request_focus();
+            }
+            if cancel.clicked() {
                 decision = Some(false);
             }
         });
+
+        // Escape, or a click on the backdrop, is the same answer as Cancel.
+        // `should_close` is what reads either, and it only does so when it is
+        // called — which is why this is not free.
+        if decision.is_none() && modal.should_close() {
+            decision = Some(false);
+        }
 
         let Some(confirmed) = decision else {
             return;
@@ -3120,6 +3312,10 @@ impl SpeechApp {
     }
 
     fn prompt_dialog(&mut self, ctx: &egui::Context) {
+        // Before the borrow below, which lasts as long as the dialog is being
+        // drawn. Never set without a prompt to go with it, so consuming it on
+        // the way past an absent one costs nothing.
+        let opening = std::mem::take(&mut self.prompt_opened);
         let Some(prompt) = &self.prompt else {
             return;
         };
@@ -3134,7 +3330,7 @@ impl SpeechApp {
             t!("install.heading.image")
         };
 
-        egui::Modal::new(egui::Id::new("ollama_prompt")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new("ollama_prompt")).show(ctx, |ui| {
             ui.set_max_width(560.0);
             ui.heading(heading);
             ui.add_space(6.0);
@@ -3186,15 +3382,6 @@ impl SpeechApp {
                         }
                         ui.add_space(8.0);
                     }
-                    if ui
-                        .add(
-                            egui::Button::new(t!("install.not_now"))
-                                .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
-                        )
-                        .clicked()
-                    {
-                        decision = Some(None);
-                    }
                 }
                 Prompt::InstallFfmpeg => {
                     ui.add(egui::Label::new(t!("install.ffmpeg.what")).wrap());
@@ -3240,15 +3427,6 @@ impl SpeechApp {
                         }
                         ui.add_space(8.0);
                     }
-                    if ui
-                        .add(
-                            egui::Button::new(t!("install.not_now"))
-                                .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
-                        )
-                        .clicked()
-                    {
-                        decision = Some(None);
-                    }
                 }
                 Prompt::PullModel(model) => {
                     ui.add(egui::Label::new(t!("install.model.what", model = model)).wrap());
@@ -3263,18 +3441,34 @@ impl SpeechApp {
                     {
                         decision = Some(Some(Job::PullModel(model.clone())));
                     }
-                    if ui
-                        .add(
-                            egui::Button::new(t!("install.not_now"))
-                                .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
-                        )
-                        .clicked()
-                    {
-                        decision = Some(None);
-                    }
                 }
             }
+
+            // The way out, in one place rather than repeated at the end of
+            // every arm above — all three of which offered exactly this.
+            let not_now = ui.add(
+                egui::Button::new(t!("install.not_now"))
+                    .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+            );
+            // The keyboard lands here, for the reason it lands on Cancel in the
+            // reset confirmation: it has to land somewhere for the dialog to be
+            // announced at all, and the answer that does nothing is the one a
+            // Return pressed out of habit should reach. This dialog arrives
+            // unbidden, a moment after the user pressed Return on a file
+            // chooser, and its other button starts a download measured in
+            // gigabytes.
+            if opening {
+                not_now.request_focus();
+            }
+            if not_now.clicked() {
+                decision = Some(None);
+            }
         });
+
+        // As above: Escape and the backdrop mean "Not now".
+        if decision.is_none() && modal.should_close() {
+            decision = Some(None);
+        }
 
         let Some(choice) = decision else {
             return;
@@ -3361,14 +3555,48 @@ impl SpeechApp {
     }
 }
 
+/// A `file://` URL for a folder, for the buttons that open one.
+///
+/// Assembled properly rather than by writing `file://` in front of the path.
+/// A URL cannot carry a space, a `#` or a `?` literally — the first two are
+/// perfectly ordinary in a home folder's name, and `#` in particular truncates
+/// the URL at exactly the point the path becomes interesting, so the button
+/// silently opens the wrong folder or none at all for anybody called
+/// `Anne Marie`. Every byte outside the unreserved set is percent-encoded, and
+/// bytes rather than characters, which is what a URL is defined over.
+///
+/// Windows needs two more things: its separators turned round, and a slash in
+/// front of the drive letter, since `file://C:/…` reads `C:` as the host.
+fn file_url(path: &Path) -> String {
+    let mut url = String::from("file://");
+    let path = path.display().to_string().replace('\\', "/");
+    if !path.starts_with('/') {
+        url.push('/');
+    }
+    for byte in path.bytes() {
+        match byte {
+            // Unreserved, plus the two that have to stay themselves for this
+            // to be a path at all: the separator, and the colon after a
+            // Windows drive letter.
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                url.push(byte as char);
+            }
+            _ => url.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    url
+}
+
 /// True for a file the audio player can open, which is what decides where a
-/// dropped file goes.
+/// dropped file goes. A zip counts: it is a playlist, and the reader has
+/// nothing to do with one either.
 fn is_playable(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| {
             audio::PLAYABLE_EXTENSIONS
                 .iter()
+                .chain(crate::playlist::PLAYLIST_EXTENSIONS)
                 .any(|known| ext.eq_ignore_ascii_case(known))
         })
 }
@@ -3482,6 +3710,40 @@ impl eframe::App for SpeechApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The characters that quietly break a hand-written `file://` URL, in the
+    /// place they actually turn up: somebody's home folder.
+    #[test]
+    fn a_folder_url_survives_the_punctuation_a_real_path_contains() {
+        assert_eq!(
+            file_url(Path::new("/Users/Anne Marie/Library/Logs")),
+            "file:///Users/Anne%20Marie/Library/Logs"
+        );
+        // `#` is the one that does the quiet damage: everything after it is a
+        // fragment, so the URL still opens — just somewhere else.
+        assert_eq!(
+            file_url(Path::new("/Users/jo#1/logs")),
+            "file:///Users/jo%231/logs"
+        );
+        assert_eq!(
+            file_url(Path::new("/Users/jo?/logs")),
+            "file:///Users/jo%3F/logs"
+        );
+        // Percent-encoded per byte, which is what a URL is defined over.
+        assert_eq!(file_url(Path::new("/tmp/café")), "file:///tmp/caf%C3%A9");
+        // An ordinary path is left exactly as it was.
+        assert_eq!(file_url(Path::new("/tmp/logs")), "file:///tmp/logs");
+    }
+
+    /// A Windows path needs its separators turned round and a slash in front
+    /// of the drive, or `C:` is read as the host rather than the disk.
+    #[test]
+    fn a_windows_folder_url_keeps_the_drive_out_of_the_host() {
+        assert_eq!(
+            file_url(Path::new(r"C:\Users\Jo\AppData\Local\logs")),
+            "file:///C:/Users/Jo/AppData/Local/logs"
+        );
+    }
 
     /// The three of them, by the name they are credited under.
     const CUES: [(&str, &[u8]); 3] = [

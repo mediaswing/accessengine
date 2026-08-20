@@ -13,6 +13,10 @@ use std::time::Duration;
 const RELEASES_LATEST: &str =
     "https://api.github.com/repos/mediaswing/accessengine/releases/latest";
 
+/// Where "Download Release" goes when nothing usable came back — the only URL
+/// here that is not out of a JSON response.
+const RELEASES_PAGE: &str = "https://github.com/mediaswing/accessengine/releases";
+
 /// A release newer than the one currently running.
 pub struct Available {
     pub version: String,
@@ -101,11 +105,24 @@ fn platform_asset_prefix() -> Option<&'static str> {
 /// The direct download for this platform's build, falling back to the
 /// release page itself when there is no asset to match against — an
 /// unrecognized platform, or a release published without the usual zips.
+///
+/// Both candidates come out of a JSON response and the winner is handed to
+/// `ctx.open_url`, which is the operating system's opener and will follow
+/// whatever scheme it is given. Every other URL this app opens is a constant
+/// compiled into the binary; this is the one that arrives over the wire, so it
+/// is held to `https` and falls through to [`RELEASES_PAGE`] — which is not —
+/// if neither candidate is.
 fn pick_download_url(assets: &[Asset], platform_prefix: Option<&str>, html_url: &str) -> String {
-    platform_prefix
+    let asset = platform_prefix
         .and_then(|prefix| assets.iter().find(|asset| asset.name.starts_with(prefix)))
-        .map(|asset| asset.browser_download_url.clone())
-        .unwrap_or_else(|| html_url.to_string())
+        .map(|asset| asset.browser_download_url.as_str());
+
+    [asset, Some(html_url)]
+        .into_iter()
+        .flatten()
+        .find(|url| url.starts_with("https://"))
+        .unwrap_or(RELEASES_PAGE)
+        .to_string()
 }
 
 /// Compares two version strings, tolerantly: a tag that doesn't parse as
@@ -168,6 +185,39 @@ mod tests {
             pick_download_url(&assets, None, "https://example.com/release"),
             "https://example.com/release"
         );
+    }
+
+    /// The URL goes to the system opener, so a scheme other than `https` is
+    /// refused rather than followed — whichever of the two candidates carries
+    /// it, and even when that leaves nothing from the response to use.
+    #[test]
+    fn a_url_that_is_not_https_is_never_opened() {
+        let hostile = |url: &str| Asset {
+            name: "accessengine-macos-aarch64.zip".to_string(),
+            browser_download_url: url.to_string(),
+        };
+        for scheme in [
+            "javascript:alert(1)",
+            "file:///Applications/Calculator.app",
+            "http://example.com/accessengine.zip",
+        ] {
+            assert_eq!(
+                pick_download_url(
+                    &[hostile(scheme)],
+                    Some("accessengine-macos"),
+                    "https://example.com/release"
+                ),
+                "https://example.com/release",
+                "{scheme} was passed through"
+            );
+            // And with the release page itself no better, nothing from the
+            // response is used at all.
+            assert_eq!(
+                pick_download_url(&[hostile(scheme)], Some("accessengine-macos"), scheme),
+                super::RELEASES_PAGE,
+                "{scheme} was passed through as the fallback"
+            );
+        }
     }
 
     #[test]

@@ -230,20 +230,35 @@ fn gps_location(bytes: &[u8]) -> Option<GpsLocation> {
     let exif = exif::Reader::new()
         .read_from_container(&mut std::io::Cursor::new(bytes))
         .ok()?;
-    Some(GpsLocation {
-        latitude: coordinate(
-            &exif,
-            exif::Tag::GPSLatitude,
-            exif::Tag::GPSLatitudeRef,
-            b'S',
-        )?,
-        longitude: coordinate(
-            &exif,
-            exif::Tag::GPSLongitude,
-            exif::Tag::GPSLongitudeRef,
-            b'W',
-        )?,
+    let latitude = coordinate(
+        &exif,
+        exif::Tag::GPSLatitude,
+        exif::Tag::GPSLatitudeRef,
+        b'S',
+    )?;
+    let longitude = coordinate(
+        &exif,
+        exif::Tag::GPSLongitude,
+        exif::Tag::GPSLongitudeRef,
+        b'W',
+    )?;
+    is_on_earth(latitude, longitude).then_some(GpsLocation {
+        latitude,
+        longitude,
     })
+}
+
+/// Whether a pair of degrees is a place rather than arithmetic.
+///
+/// EXIF stores each part as a rational, and a rational whose denominator is
+/// zero reads back as an infinity or a NaN. This is the one value on the image
+/// path that leaves the computer — see [`crate::geocode`] — so it is checked
+/// before it goes rather than left to fail at the far end.
+fn is_on_earth(latitude: f64, longitude: f64) -> bool {
+    latitude.is_finite()
+        && longitude.is_finite()
+        && latitude.abs() <= 90.0
+        && longitude.abs() <= 180.0
 }
 
 /// One half of a coordinate: the `value_tag` gives degrees/minutes/seconds,
@@ -353,6 +368,24 @@ mod tests {
         0x60, 0x60, 0xF8, 0x0F, 0x00, 0x01, 0x04, 0x01, 0x00, 0x2B, 0xB3, 0x0A, 0x1B, 0x00, 0x00,
         0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
+
+    /// EXIF stores each part of a coordinate as a rational, and a denominator
+    /// of zero reads back as an infinity — which would otherwise be formatted
+    /// into the Nominatim query as the literal `inf`.
+    #[test]
+    fn a_coordinate_that_is_not_a_place_is_not_sent_anywhere() {
+        assert!(is_on_earth(54.43, -2.96));
+        assert!(is_on_earth(0.0, 0.0));
+        // The poles and the date line are real places.
+        assert!(is_on_earth(-90.0, 180.0));
+
+        assert!(!is_on_earth(f64::INFINITY, 0.0));
+        assert!(!is_on_earth(0.0, f64::NEG_INFINITY));
+        assert!(!is_on_earth(f64::NAN, 0.0));
+        assert!(!is_on_earth(0.0, f64::NAN));
+        assert!(!is_on_earth(91.0, 0.0));
+        assert!(!is_on_earth(0.0, -181.0));
+    }
 
     /// The real HEIC path, end to end: canonicalise, claim a scratch file, run
     /// sips, read the JPEG back. Skipped if this machine's sips cannot write

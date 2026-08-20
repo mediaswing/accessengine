@@ -1,7 +1,7 @@
 //! Locating the operating system's own programs, and staging files for them.
 //!
-//! Two precautions live here rather than at each call site, because getting
-//! either of them wrong is a security bug rather than an ordinary one.
+//! Three precautions live here rather than at each call site, because getting
+//! any of them wrong is a security bug rather than an ordinary one.
 //!
 //! **Programs are named by absolute path.** A bare `Command::new("powershell.exe")`
 //! is resolved by `CreateProcessW`, whose search order starts with the directory
@@ -20,6 +20,17 @@
 //! per-user temp directory both platforms default to makes that hard already,
 //! but `TMPDIR` is an environment variable and the cost of not relying on it is
 //! one flag.
+//!
+//! **A program found by name may not come out of a folder we cannot vouch
+//! for.** Ollama and ffmpeg are installed by somebody else and cannot be named
+//! by absolute path, so they are looked up — and on Windows `where.exe` searches
+//! the current directory *before* `PATH`. A GUI app launched from Explorer
+//! inherits the folder holding its own exe as that directory, which for a
+//! portable exe run out of Downloads is the one folder an attacker is most
+//! likely to be able to write to. Whatever the lookup returns is then spawned.
+//! See [`locate`], which is the same discipline as the absolute paths above,
+//! taken one step further out: where a name cannot be pinned down, it can at
+//! least be told where it may not come from.
 
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -133,6 +144,84 @@ pub fn create_scratch_dir(prefix: &str) -> Result<PathBuf> {
         .context("could not create a temporary directory with a free name")
 }
 
+/// The directories a program found by name is not allowed to come out of.
+///
+/// The working directory, and the folder holding the running executable — which
+/// for an app launched from Explorer or Finder are usually the same folder, and
+/// for this app that folder is wherever the portable exe was unzipped to.
+///
+/// `/usr/bin/which` reads `PATH` only and never the working directory, so on
+/// macOS this refuses nothing that was ever offered. It is compiled and applied
+/// there anyway: a rule that only runs on one platform is a rule that is only
+/// ever tested on one platform, and this one is short enough that running it
+/// twice costs nothing.
+fn untrusted_directories() -> Vec<PathBuf> {
+    [
+        std::env::current_dir().ok(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+    ]
+    .into_iter()
+    .flatten()
+    // Compared after resolving, so that a link or a `.` in the middle cannot
+    // spell the same directory a second way and slip past the comparison.
+    .filter_map(|directory| directory.canonicalize().ok())
+    .collect()
+}
+
+/// Whether a program at this path is one this app is willing to run.
+fn is_trustworthy(path: &std::path::Path, untrusted: &[PathBuf]) -> bool {
+    // Unreadable, or gone between being named and being checked: not something
+    // to run either way.
+    let Ok(resolved) = path.canonicalize() else {
+        return false;
+    };
+    let Some(parent) = resolved.parent() else {
+        return false;
+    };
+    !untrusted.iter().any(|directory| directory == parent)
+}
+
+/// Asks the platform's own locator where a program lives, discarding any answer
+/// that came out of [`untrusted_directories`].
+///
+/// Every line of the answer is considered rather than only the first, so a copy
+/// planted in front of a real installation costs the planted one rather than
+/// the whole lookup — the user keeps the ffmpeg they actually installed.
+///
+/// `None` means "not found here", and every caller follows it with the list of
+/// places that program is normally installed. Those are absolute paths written
+/// into this binary, so nothing about them needs checking.
+pub fn locate(tool: &str) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let locator = system32("where.exe");
+    #[cfg(not(target_os = "windows"))]
+    let locator = PathBuf::from("/usr/bin/which");
+
+    let mut command = std::process::Command::new(&locator);
+    command.arg(tool);
+    // `where.exe` is a console program, and this is a GUI app: without this it
+    // flashes up a console window on its way past.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+
+    let out = command.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let untrusted = untrusted_directories();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .find(|path| is_trustworthy(path, &untrusted))
+}
+
 /// The absolute path of a program in the Windows system directory.
 ///
 /// `SystemRoot` is set by the kernel for every process and cannot be inherited
@@ -198,7 +287,7 @@ pub fn ps_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_scratch_dir, create_scratch_file, ps_quote};
+    use super::{create_scratch_dir, create_scratch_file, is_trustworthy, ps_quote};
     // Only the symlink test below needs these, and that test is Unix-only.
     #[cfg(unix)]
     use super::SEQUENCE;
@@ -230,6 +319,53 @@ mod tests {
         for run in interior.split(|c| c != '\'').filter(|r| !r.is_empty()) {
             assert!(run.len().is_multiple_of(2), "a lone quote escaped: {run:?}");
         }
+    }
+
+    /// The rule the whole lookup rests on: a program sitting in a folder this
+    /// app cannot vouch for is not one it will run, however the locator came to
+    /// nominate it.
+    #[test]
+    fn a_program_in_an_untrusted_directory_is_refused() {
+        let planted = create_scratch_dir("accessengine-planted").unwrap();
+        let installed = create_scratch_dir("accessengine-installed").unwrap();
+        let untrusted = vec![planted.canonicalize().unwrap()];
+
+        let hostile = planted.join("ollama");
+        let genuine = installed.join("ollama");
+        std::fs::write(&hostile, b"not really ollama").unwrap();
+        std::fs::write(&genuine, b"the real one").unwrap();
+
+        assert!(!is_trustworthy(&hostile, &untrusted));
+        assert!(is_trustworthy(&genuine, &untrusted));
+        // Nothing there at all is not something to run either.
+        assert!(!is_trustworthy(&installed.join("absent"), &untrusted));
+
+        std::fs::remove_dir_all(&planted).ok();
+        std::fs::remove_dir_all(&installed).ok();
+    }
+
+    /// The reason the comparison resolves both sides first: a link is a second
+    /// way to spell the same directory, and spelling it differently must not be
+    /// a way through.
+    #[test]
+    #[cfg(unix)]
+    fn a_second_route_to_the_same_directory_is_refused_too() {
+        let planted = create_scratch_dir("accessengine-planted-link").unwrap();
+        let untrusted = vec![planted.canonicalize().unwrap()];
+        std::fs::write(planted.join("ffmpeg"), b"not really ffmpeg").unwrap();
+
+        let link = std::env::temp_dir().join(format!(
+            "accessengine-route-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::os::unix::fs::symlink(&planted, &link).unwrap();
+
+        // A different path, the same directory, the same planted binary.
+        assert!(!is_trustworthy(&link.join("ffmpeg"), &untrusted));
+
+        std::fs::remove_file(&link).ok();
+        std::fs::remove_dir_all(&planted).ok();
     }
 
     #[test]

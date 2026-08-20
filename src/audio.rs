@@ -179,6 +179,32 @@ pub const PLAYABLE_EXTENSIONS: &[&str] = &["mp3", "wav", "wave"];
 /// How far [`Playback::skip_back`] rewinds.
 pub const SKIP_BACK: Duration = Duration::from_secs(10);
 
+/// How long a music track spends coming up underneath the speech before it.
+///
+/// The music starts this far from the end of the speech and fades in across
+/// exactly that time, so it is at full volume as the last word lands rather
+/// than arriving cold after a silence. Long enough to be a transition, short
+/// enough that it never buries a sentence — this is the join a radio bulletin
+/// makes between the newsreader and the outro.
+pub const OVERLAP: Duration = Duration::from_millis(1250);
+
+/// Where a playlist has got to, for the status line and the player pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackPosition {
+    /// 1-based, because it is read out to a person.
+    pub number: usize,
+    pub total: usize,
+    pub name: String,
+}
+
+/// Something the playlist did between one frame and the next. Both are worth
+/// saying out loud: a listener who cannot see the pane has no other way to
+/// know which track is playing, or that one was passed over.
+pub enum PlaylistEvent {
+    Started(TrackPosition),
+    Skipped { name: String, error: String },
+}
+
 /// A sound that is currently playing, whichever engine produced it.
 ///
 /// The `say` variant is a child process rather than decoded audio because
@@ -186,6 +212,10 @@ pub const SKIP_BACK: Duration = Duration::from_secs(10);
 /// why the transport controls below all report "can't" rather than panicking:
 /// a running `say` cannot be paused or rewound, only stopped.
 pub enum Playback {
+    /// A zip of audio files played one after another — see [`ListPlayback`].
+    /// Boxed because it is much the largest of the three, and every `Playback`
+    /// in the app would otherwise be sized for a playlist.
+    List(Box<ListPlayback>),
     Decoded {
         // Held only to keep the output device open for the player's lifetime.
         _device: rodio::MixerDeviceSink,
@@ -245,6 +275,34 @@ impl Playback {
         Self::start(decoder)
     }
 
+    /// Opens a zip of audio files and starts the first track.
+    pub fn play_playlist(path: &Path) -> Result<(Self, Vec<PlaylistEvent>)> {
+        let mut list = ListPlayback::open(crate::playlist::Playlist::open(path)?)?;
+        // Started here rather than on the first frame, so a playlist whose
+        // every track is unplayable says so at the press of Play instead of
+        // sitting silent for a moment and then reporting nothing at all.
+        let events = list.poll();
+        Ok((Self::List(Box::new(list)), events))
+    }
+
+    /// Lets a playlist move on to its next track. A no-op for everything else,
+    /// which is why the caller can poll whatever is playing without asking
+    /// what it is.
+    pub fn poll(&mut self) -> Vec<PlaylistEvent> {
+        match self {
+            Self::List(list) => list.poll(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Which track of a playlist is playing, for the pane and the status line.
+    pub fn track(&self) -> Option<TrackPosition> {
+        match self {
+            Self::List(list) => list.track(),
+            _ => None,
+        }
+    }
+
     fn start<S>(source: S) -> Result<Self>
     where
         S: rodio::Source + Send + 'static,
@@ -266,6 +324,10 @@ impl Playback {
 
     pub fn is_finished(&mut self) -> bool {
         match self {
+            // A playlist is over when nothing is sounding and nothing is left
+            // to start — not when a track runs out, which happens between
+            // every pair of them.
+            Self::List(list) => list.is_finished(),
             // A paused player is not an empty one, so this stays false while
             // the user is holding the file mid-sentence.
             Self::Decoded { player, .. } => player.empty(),
@@ -275,6 +337,7 @@ impl Playback {
 
     pub fn stop(&mut self) {
         match self {
+            Self::List(list) => list.stop(),
             Self::Decoded { player, .. } => player.stop(),
             Self::Process(child) => {
                 let _ = child.kill();
@@ -285,26 +348,34 @@ impl Playback {
 
     pub fn is_paused(&self) -> bool {
         match self {
+            Self::List(list) => list.paused,
             Self::Decoded { player, .. } => player.is_paused(),
             Self::Process(_) => false,
         }
     }
 
     pub fn pause(&mut self) {
-        if let Self::Decoded { player, .. } = self {
-            player.pause();
+        match self {
+            Self::List(list) => list.pause(),
+            Self::Decoded { player, .. } => player.pause(),
+            Self::Process(_) => {}
         }
     }
 
     pub fn resume(&mut self) {
-        if let Self::Decoded { player, .. } = self {
-            player.play();
+        match self {
+            Self::List(list) => list.resume(),
+            Self::Decoded { player, .. } => player.play(),
+            Self::Process(_) => {}
         }
     }
 
     /// Where playback has reached, counting from the start of the file.
     pub fn position(&self) -> Duration {
         match self {
+            // Within the current track, which is what the countdown beside it
+            // is counting down.
+            Self::List(list) => list.position(),
             Self::Decoded { player, .. } => player.get_pos(),
             Self::Process(_) => Duration::ZERO,
         }
@@ -312,6 +383,7 @@ impl Playback {
 
     pub fn duration(&self) -> Option<Duration> {
         match self {
+            Self::List(list) => list.duration(),
             Self::Decoded { duration, .. } => *duration,
             Self::Process(_) => None,
         }
@@ -320,13 +392,291 @@ impl Playback {
     /// Rewinds by [`SKIP_BACK`], stopping at the beginning rather than
     /// wrapping round or failing when there is less than that to rewind.
     pub fn skip_back(&mut self) -> Result<()> {
-        let Self::Decoded { player, .. } = self else {
-            bail!("this voice cannot be rewound; stop it and start again");
+        let player = match self {
+            Self::List(list) => return list.skip_back(),
+            Self::Decoded { player, .. } => player,
+            Self::Process(_) => {
+                bail!("this voice cannot be rewound; stop it and start again")
+            }
         };
         let target = player.get_pos().saturating_sub(SKIP_BACK);
         player
             .try_seek(target)
             .map_err(|e| anyhow::anyhow!("could not skip back in this file: {e}"))
+    }
+}
+
+/// A playlist, playing.
+///
+/// One output device, and a `rodio::Player` per track connected to its mixer.
+/// A player each rather than one queue of sources is what makes the overlap
+/// possible at all: two players on the same mixer are heard together, and only
+/// separate players can be at different volumes while they are.
+///
+/// Nothing here runs on a timer. [`Self::poll`] is called once a frame by the
+/// window, which is the same clock the position readout already runs on, so a
+/// track boundary is noticed within a frame of it happening and the app never
+/// grows a thread that could outlive the sound it is watching.
+pub struct ListPlayback {
+    // Held only to keep the output device open for as long as any of the
+    // players connected to its mixer.
+    device: rodio::MixerDeviceSink,
+    list: crate::playlist::Playlist,
+    /// The track the transport reports on. `None` before the first has
+    /// started, and between a track ending and the next one being opened.
+    current: Option<Sounding>,
+    /// Music that has already started underneath [`Self::current`].
+    ahead: Option<Sounding>,
+    /// The next track to open. Equal to the playlist's length once every track
+    /// has had its turn.
+    next: usize,
+    /// Held here rather than read off a player: the two players are paused
+    /// separately and a playlist between tracks has neither.
+    paused: bool,
+}
+
+/// One track, sounding.
+struct Sounding {
+    at: usize,
+    player: rodio::Player,
+    duration: Option<Duration>,
+}
+
+impl ListPlayback {
+    fn open(list: crate::playlist::Playlist) -> Result<Self> {
+        let mut device = rodio::DeviceSinkBuilder::open_default_sink()
+            .context("could not open an audio output device")?;
+        device.log_on_drop(false);
+        Ok(Self {
+            device,
+            list,
+            current: None,
+            ahead: None,
+            next: 0,
+            paused: false,
+        })
+    }
+
+    /// Moves the playlist along by however much has happened since last time.
+    ///
+    /// Two things can happen at a track boundary and both are handled here so
+    /// that neither depends on being noticed in the same frame: a track that
+    /// has run out hands over, and a music track that is due comes in
+    /// underneath the speech it follows.
+    fn poll(&mut self) -> Vec<PlaylistEvent> {
+        let mut events = Vec::new();
+        if self.paused {
+            // A paused playlist is not advancing, and must not start the next
+            // track underneath a track that is being held mid-sentence.
+            return events;
+        }
+
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|track| track.player.empty())
+        {
+            // Whatever was already sounding under it takes over, so the music
+            // is not restarted at the moment the speech ends.
+            self.current = self.ahead.take();
+        }
+        if self.current.is_none() {
+            self.start_next(&mut events);
+        }
+        self.begin_overlap(&mut events);
+        events
+    }
+
+    /// Opens tracks until one of them plays, reporting each that did not.
+    fn start_next(&mut self, events: &mut Vec<PlaylistEvent>) {
+        while self.next < self.list.len() {
+            let at = self.next;
+            self.next += 1;
+            match self.sound(at) {
+                Ok(sounding) => {
+                    events.push(PlaylistEvent::Started(self.position_of(at)));
+                    self.current = Some(sounding);
+                    return;
+                }
+                Err(error) => events.push(PlaylistEvent::Skipped {
+                    name: self.name_of(at),
+                    error: format!("{error:#}"),
+                }),
+            }
+        }
+    }
+
+    /// Starts the next track early, under the one playing, when it is music
+    /// following speech and the speech is [`OVERLAP`] from its end.
+    ///
+    /// Nothing happens here when the speech track's length is unknown — some
+    /// files cannot report one — and nothing needs to: the music still fades
+    /// in, it just begins where the speech stops instead of under it.
+    fn begin_overlap(&mut self, events: &mut Vec<PlaylistEvent>) {
+        use crate::playlist::TrackKind;
+
+        if self.ahead.is_some() || self.next >= self.list.len() {
+            return;
+        }
+        let Some(current) = &self.current else {
+            return;
+        };
+        let (Some(speech), Some(music)) = (self.list.track(current.at), self.list.track(self.next))
+        else {
+            return;
+        };
+        if speech.kind != TrackKind::Speech || music.kind != TrackKind::Music {
+            return;
+        }
+        let Some(total) = current.duration else {
+            return;
+        };
+        if total.saturating_sub(current.player.get_pos()) > OVERLAP {
+            return;
+        }
+
+        let at = self.next;
+        self.next += 1;
+        match self.sound(at) {
+            Ok(sounding) => {
+                events.push(PlaylistEvent::Started(self.position_of(at)));
+                self.ahead = Some(sounding);
+            }
+            Err(error) => events.push(PlaylistEvent::Skipped {
+                name: self.name_of(at),
+                error: format!("{error:#}"),
+            }),
+        }
+    }
+
+    /// Decompresses one track and starts it on its own player.
+    ///
+    /// Music that follows speech fades in over [`OVERLAP`] whether or not it
+    /// managed to start early, so the join sounds the same either way.
+    fn sound(&mut self, at: usize) -> Result<Sounding> {
+        use crate::playlist::TrackKind;
+        use rodio::Source as _;
+
+        let name = self.name_of(at);
+        let fades = at > 0
+            && self
+                .list
+                .track(at)
+                .is_some_and(|t| t.kind == TrackKind::Music)
+            && self
+                .list
+                .track(at - 1)
+                .is_some_and(|t| t.kind == TrackKind::Speech);
+
+        let bytes = self.list.read(at)?;
+        let byte_len = bytes.len() as u64;
+        let decoder = rodio::Decoder::builder()
+            .with_data(Cursor::new(bytes))
+            // Both are what make seeking work, and what lets a track report a
+            // length for the countdown — and for the overlap, which is worked
+            // out from how much of the speech is left.
+            .with_byte_len(byte_len)
+            .with_seekable(true)
+            .build()
+            .with_context(|| format!("{name} could not be played"))?;
+        let duration = decoder.total_duration();
+
+        let player = rodio::Player::connect_new(self.device.mixer());
+        if fades {
+            player.append(decoder.fade_in(OVERLAP));
+        } else {
+            player.append(decoder);
+        }
+        Ok(Sounding {
+            at,
+            player,
+            duration,
+        })
+    }
+
+    fn name_of(&self, at: usize) -> String {
+        self.list
+            .track(at)
+            .map(|track| track.name.clone())
+            .unwrap_or_default()
+    }
+
+    fn position_of(&self, at: usize) -> TrackPosition {
+        TrackPosition {
+            number: at + 1,
+            total: self.list.len(),
+            name: self.name_of(at),
+        }
+    }
+
+    fn track(&self) -> Option<TrackPosition> {
+        self.current
+            .as_ref()
+            .map(|current| self.position_of(current.at))
+    }
+
+    fn is_finished(&self) -> bool {
+        self.current.is_none() && self.ahead.is_none() && self.next >= self.list.len()
+    }
+
+    fn stop(&mut self) {
+        for sounding in [self.current.take(), self.ahead.take()]
+            .into_iter()
+            .flatten()
+        {
+            sounding.player.stop();
+        }
+        // So that a stopped playlist reports itself finished rather than
+        // starting again from wherever it had got to on the next poll.
+        self.next = self.list.len();
+        self.paused = false;
+    }
+
+    fn pause(&mut self) {
+        self.paused = true;
+        for sounding in [&self.current, &self.ahead].into_iter().flatten() {
+            sounding.player.pause();
+        }
+    }
+
+    fn resume(&mut self) {
+        self.paused = false;
+        for sounding in [&self.current, &self.ahead].into_iter().flatten() {
+            sounding.player.play();
+        }
+    }
+
+    fn position(&self) -> Duration {
+        self.current
+            .as_ref()
+            .map_or(Duration::ZERO, |current| current.player.get_pos())
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        self.current.as_ref().and_then(|current| current.duration)
+    }
+
+    /// Back ten seconds within the current track.
+    ///
+    /// Music that had already come up underneath is taken away again: the
+    /// speech it was fading under is no longer ending, and leaving it there
+    /// would put the whole rest of the playlist a track ahead of itself. It
+    /// starts again, from silence, when the speech next reaches its end.
+    fn skip_back(&mut self) -> Result<()> {
+        let Some(current) = &self.current else {
+            bail!("there is nothing playing to rewind");
+        };
+        let target = current.player.get_pos().saturating_sub(SKIP_BACK);
+        current
+            .player
+            .try_seek(target)
+            .map_err(|e| anyhow::anyhow!("could not skip back in this track: {e}"))?;
+
+        if let Some(ahead) = self.ahead.take() {
+            ahead.player.stop();
+            self.next = ahead.at;
+        }
+        Ok(())
     }
 }
 
@@ -627,6 +977,130 @@ mod tests {
         assert!(!playback.is_paused());
         playback.stop();
         std::fs::remove_file(&path).ok();
+    }
+
+    /// A playlist on a real output device: the running order is followed, and
+    /// music that follows speech comes up *underneath* it rather than after it.
+    ///
+    /// The overlap is the part worth a real device. It is not a property of
+    /// any one decoder — it is two players on one mixer, and whether the
+    /// second was started while the first was still sounding. Skipped where
+    /// there is no audio hardware, and on the Windows CI runner, for the
+    /// reasons set out above.
+    #[test]
+    fn a_playlist_plays_in_order_with_the_music_coming_up_under_the_speech() {
+        use std::io::Write as _;
+
+        if skip_on_windows_ci() {
+            return;
+        }
+        let path = std::env::temp_dir().join("soe-playlist-test.zip");
+        let speech = std::env::temp_dir().join("soe-playlist-speech.wav");
+        let music = std::env::temp_dir().join("soe-playlist-music.wav");
+        write_wav(&speech, &tone(1, 22_050, 2.0)).unwrap();
+        write_wav(&music, &tone(1, 22_050, 1.0)).unwrap();
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options: zip::write::FileOptions<()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        // Written the other way round on purpose: the manifest decides the
+        // order, not the order the archive happens to store its entries in.
+        for (name, from) in [("music.wav", &music), ("speech.wav", &speech)] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(&std::fs::read(from).unwrap()).unwrap();
+        }
+        zip.start_file("media.txt", options).unwrap();
+        zip.write_all(
+            br#"<music>
+                <audio type="speech" pos="1">speech.wav</audio>
+                <audio type="music" pos="2">music.wav</audio>
+            </music>"#,
+        )
+        .unwrap();
+        zip.finish().unwrap();
+        std::fs::remove_file(&speech).ok();
+        std::fs::remove_file(&music).ok();
+
+        let tidy_up = || {
+            std::fs::remove_file(&path).ok();
+        };
+        let Ok((mut playback, started)) = Playback::play_playlist(&path) else {
+            tidy_up();
+            eprintln!("no audio output device; skipping the playlist test");
+            return;
+        };
+
+        let names: Vec<String> = started
+            .iter()
+            .filter_map(|event| match event {
+                PlaylistEvent::Started(track) => Some(track.name.clone()),
+                PlaylistEvent::Skipped { .. } => None,
+            })
+            .collect();
+        assert_eq!(
+            names,
+            ["speech.wav"],
+            "the manifest's order was not followed"
+        );
+        assert_eq!(
+            playback.track().map(|track| (track.number, track.total)),
+            Some((1, 2))
+        );
+
+        // Poll the way the window does, and catch the moment the music starts.
+        let mut overlapped = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            for event in playback.poll() {
+                if let PlaylistEvent::Started(track) = event
+                    && track.number == 2
+                {
+                    // What makes it an overlap rather than a hand-over: the
+                    // speech is still the track the transport is reporting on,
+                    // and is still short of its own end.
+                    overlapped = Some((
+                        playback.track().map(|track| track.number),
+                        playback.position(),
+                        playback.duration(),
+                    ));
+                }
+            }
+            if overlapped.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        let Some((reporting, position, duration)) = overlapped else {
+            playback.stop();
+            tidy_up();
+            panic!("the music never started");
+        };
+        assert_eq!(
+            reporting,
+            Some(1),
+            "the music took over instead of coming up under the speech"
+        );
+        let total = duration.expect("a WAV reports its length");
+        let left = time_left(position, total);
+        assert!(
+            left > Duration::ZERO && left <= OVERLAP + Duration::from_millis(250),
+            "the music came up with {left:?} of the speech left, not about {OVERLAP:?}"
+        );
+
+        // And the music is what is left playing once the speech has run out.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline
+            && playback.track().map(|track| track.number) != Some(2)
+        {
+            playback.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let handed_over = playback.track().map(|track| track.name);
+        playback.stop();
+        tidy_up();
+        assert_eq!(handed_over.as_deref(), Some("music.wav"));
     }
 
     #[test]

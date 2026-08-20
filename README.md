@@ -66,6 +66,9 @@ This is the point of the app rather than a feature of it.
   one this app saved, or an audiobook chapter from anywhere else — with play,
   pause, stop, a ten-second rewind for the sentence you missed, and a countdown
   of how much is left. Drop a file anywhere on the window and it lands there.
+- **Plays a zip of them as a playlist**, one track after another, with music
+  able to come up underneath the speech it follows — see
+  [Playlists](#playlists).
 - **A sound when something starts, finishes or fails.** A short tone as the work
   begins, a chime for success, a lower tone for a problem, so you know what
   happened without watching the status line. While the work runs there is a
@@ -108,13 +111,60 @@ by default, so a rule for "cat" leaves "catalogue" alone. Rules apply in order,
 and the file on disk is never touched — the replacement happens on the way to
 the voice.
 
+## Playlists
+
+Choose a `.zip` in the **Audio player** instead of a single file and every WAV
+and MP3 inside it becomes a track, played one after another. The pane says which
+track is playing and how many there are, the status line says so again each time
+one starts — that being the line a screen reader is already watching — and play,
+pause, stop and the ten-second rewind all work within the track that is playing.
+
+Nothing is ever unpacked. The archive is opened and each track is decompressed
+in memory as its turn comes, so a playlist leaves nothing behind on disk.
+
+Without a running order the tracks play in the order their names read, so
+`track2.mp3` comes before `track10.mp3` rather than after it. To set the order
+yourself, put a **`media.txt`** in the zip:
+
+```xml
+<music>
+    <audio type="music" pos="1">intro.mp3</audio>
+    <audio type="speech" pos="2">briefing.mp3</audio>
+    <audio type="music" pos="3">words.mp3</audio>
+</music>
+```
+
+- **`pos`** is the running order. Leave it out and the order is the order the
+  lines are written in.
+- **`type`** is `speech` or `music`, and it is what makes the join below. A
+  track with no `type` is speech.
+- Names are matched without regard to capitals or which folder inside the zip
+  the file sits in, so `Intro.MP3` finds `audio/intro.mp3`.
+- A file the running order never mentions is still played, after the ones that
+  are, rather than silently left out. A file the running order asks for that is
+  not in the zip is noted in the log (<kbd>⌘L</kbd>).
+
+The file is called `.txt` for a reason: a plain list of file names, one per line
+with `#` for comments, works just as well as the XML above. Everything in a
+plain list is speech.
+
+### Music under speech
+
+When a **music** track follows a **speech** track, it does not wait for it. The
+music starts 1.25 seconds before the speech ends and fades in across exactly
+that time, so it is at full volume as the last word lands — the join a radio
+bulletin makes between the newsreader and the outro, rather than a gap and then
+a jolt. Where the speech track cannot report its own length, the music still
+fades in; it just starts where the speech stops. Rewinding takes the music back
+off again until the speech reaches its end once more.
+
 ## Keyboard shortcuts
 
 <kbd>⌘</kbd> on macOS, <kbd>Ctrl</kbd> on Windows.
 
 | Keys | What it does |
 | --- | --- |
-| <kbd>⌘O</kbd> | Choose a file — a document, or an audio file in the player |
+| <kbd>⌘O</kbd> | Choose a file — a document, or an audio file or playlist in the player |
 | <kbd>⌘Return</kbd> | Apply — run the chosen action |
 | <kbd>⌘.</kbd> or <kbd>Esc</kbd> | Stop reading or playing, or cancel what is running |
 | <kbd>⌘1</kbd> … <kbd>⌘5</kbd> | Go to Read, Audio player, Dictionary, Settings or Shortcuts |
@@ -431,14 +481,25 @@ copy itself is left in place).
 The app runs other programs and opens files it did not write, so both are
 treated as untrusted.
 
-- **No shell, ever.** Nothing is passed through `sh` or `cmd`, so there is no
-  layer that could reinterpret a character in a filename or a document. Every
-  program is launched with its arguments as a list.
+- **Nothing you type or open ever reaches a shell.** No filename, document,
+  voice name or key is passed through `sh` or `cmd`, so there is no layer that
+  could reinterpret a character in any of them; every program is launched with
+  its arguments as a list. There is exactly one shell in the app — installing
+  Homebrew runs `bash`, because Homebrew's installer is a shell script — and
+  nothing of yours is in it. See the Homebrew note below.
 - **Programs are named by absolute path** — `/usr/bin/say`, `/usr/bin/security`,
   `System32\WindowsPowerShell\v1.0\powershell.exe`. A bare name would let
   `PATH`, or the directory the app was unzipped into, decide which binary runs —
   and one of them is handed your documents to speak, another the old stored key
   to hand back.
+- **The two programs that cannot be named that way are told where they may not
+  come from.** Ollama and ffmpeg are installed by somebody else, so they have to
+  be looked up — and on Windows `where.exe` searches the current directory
+  *before* `PATH`, which for an app run out of Downloads is the folder the app
+  itself is sitting in. An answer out of that folder, or out of the working
+  directory, is refused, and the rest of the answers are still considered: a
+  copy planted in front of a real installation costs the planted one, not the
+  ffmpeg you installed.
 - **Documents never go on a command line.** macOS pipes the text to `say` over
   stdin; Windows stages it in a file the PowerShell script deletes as soon as it
   has read it. Anything that *is* interpolated into a generated script — paths,
@@ -456,8 +517,28 @@ treated as untrusted.
   that `security` could read it back without a prompt, so both were one
   subprocess away for anything already running as you. Reliably having the key
   the user typed was worth more than that margin.
+- **Installing Homebrew downloads a script and runs it — with your consent, and
+  only ever that one.** It is Homebrew's own installer, from
+  `raw.githubusercontent.com` over HTTPS, and it is what `brew.sh` itself tells
+  you to run; the app shows you the command before anything happens, checks that
+  what came back is a shell script rather than a captive portal's login page,
+  and asks for your password with a macOS dialog that hands it to `sudo` and to
+  nothing else. Two things are worth stating plainly: the script is fetched from
+  a moving `HEAD`, so it is whatever Homebrew publishes at that moment, and
+  nothing verifies its contents beyond the transport. That is the same trust you
+  extend by running the command from Homebrew's own front page — but it is the
+  one place this app runs code it did not ship, and you should know that before
+  you press the button.
+- **A playlist is read, never unpacked.** A zip opened in the audio player has
+  its tracks decompressed into memory one at a time. No entry name from the
+  archive is ever used as a path to write to, entries whose names would climb
+  out of the archive are left out of the running order rather than trusted, and
+  a `media.txt` cannot name a file outside the zip — it selects from what the
+  archive already holds. `media.txt` is parsed with no entity resolution, so it
+  cannot reach out to a file or a URL on the way past.
 - **Input is bounded.** Images are capped at 64 MB, plain text at 64 MB, a
-  `.docx` body at 128 MB *after decompression*, and a PDF at 128 MB on disk with
+  `.docx` body at 128 MB *after decompression*, a playlist at 500 tracks with
+  each capped at 256 MB *after decompression*, and a PDF at 128 MB on disk with
   a further ceiling on the text taken out of it — a zip bomb is a few hundred
   kilobytes on disk, and an app that dies on one is an app that fails the person
   relying on it to read their post. PDF streams are compressed too, and a
@@ -495,6 +576,7 @@ Output Engine.
 | `src/extract/pdf/` | `.pdf` → text: objects, filters, pages, fonts, page description |
 | `src/tts/` | The ElevenLabs and system-voice engines, and text chunking |
 | `src/audio.rs` | PCM, WAV/MP3 encoding, playback and the transport |
+| `src/playlist.rs` | A zip of audio as a running order, and what `media.txt` says about it |
 | `src/ollama.rs` | Detecting, installing and calling Ollama |
 | `src/ffmpeg.rs` | Detecting and installing ffmpeg, and taking frames out of video |
 | `src/apikey.rs` | API key storage |

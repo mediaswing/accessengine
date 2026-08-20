@@ -107,8 +107,8 @@ chooser.filter.pdf = "PDF files"
 chooser.filter.table = "Tables"
 chooser.filter.image = "Images"
 chooser.filter.video = "Video"
-chooser.audio.title = "Choose an audio file to play"
-chooser.filter.audio = "Audio files"
+chooser.audio.title = "Choose an audio file or playlist to play"
+chooser.filter.audio = "Audio files and playlists"
 chooser.save.title = "Save the audio file as"
 # The name offered when the document has none of its own.
 chooser.save.fallback_name = "speech"
@@ -117,11 +117,18 @@ chooser.save.fallback_name = "speech"
 # --------------------------------------------------------- the audio player
 
 player.heading = "Audio player"
-player.intro = "Plays a spoken-word WAV or MP3 — one saved by this app, or any other. Nothing is uploaded and the file on disk is never changed."
+player.intro = "Plays a spoken-word WAV or MP3 — one saved by this app, or any other — or a "
+               "zip of them as a playlist, one after another. Nothing is uploaded and the "
+               "file on disk is never changed."
 player.file.caption = "Audio file"
 player.file.button = "📂  Choose Audio File…"
-player.file.hint = "{C}O  ·  A WAV or MP3 file. You can also drop one on this window."
+player.file.hint = "{C}O  ·  A WAV or MP3 file, or a zip of them to play as a playlist. You can "
+                   "also drop one on this window."
 player.file.chosen = "Chosen: {name}"
+# A playlist says how long it is here, because that is the one thing about a zip
+# you cannot tell from its name.
+player.file.chosen_playlist.one = "Chosen: {name} — a playlist of {n} track."
+player.file.chosen_playlist.other = "Chosen: {name} — a playlist of {n} tracks."
 player.file.none = "No audio file chosen yet."
 
 player.play = "▶  Play"
@@ -142,6 +149,8 @@ player.position.playing_of = "Playing — {at} of {total}"
 player.position.paused = "Paused at {at}"
 player.position.paused_of = "Paused at {at} of {total}"
 player.position.left = "{left} left"
+# Which track of a playlist is playing, above the position within it.
+player.track = "Track {number} of {total} — {name}"
 
 
 # ---------------------------------------------------------- the Dictionary
@@ -388,6 +397,10 @@ status.cancelling = "Cancelling…"
 status.ready = "Ready. Press Apply to read it."
 status.appearance_changed = "Appearance changed to {name}."
 status.unreadable_type = "{name} is not a file type this app can read"
+# Several files dropped at once. Only the plural form is ever shown; the
+# singular is here because every counted message needs both.
+status.dropped_several.one = "{n} file was dropped, and only one can be opened at a time."
+status.dropped_several.other = "{n} files were dropped. Only one can be opened at a time, so none was — drop just the one you want."
 status.no_file = "Choose a file first."
 status.no_text = "There is no text to read yet — the file is still being read, or it was empty."
 status.no_key = "Add an ElevenLabs API key, or choose System voices."
@@ -398,6 +411,10 @@ status.reading_plain = "Reading aloud…"
 status.finished_reading = "Finished reading."
 status.stopped_reading = "Stopped reading."
 status.loaded = "Loaded {name}. Press Play."
+status.loaded_playlist.one = "Loaded {name}, a playlist of {n} track. Press Play."
+status.loaded_playlist.other = "Loaded {name}, a playlist of {n} tracks. Press Play."
+status.playing_track = "Playing track {number} of {total}: {name}"
+status.track_skipped = "{name} could not be played; moving on to the next track."
 status.playing = "Playing."
 status.playing_file = "Playing {name}."
 status.paused_at = "Paused at {at}."
