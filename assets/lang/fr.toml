@@ -335,6 +335,12 @@ reset.kept = "Votre dictionnaire est conservé, ainsi que votre clé d'API Eleve
 reset.confirm = "Rétablir les réglages"
 reset.cancel = "Annuler"
 
+video_warning.heading = "Description de cette vidéo"
+video_warning.what = "Décrire une vidéo consiste à lire ses images une par une avec un modèle d'IA exécuté sur cet ordinateur, ce qui peut prendre de quelques minutes à beaucoup plus, selon la durée de la vidéo et la puissance de cet ordinateur. Le modèle peut aussi se tromper sur certains détails : ce que vous entendrez est sa meilleure estimation de ce que montrent les images, pas une transcription fidèle de la vidéo."
+video_warning.dont_ask = "Ne plus demander"
+video_warning.continue = "Décrire la vidéo"
+video_warning.cancel = "Annuler"
+
 install.heading.image = "Lecture des images"
 install.heading.video = "Lecture de la vidéo"
 install.ollama.what = "Lire le texte d'une image nécessite Ollama, qui exécute un modèle de vision sur cet ordinateur. Il n'est pas encore installé."

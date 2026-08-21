@@ -309,6 +309,11 @@ pub struct Config {
     pub video_interval_secs: u32,
     /// The most frames one video may be described from.
     pub video_max_frames: usize,
+    /// Whether the "this may take a while" warning shown before a video is
+    /// described has been turned off. Off by default: the warning is meant to
+    /// be seen the first time, and stays off only once somebody has ticked the
+    /// checkbox on it themselves.
+    pub video_warning_dismissed: bool,
 
     /// Directory the last save went to, so the dialog reopens somewhere useful.
     pub last_save_dir: Option<PathBuf>,
@@ -343,6 +348,7 @@ impl Default for Config {
             video_scene_threshold: DEFAULT_SCENE_THRESHOLD,
             video_interval_secs: DEFAULT_INTERVAL_SECS,
             video_max_frames: DEFAULT_MAX_FRAMES,
+            video_warning_dismissed: false,
             last_save_dir: None,
             last_audio_dir: None,
         }
@@ -696,6 +702,9 @@ mod tests {
         assert!(config.video_narrate);
         assert!(!config.video_frame_prompt.is_empty());
         assert!(!config.video_narration_prompt.is_empty());
+        // And sees the "this may take a while" warning at least once, rather
+        // than inheriting a dismissal nobody actually clicked.
+        assert!(!config.video_warning_dismissed);
     }
 
     /// The sampling is what a video costs in time, so nonsense in the file must

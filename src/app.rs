@@ -442,6 +442,18 @@ pub struct SpeechApp {
     /// Re-run after the user resolves a [`Prompt`].
     deferred: Option<Job>,
 
+    /// Whether the "describing this video may take a while" warning is open.
+    /// Asked before the job starts rather than mid-job, which is why it is not
+    /// a [`Prompt`]: nothing has been sent to Ollama yet for it to answer.
+    confirm_video: bool,
+    video_dialog_opened: bool,
+    /// The "don't ask again" box on that dialog, held here rather than as a
+    /// local so it survives redraws while the dialog is open.
+    video_warning_checkbox: bool,
+    /// The video [`open_file`](SpeechApp::open_file) is waiting to actually
+    /// read once [`SpeechApp::confirm_video`] is answered.
+    pending_video: Option<PathBuf>,
+
     pane: Pane,
     /// The API key is still a dialog rather than a pane: it is answered on the
     /// spot, in the middle of choosing an engine, and then dismissed.
@@ -521,6 +533,10 @@ impl SpeechApp {
             reset_opened: false,
             prompt_opened: false,
             deferred: None,
+            confirm_video: false,
+            video_dialog_opened: false,
+            video_warning_checkbox: false,
+            pending_video: None,
             pane: Pane::Read,
             show_api_key: false,
             dialog_opened: false,
@@ -878,6 +894,25 @@ impl SpeechApp {
         self.cached = None;
         self.log.clear();
 
+        // A video is many minutes of local AI inference rather than the
+        // moment the other kinds take, so it is asked about before it starts
+        // rather than simply begun — once, unless the warning has been turned
+        // off. Everything above this still runs first: the file is shown as
+        // selected either way, and the question is only about the job.
+        if kind == FileKind::Video && !self.config.video_warning_dismissed {
+            self.pending_video = Some(path);
+            self.confirm_video = true;
+            self.video_dialog_opened = true;
+            self.video_warning_checkbox = false;
+            return;
+        }
+
+        self.start_read_job(ctx, kind, path);
+    }
+
+    /// Builds and starts the job that actually reads `path`, once any
+    /// confirmation it needed has been answered.
+    fn start_read_job(&mut self, ctx: &egui::Context, kind: FileKind, path: PathBuf) {
         let job = match kind {
             FileKind::Image => Job::ReadImage {
                 path,
@@ -1529,7 +1564,7 @@ impl SpeechApp {
         // of them: a shortcut that still fired under the reset confirmation
         // would raise a file chooser behind the backdrop, or switch to a pane
         // nobody can see.
-        if self.show_api_key || self.prompt.is_some() || self.confirm_reset {
+        if self.show_api_key || self.prompt.is_some() || self.confirm_reset || self.confirm_video {
             return;
         }
 
@@ -3343,6 +3378,77 @@ impl SpeechApp {
         self.set_status(t!("status.settings_reset"), Tone::Success);
     }
 
+    /// Asked once, before a video job starts rather than mid-job: describing
+    /// one runs a local AI model over every frame in turn, which is minutes
+    /// of work even on a fast computer, and can misdescribe what it sees. See
+    /// [`SpeechApp::confirm_video`].
+    fn video_warning_dialog(&mut self, ctx: &egui::Context) {
+        if !self.confirm_video {
+            return;
+        }
+        let opening = std::mem::take(&mut self.video_dialog_opened);
+        let mut decision: Option<bool> = None;
+
+        let modal = egui::Modal::new(egui::Id::new("confirm_video")).show(ctx, |ui| {
+            ui.set_max_width(560.0);
+            ui.heading(t!("video_warning.heading"));
+            ui.add_space(6.0);
+            ui.add(egui::Label::new(t!("video_warning.what")).wrap());
+            ui.add_space(10.0);
+            ui.checkbox(
+                &mut self.video_warning_checkbox,
+                t!("video_warning.dont_ask"),
+            );
+            ui.add_space(10.0);
+
+            if ui
+                .add(
+                    egui::Button::new(t!("video_warning.continue"))
+                        .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+                )
+                .clicked()
+            {
+                decision = Some(true);
+            }
+            let cancel = ui.add(
+                egui::Button::new(t!("video_warning.cancel"))
+                    .min_size(egui::vec2(240.0, CONTROL_HEIGHT)),
+            );
+            // As in the reset confirmation: the keyboard has to land somewhere
+            // for the dialog to be announced, and this arrives the moment a
+            // video is chosen, unbidden — so a Return pressed out of habit
+            // should reach Cancel, not start several minutes of work.
+            if opening {
+                cancel.request_focus();
+            }
+            if cancel.clicked() {
+                decision = Some(false);
+            }
+        });
+
+        if decision.is_none() && modal.should_close() {
+            decision = Some(false);
+        }
+
+        let Some(confirmed) = decision else {
+            return;
+        };
+        self.confirm_video = false;
+        if self.video_warning_checkbox {
+            self.config.video_warning_dismissed = true;
+            self.config_dirty = true;
+        }
+
+        let Some(path) = self.pending_video.take() else {
+            return;
+        };
+        if !confirmed {
+            self.set_status(t!("status.video_skipped"), Tone::Info);
+            return;
+        }
+        self.start_read_job(ctx, FileKind::Video, path);
+    }
+
     fn prompt_dialog(&mut self, ctx: &egui::Context) {
         // Before the borrow below, which lasts as long as the dialog is being
         // drawn. Never set without a prompt to go with it, so consuming it on
@@ -3717,6 +3823,7 @@ impl eframe::App for SpeechApp {
 
         self.api_key_dialog_window(&ctx);
         self.reset_dialog(&ctx);
+        self.video_warning_dialog(&ctx);
         self.prompt_dialog(&ctx);
         self.update_dialog(&ctx);
 

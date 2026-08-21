@@ -361,6 +361,12 @@ reset.kept = "Your dictionary is kept, and your ElevenLabs API key is kept. This
 reset.confirm = "Reset Settings"
 reset.cancel = "Cancel"
 
+video_warning.heading = "Describing This Video"
+video_warning.what = "Describing a video reads its frames one at a time with an AI model running on this computer, which can take anywhere from a few minutes to much longer depending on the video's length and this computer's speed. The model can also get details wrong, so what you hear is its best guess at what the frames show, not a transcript of the video."
+video_warning.dont_ask = "Don't ask again"
+video_warning.continue = "Describe Video"
+video_warning.cancel = "Cancel"
+
 install.heading.image = "Reading Images"
 install.heading.video = "Reading Video"
 install.ollama.what = "Reading text out of an image needs Ollama, which runs a vision model on this computer. It is not installed yet."
