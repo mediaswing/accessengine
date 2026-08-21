@@ -258,6 +258,15 @@ You need [Rust](https://rustup.rs) 1.88 or newer to build. There are no C
 toolchain surprises on Windows: the TLS stack is `ring` rather than the default
 `aws-lc`, which would want CMake and an assembler.
 
+Linux is not a supported platform, but it is not shut out either. Every
+platform-specific corner of the code already has an "everywhere else" branch, so
+the source is written to compile there — though no release is built or tested on
+Linux, and that branch is where the system speech engine is missing rather than
+merely different. You would need an ElevenLabs key to get any speech at all. If
+you want a voice that comes with the machine — `espeak-ng`, or Piper for
+something actually worth listening to — open an issue. Nobody has asked yet, and
+that is the only reason it is not there.
+
 ## Building and running
 
 ```sh
