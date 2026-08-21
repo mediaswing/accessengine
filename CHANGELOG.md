@@ -3,6 +3,41 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [2.2.0] - 2026-08-21
+
+Two additions, both about what a video or photo's description doesn't tell you
+unless the app says so. Describing a video now warns first, since a few
+minutes of local inference and a model's best guess at the frames are not
+obvious from the moment a video is chosen. And a video or JPEG/HEIC photo's
+description now ends with a line disclosing where it came from — a local AI
+model, not a transcript — and which engine is about to read it aloud.
+
+### Added
+
+- **A warning before describing a video.** Reading a video means minutes of
+  local AI inference across dozens of frames, and the model can get details
+  wrong — neither of which was obvious from the moment a video was chosen,
+  when the job simply started. A dialog now asks first, with a "don't ask
+  again" checkbox under **Settings** for anyone who processes video regularly.
+- **Video and photo descriptions disclose that they were written by AI.** A
+  video's description, and a JPEG or HEIC photo's, now ends with a line saying
+  it was written by a local AI model running on Ollama, not transcribed —
+  worth knowing wherever the description ends up, not only in the one-time
+  warning shown before it starts. That line also names which half of the
+  pipeline just left this computer: read with a system voice, it says so; read
+  with ElevenLabs, it says the text is being sent to that cloud service to be
+  spoken. On by default, with its own checkbox under **Settings** for video and
+  for photos. PNGs are left alone, since one read here is far more often a
+  screenshot or a diagram than a photo.
+
+### Changed
+
+- **The video narrator no longer repeats itself.** Each frame is described
+  alone, so the same person or room was written up fresh in every frame that
+  held it, and the narration pass that joins them carried that repetition
+  straight through. It is now told to introduce someone or somewhere once and
+  mention them again only when something about them has actually changed.
+
 ## [2.1.0] - 2026-08-21
 
 A zip of audio files is now a playlist. Everything else here is a security and
