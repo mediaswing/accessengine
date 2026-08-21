@@ -343,7 +343,7 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
     }
 
     if config.photo_ai_note && extract::image::is_photo(&path) {
-        text = extract::image::ai_disclosure_note(&text);
+        text = extract::image::ai_disclosure_note(&text, config.engine);
     }
 
     let note = t!(
@@ -585,7 +585,7 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
     }
 
     if config.video_ai_note {
-        text = extract::video::ai_disclosure_note(&text);
+        text = extract::video::ai_disclosure_note(&text, config.engine);
     }
 
     let _ = tx.send(Update::Progress(1.0));

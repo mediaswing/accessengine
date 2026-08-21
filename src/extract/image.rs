@@ -14,6 +14,7 @@
 //! most cameras and phones write one to EXIF unless location tagging was
 //! turned off. See [`crate::geocode`] for what becomes of it.
 
+use crate::config::EnginePreference;
 use crate::t;
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
@@ -309,8 +310,18 @@ pub fn is_photo(path: &Path) -> bool {
 
 /// Appended to a photo's finished description when [`crate::config::Config::photo_ai_note`]
 /// is on, so what is heard says where it came from.
-pub fn ai_disclosure_note(text: &str) -> String {
-    format!("{}\n\n{}", text, t!("photo.ai_note"))
+///
+/// Worded differently by `engine`: saying only "a local AI model" reads as
+/// oddly beside the point to someone who heard this go on to be voiced by
+/// ElevenLabs, a cloud service — the disclosure that matters at that point is
+/// which half of the pipeline just left this computer. See
+/// [`crate::extract::video::ai_disclosure_note`], the same idea for video.
+pub fn ai_disclosure_note(text: &str, engine: EnginePreference) -> String {
+    let note = match engine {
+        EnginePreference::System => t!("photo.ai_note.system"),
+        EnginePreference::ElevenLabs => t!("photo.ai_note.elevenlabs"),
+    };
+    format!("{}\n\n{}", text, note)
 }
 
 fn needs_conversion(path: &Path) -> bool {
@@ -569,8 +580,19 @@ mod tests {
 
     #[test]
     fn the_ai_disclosure_is_appended_after_a_blank_line() {
-        let with_note = ai_disclosure_note("A description of the photo.");
+        let with_note = ai_disclosure_note("A description of the photo.", EnginePreference::System);
         assert!(with_note.starts_with("A description of the photo.\n\n"));
         assert!(with_note.len() > "A description of the photo.".len());
+    }
+
+    /// Saying only "a local AI model" is beside the point once ElevenLabs, a
+    /// cloud service, is the thing about to read it aloud — that is the
+    /// disclosure that actually matters at that point.
+    #[test]
+    fn the_disclosure_names_the_engine_that_will_read_it() {
+        let text = "A description of the photo.";
+        let system = ai_disclosure_note(text, EnginePreference::System);
+        let cloud = ai_disclosure_note(text, EnginePreference::ElevenLabs);
+        assert_ne!(system, cloud);
     }
 }

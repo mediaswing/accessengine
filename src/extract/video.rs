@@ -11,6 +11,7 @@
 //!   continuous narration — the thing a listener actually wants — and the
 //!   transcript stays as what to fall back to when that second pass fails.
 
+use crate::config::EnginePreference;
 use crate::t;
 use std::time::Duration;
 
@@ -77,8 +78,17 @@ const MINIMUM_NARRATION_CHARS: usize = 80;
 /// before it: the dialog is seen once and dismissed, but the description can
 /// be saved, copied, or listened to on its own long after — and it is a
 /// model's best guess at the frames, not a transcript, every time it is heard.
-pub fn ai_disclosure_note(text: &str) -> String {
-    format!("{}\n\n{}", text, t!("video.ai_note"))
+///
+/// Worded differently by `engine`: saying only "a local AI model" reads as
+/// oddly beside the point to someone who heard this go on to be voiced by
+/// ElevenLabs, a cloud service — the disclosure that matters at that point is
+/// which half of the pipeline just left this computer.
+pub fn ai_disclosure_note(text: &str, engine: EnginePreference) -> String {
+    let note = match engine {
+        EnginePreference::System => t!("video.ai_note.system"),
+        EnginePreference::ElevenLabs => t!("video.ai_note.elevenlabs"),
+    };
+    format!("{}\n\n{}", text, note)
 }
 
 #[cfg(test)]
@@ -173,8 +183,19 @@ mod tests {
 
     #[test]
     fn the_ai_disclosure_is_appended_after_a_blank_line() {
-        let with_note = ai_disclosure_note("A description of the video.");
+        let with_note = ai_disclosure_note("A description of the video.", EnginePreference::System);
         assert!(with_note.starts_with("A description of the video.\n\n"));
         assert!(with_note.len() > "A description of the video.".len());
+    }
+
+    /// The disclosure says which half of the pipeline just left this
+    /// computer, which is a different fact for each engine and must not
+    /// collapse into the same sentence for both.
+    #[test]
+    fn the_disclosure_names_the_engine_that_will_read_it() {
+        let text = "A description of the video.";
+        let system = ai_disclosure_note(text, EnginePreference::System);
+        let cloud = ai_disclosure_note(text, EnginePreference::ElevenLabs);
+        assert_ne!(system, cloud);
     }
 }

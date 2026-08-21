@@ -428,9 +428,13 @@ failure, and says so in the log — which is what makes a 1.7B model like
 A JPEG or HEIC photo's description ends with a line saying it was written by a
 local AI model running on Ollama, not transcribed from the photo — the same
 disclosure video gets, and for the same reason: what is heard is a guess at
-the picture, worth knowing wherever the description ends up. On by default;
-turn it off under **Settings**. A PNG gets no such line, since one read here
-is far more often a screenshot or a diagram than a photo.
+the picture, worth knowing wherever the description ends up. That line also
+says which half of the pipeline just left this computer: read with a system
+voice, it says so; read with ElevenLabs, it says the text is being sent to
+that cloud service to be spoken, so saying only "a local AI model" isn't the
+whole story. On by default; turn it off under **Settings**. A PNG gets no
+such line, since one read here is far more often a screenshot or a diagram
+than a photo.
 
 ## Describing video
 
@@ -469,9 +473,11 @@ frame, where a joined-up narration is a model's account of what connects them.
 A video's description ends with a line saying it was written by a local AI
 model running on Ollama, not transcribed from the video — a fact worth
 knowing wherever the description ends up, not only in the one-time warning
-shown before it starts. On by default; turn it off under **Settings**. It
-applies to video only, since an image's description is one model call the
-user just watched happen rather than text that goes on to travel by itself.
+shown before it starts. That line also names which half of the pipeline just
+left this computer: read with a system voice, it says so; read with
+ElevenLabs, it says the text is being sent to that cloud service to be
+spoken. On by default; turn it off under **Settings**. JPEG and HEIC photos
+get the same line, for the same reason — see **Reading images** above.
 
 ## Right-click "Speak to file" (Windows)
 
