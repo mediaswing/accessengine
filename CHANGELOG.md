@@ -3,6 +3,87 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [2.1.0] - 2026-08-21
+
+A zip of audio files is now a playlist. Everything else here is a security and
+accessibility pass over what was already there, and most of those findings are
+the same shape: a decision the app had already made deliberately, stopping one
+step short of the person who meets it.
+
+### Added
+
+- **Playlists.** Choose a `.zip` in the **Audio player** instead of a single
+  file and every WAV and MP3 inside it is a track, played one after another. The
+  player pane and the status line both say which one — the status line because
+  that is the one place a screen reader is already watching, and a track change
+  is exactly the sort of thing that happens while you are looking somewhere
+  else.
+
+  A **`media.txt`** inside the zip sets the running order and says which tracks
+  are speech and which are music. Music that follows speech does not wait for
+  it: it comes up underneath the last second or so and reaches full volume as
+  the last word lands, which is the join a radio bulletin makes between the
+  newsreader and the outro rather than a gap and then a jolt. The documented
+  form is XML, but the file is called `.txt`, so a plain list of names one per
+  line works too. Without a `media.txt` at all, the order is the file names read
+  the way a person reads them, so `track2` comes before `track10`.
+
+  Nothing is ever unpacked. The archive is held open and each track is
+  decompressed as its turn comes, so a playlist leaves nothing behind on disk.
+  A track named in the manifest that the zip does not hold, and a playable file
+  the manifest never mentioned, are both noted in the log rather than passed
+  over in silence — a track that never plays and never says why is the one kind
+  of failure a listener cannot notice. See **Playlists** in the README.
+
+### Fixed
+
+- **The "in progress" tone no longer sounds when you open the app.** With the
+  engine set to ElevenLabs and a key already saved, the voice picker fetched the
+  voice list the moment the window drew, and starting any job sounded the tone
+  that says one has begun. A tone with no button behind it is worse than no
+  tone: you have to stop and work out what you just did, having done nothing.
+  That fetch is now silent, which its answer always was.
+- **Disabled controls can be seen again.** They were compositing to 3.38:1 on
+  the light theme. The player keeps its four transport buttons greyed rather
+  than hidden precisely so they can still be seen and counted, and then very
+  nearly hid them. They are now 6.50:1 on light and 8.35:1 on dark, still
+  unmistakably dimmer than the same label enabled.
+- **Escape closes every dialog, not one of the three.** It had only ever been
+  wired to the API key dialog.
+- **Keyboard shortcuts no longer fire underneath the reset confirmation.**
+  <kbd>⌘O</kbd> raised a file chooser behind the backdrop, and <kbd>Esc</kbd>
+  stopped whatever was playing while leaving the dialog exactly where it was.
+- **Two dialogs no longer open with the keyboard nowhere.** A dialog that claims
+  no focus is a dialog a screen reader never announces. Both now start on the
+  answer that changes nothing — Cancel, Not now — because a <kbd>Return</kbd>
+  pressed out of habit should not reset your settings or start a
+  multi-gigabyte download.
+- **Dropping several files at once says so.** It took the first and said nothing
+  about the rest, and the order the operating system hands them over in is not
+  the order they looked in, so "the first one" was never reliably the one you
+  pointed at.
+- **The "open this folder" buttons open the right folder.** They built a
+  `file://` URL by hand, so a space or a `#` anywhere in the path truncated it
+  and the button silently opened somewhere else.
+
+### Security
+
+- **A binary planted next to the app can no longer be picked up.** On Windows,
+  `where.exe` searches the current directory before `PATH`, and an app launched
+  from Explorer inherits its own folder as that directory — which for a portable
+  exe run out of Downloads is the one folder an attacker is most likely to be
+  able to write to. Four lookups handed it the choice of which binary to spawn.
+  They now refuse an answer from that folder and consider the rest of the
+  candidates rather than only the first.
+- **The release check only opens an `https` link.** It was handing a URL out of
+  a JSON response straight to the browser without looking at its scheme. Every
+  other URL the app opens is a constant compiled into the binary, and this one
+  now falls back to a constant if it is not `https`.
+- **A photo with a malformed coordinate no longer sends it anywhere.** An EXIF
+  fraction with a zero denominator reads back as an infinity, and that
+  coordinate is the one value on the image path that ever leaves the computer.
+  It is now checked for being a real place first.
+
 ## [2.0.0] - 2026-08-18
 
 The major number moves because one default changes: a photo's location is no

@@ -1,6 +1,6 @@
 [package]
 name = "accessengine"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "An accessible desktop reader: opens a document or image and reads it aloud, or saves the speech as an audio file. Runs on macOS and Windows."
