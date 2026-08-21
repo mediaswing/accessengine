@@ -83,6 +83,13 @@ step short of the person who meets it.
   fraction with a zero denominator reads back as an infinity, and that
   coordinate is the one value on the image path that ever leaves the computer.
   It is now checked for being a real place first.
+- **The diagnostic log no longer keeps what a vision model saw.** Describing an
+  image wrote the opening of its answer to the log alongside the numbers that
+  already say whether it succeeded — and those words are a description of
+  whatever private photo or video was open, which is exactly the kind of
+  content this file otherwise goes out of its way not to keep. The length,
+  stop reason and token counts it already records say enough to tell a real
+  answer from an empty one without it.
 
 ## [2.0.0] - 2026-08-18
 
