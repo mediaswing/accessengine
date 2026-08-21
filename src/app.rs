@@ -102,6 +102,15 @@ enum ClaimsTheGap {
     No,
 }
 
+/// Whether starting a job sounds the tone that says one has begun.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum StartCue {
+    /// The user pressed something, and is owed the answer.
+    Play,
+    /// The app started this by itself; see [`SpeechApp::start_quietly`].
+    Silent,
+}
+
 /// How often the tick sounds while a job runs.
 ///
 /// Long enough not to nag, short enough that the silence between two of them is
@@ -741,6 +750,22 @@ impl SpeechApp {
     // ----------------------------------------------------------------- jobs
 
     fn start(&mut self, ctx: &egui::Context, job: Job) {
+        self.begin(ctx, job, StartCue::Play);
+    }
+
+    /// Starts a job without the tone that says one has begun.
+    ///
+    /// For work the app went and did rather than work the user asked for. The
+    /// start tone answers a button: it says "that landed, and it is running
+    /// now". A job nobody pressed anything to begin has no question to answer,
+    /// and a tone with nothing behind it is worse than no tone at all — the
+    /// listener has to stop and work out what they just did, having done
+    /// nothing.
+    fn start_quietly(&mut self, ctx: &egui::Context, job: Job) {
+        self.begin(ctx, job, StartCue::Silent);
+    }
+
+    fn begin(&mut self, ctx: &egui::Context, job: Job, cue: StartCue) {
         if self.busy.is_some() {
             return;
         }
@@ -752,7 +777,9 @@ impl SpeechApp {
             cancellable: job.is_cancellable(),
         });
         self.status = None;
-        self.play_sound(PROGRESS_SOUND);
+        if cue == StartCue::Play {
+            self.play_sound(PROGRESS_SOUND);
+        }
         // Counted from the start tone, so the first tick lands a full interval
         // later rather than immediately on top of it.
         self.tick_at = Some(Instant::now());
@@ -784,7 +811,12 @@ impl SpeechApp {
             return;
         };
         self.elevenlabs_voices.error = None;
-        self.start(ctx, Job::LoadElevenLabsVoices(key));
+        // Quietly: the picker asks for this itself the first time the Read
+        // pane is drawn, which for someone whose engine is already ElevenLabs
+        // is the moment the app opens. Its answer is silent too — see
+        // `Update::ElevenLabsVoices`, which says nothing unless the user has
+        // just entered a key and is owed a verdict on it.
+        self.start_quietly(ctx, Job::LoadElevenLabsVoices(key));
     }
 
     /// ⌘O, which opens whichever kind of file the pane on screen is about.

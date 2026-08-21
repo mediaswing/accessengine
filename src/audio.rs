@@ -182,10 +182,10 @@ pub const SKIP_BACK: Duration = Duration::from_secs(10);
 /// How long a music track spends coming up underneath the speech before it.
 ///
 /// The music starts this far from the end of the speech and fades in across
-/// exactly that time, so it is at full volume as the last word lands rather
-/// than arriving cold after a silence. Long enough to be a transition, short
-/// enough that it never buries a sentence — this is the join a radio bulletin
-/// makes between the newsreader and the outro.
+/// whatever is left of it, so it is at full volume as the last word lands
+/// rather than arriving cold after a silence. Long enough to be a transition,
+/// short enough that it never buries a sentence — this is the join a radio
+/// bulletin makes between the newsreader and the outro.
 pub const OVERLAP: Duration = Duration::from_millis(1250);
 
 /// Where a playlist has got to, for the status line and the player pane.
@@ -440,6 +440,13 @@ struct Sounding {
     at: usize,
     player: rodio::Player,
     duration: Option<Duration>,
+    /// How long this track took to come up to full volume, which is how much
+    /// of the track before it this one started underneath. Zero for every
+    /// track that began in silence — see [`ListPlayback::sound`]. Kept for the
+    /// tests, which is the only place the join can be inspected rather than
+    /// heard.
+    #[cfg(test)]
+    fade: Duration,
 }
 
 impl ListPlayback {
@@ -492,7 +499,7 @@ impl ListPlayback {
         while self.next < self.list.len() {
             let at = self.next;
             self.next += 1;
-            match self.sound(at) {
+            match self.sound(at, Duration::ZERO) {
                 Ok(sounding) => {
                     events.push(PlaylistEvent::Started(self.position_of(at)));
                     self.current = Some(sounding);
@@ -509,9 +516,17 @@ impl ListPlayback {
     /// Starts the next track early, under the one playing, when it is music
     /// following speech and the speech is [`OVERLAP`] from its end.
     ///
-    /// Nothing happens here when the speech track's length is unknown — some
-    /// files cannot report one — and nothing needs to: the music still fades
-    /// in, it just begins where the speech stops instead of under it.
+    /// The music comes up in however much of the speech is actually left,
+    /// which is [`OVERLAP`] when a poll lands where it should and less when
+    /// one lands late. A window that is not being redrawn — minimised, or
+    /// behind something — is not polled on any schedule worth relying on, and
+    /// the difference between a short fade and a full one is far less than the
+    /// difference between either and a fade that begins after the speech has
+    /// already stopped.
+    ///
+    /// Nothing happens here when the speech track's length is unknown, since
+    /// there is then no end to count back from. The music follows it cleanly
+    /// instead, which is the same join every other pair of tracks gets.
     fn begin_overlap(&mut self, events: &mut Vec<PlaylistEvent>) {
         use crate::playlist::TrackKind;
 
@@ -531,13 +546,14 @@ impl ListPlayback {
         let Some(total) = current.duration else {
             return;
         };
-        if total.saturating_sub(current.player.get_pos()) > OVERLAP {
+        let lead = total.saturating_sub(current.player.get_pos());
+        if lead > OVERLAP {
             return;
         }
 
         let at = self.next;
         self.next += 1;
-        match self.sound(at) {
+        match self.sound(at, lead) {
             Ok(sounding) => {
                 events.push(PlaylistEvent::Started(self.position_of(at)));
                 self.ahead = Some(sounding);
@@ -551,23 +567,16 @@ impl ListPlayback {
 
     /// Decompresses one track and starts it on its own player.
     ///
-    /// Music that follows speech fades in over [`OVERLAP`] whether or not it
-    /// managed to start early, so the join sounds the same either way.
-    fn sound(&mut self, at: usize) -> Result<Sounding> {
-        use crate::playlist::TrackKind;
+    /// `fade` is how much of the previous track this one is starting
+    /// underneath, and so how long it has to come up in. It is zero for a
+    /// track that is taking over from one that has already stopped, because a
+    /// fade with nothing playing under it is not a transition — it is silence,
+    /// and a listener cannot tell that kind of silence from a playlist that
+    /// has died. Only music coming up under speech is ever given one.
+    fn sound(&mut self, at: usize, fade: Duration) -> Result<Sounding> {
         use rodio::Source as _;
 
         let name = self.name_of(at);
-        let fades = at > 0
-            && self
-                .list
-                .track(at)
-                .is_some_and(|t| t.kind == TrackKind::Music)
-            && self
-                .list
-                .track(at - 1)
-                .is_some_and(|t| t.kind == TrackKind::Speech);
-
         let bytes = self.list.read(at)?;
         let byte_len = bytes.len() as u64;
         let decoder = rodio::Decoder::builder()
@@ -582,15 +591,17 @@ impl ListPlayback {
         let duration = decoder.total_duration();
 
         let player = rodio::Player::connect_new(self.device.mixer());
-        if fades {
-            player.append(decoder.fade_in(OVERLAP));
-        } else {
+        if fade.is_zero() {
             player.append(decoder);
+        } else {
+            player.append(decoder.fade_in(fade));
         }
         Ok(Sounding {
             at,
             player,
             duration,
+            #[cfg(test)]
+            fade,
         })
     }
 
@@ -1059,10 +1070,15 @@ mod tests {
                     // What makes it an overlap rather than a hand-over: the
                     // speech is still the track the transport is reporting on,
                     // and is still short of its own end.
+                    let fade = match &playback {
+                        Playback::List(list) => list.ahead.as_ref().map(|ahead| ahead.fade),
+                        _ => None,
+                    };
                     overlapped = Some((
                         playback.track().map(|track| track.number),
                         playback.position(),
                         playback.duration(),
+                        fade,
                     ));
                 }
             }
@@ -1072,7 +1088,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
 
-        let Some((reporting, position, duration)) = overlapped else {
+        let Some((reporting, position, duration, fade)) = overlapped else {
             playback.stop();
             tidy_up();
             panic!("the music never started");
@@ -1088,6 +1104,13 @@ mod tests {
             left > Duration::ZERO && left <= OVERLAP + Duration::from_millis(250),
             "the music came up with {left:?} of the speech left, not about {OVERLAP:?}"
         );
+        // And it comes up in the time it actually has, so that it is at full
+        // volume as the speech runs out rather than still climbing.
+        let fade = fade.expect("the music was started ahead of the speech");
+        assert!(
+            fade > Duration::ZERO && fade <= OVERLAP,
+            "the music faded in over {fade:?}, which is not the {left:?} it had"
+        );
 
         // And the music is what is left playing once the speech has run out.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -1101,6 +1124,86 @@ mod tests {
         playback.stop();
         tidy_up();
         assert_eq!(handed_over.as_deref(), Some("music.wav"));
+    }
+
+    /// The join when the overlap never had its chance.
+    ///
+    /// A playlist only moves between tracks when the window is polled, and a
+    /// window that is minimised or hidden behind another is not redrawn on any
+    /// schedule worth relying on. So the poll that ought to land in the last
+    /// [`OVERLAP`] of the speech can land after the speech has already
+    /// stopped — and when it does, the music has to start at full volume.
+    /// Fading it up from silence there is a second of nothing on top of a
+    /// second of nothing, and a listener who cannot see the window has no way
+    /// to tell that from a playlist that has quietly died.
+    #[test]
+    fn music_that_missed_its_overlap_starts_at_full_volume_instead_of_fading_up_from_silence() {
+        use std::io::Write as _;
+
+        if skip_on_windows_ci() {
+            return;
+        }
+        let dir = std::env::temp_dir();
+        let path = dir.join("soe-late-poll-test.zip");
+        let speech = dir.join("soe-late-poll-speech.wav");
+        let music = dir.join("soe-late-poll-music.wav");
+        // Comfortably longer than `OVERLAP`, so that the music is not due to
+        // come up at the moment the speech starts.
+        write_wav(&speech, &tone(1, 22_050, 2.5)).unwrap();
+        write_wav(&music, &tone(1, 22_050, 2.0)).unwrap();
+
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options: zip::write::FileOptions<()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, from) in [("speech.wav", &speech), ("music.wav", &music)] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(&std::fs::read(from).unwrap()).unwrap();
+        }
+        zip.start_file("media.txt", options).unwrap();
+        zip.write_all(
+            br#"<music>
+                <audio type="speech" pos="1">speech.wav</audio>
+                <audio type="music" pos="2">music.wav</audio>
+            </music>"#,
+        )
+        .unwrap();
+        zip.finish().unwrap();
+        std::fs::remove_file(&speech).ok();
+        std::fs::remove_file(&music).ok();
+
+        let tidy_up = || {
+            std::fs::remove_file(&path).ok();
+        };
+        let Ok((mut playback, _)) = Playback::play_playlist(&path) else {
+            tidy_up();
+            eprintln!("no audio output device; skipping the late-poll test");
+            return;
+        };
+
+        // Not polled at all until the speech is well and truly over, which is
+        // the whole point: this is the frame that never came.
+        std::thread::sleep(Duration::from_millis(3000));
+        playback.poll();
+
+        let handed_over = playback.track().map(|track| track.name);
+        let fade = match &playback {
+            Playback::List(list) => list.current.as_ref().map(|current| current.fade),
+            _ => None,
+        };
+        playback.stop();
+        tidy_up();
+
+        assert_eq!(
+            handed_over.as_deref(),
+            Some("music.wav"),
+            "the music never took over"
+        );
+        assert_eq!(
+            fade,
+            Some(Duration::ZERO),
+            "the music faded up from silence after the speech had already stopped"
+        );
     }
 
     #[test]
