@@ -10,14 +10,17 @@
 //! image that came back transcribed as invented text, from a vision model that
 //! reported perfect success. Nothing in the response said anything was wrong,
 //! so an error log would have been empty. What was actually needed was the
-//! content of the exchange — what was sent, what came back. That is what is
-//! recorded: the shape and outcome of every call to something outside this
-//! process, whether or not it failed.
+//! shape of the exchange — what was sent, and how the answer measured up
+//! (length, token counts, why it stopped). That is what is recorded: the shape
+//! and outcome of every call to something outside this process, whether or not
+//! it failed.
 //!
-//! Two things are deliberately *not* recorded. The text of the user's documents
-//! never goes in, only its length — this app is opened on private letters and
-//! medical results, and a debug file that accumulates them is a worse problem
-//! than the bug it helps fix. Neither does the ElevenLabs API key; anything
+//! Several things are deliberately *not* recorded. The text of the user's
+//! documents never goes in, only its length — this app is opened on private
+//! letters and medical results, and a debug file that accumulates them is a
+//! worse problem than the bug it helps fix. Neither does a vision model's
+//! answer, for the same reason: it is a description of whatever private photo
+//! or video was on screen. Neither does the ElevenLabs API key; anything
 //! shaped like one is scrubbed on the way in, since the whole point of the file
 //! is that people paste it into bug reports. See [`redact`].
 
