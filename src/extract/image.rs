@@ -14,6 +14,7 @@
 //! most cameras and phones write one to EXIF unless location tagging was
 //! turned off. See [`crate::geocode`] for what becomes of it.
 
+use crate::t;
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -293,6 +294,25 @@ fn dms_to_decimal(parts: &[exif::Rational]) -> Option<f64> {
     }
 }
 
+/// Whether `path` is a format a camera or phone actually produces, as opposed
+/// to a screenshot or a diagram saved as PNG. See [`crate::config::Config::photo_ai_note`],
+/// which uses this to decide whether a description needs the disclosure at all.
+pub fn is_photo(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            let e = e.to_ascii_lowercase();
+            e == "jpg" || e == "jpeg" || e == "heic" || e == "heif"
+        })
+        .unwrap_or(false)
+}
+
+/// Appended to a photo's finished description when [`crate::config::Config::photo_ai_note`]
+/// is on, so what is heard says where it came from.
+pub fn ai_disclosure_note(text: &str) -> String {
+    format!("{}\n\n{}", text, t!("photo.ai_note"))
+}
+
 fn needs_conversion(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -533,5 +553,24 @@ mod tests {
         assert!(needs_conversion(&PathBuf::from("photo.heif")));
         assert!(!needs_conversion(&PathBuf::from("photo.jpg")));
         assert!(!needs_conversion(&PathBuf::from("scan.png")));
+    }
+
+    /// The disclosure is for formats a camera actually produces. A PNG here is
+    /// far more often a screenshot or a diagram than a photo.
+    #[test]
+    fn only_camera_formats_count_as_a_photo() {
+        assert!(is_photo(&PathBuf::from("IMG_0001.JPG")));
+        assert!(is_photo(&PathBuf::from("photo.jpeg")));
+        assert!(is_photo(&PathBuf::from("photo.HEIC")));
+        assert!(is_photo(&PathBuf::from("photo.heif")));
+        assert!(!is_photo(&PathBuf::from("screenshot.png")));
+        assert!(!is_photo(&PathBuf::from("noextension")));
+    }
+
+    #[test]
+    fn the_ai_disclosure_is_appended_after_a_blank_line() {
+        let with_note = ai_disclosure_note("A description of the photo.");
+        assert!(with_note.starts_with("A description of the photo.\n\n"));
+        assert!(with_note.len() > "A description of the photo.".len());
     }
 }

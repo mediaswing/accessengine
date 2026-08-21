@@ -2799,6 +2799,16 @@ impl SpeechApp {
         edited |= location.changed();
         ui.add_space(6.0);
 
+        // On by default, unlike the checkbox just above: this costs nothing
+        // and reaches nobody, so there is no reason to make someone find it
+        // first. Limited to JPEG and HEIC/HEIF — see [`extract::image::is_photo`]
+        // — so a described PNG screenshot or diagram is left exactly as it was.
+        let photo_note = ui
+            .checkbox(&mut self.config.photo_ai_note, t!("settings.photo.ai_note"))
+            .on_hover_text(t!("settings.photo.ai_note.hint"));
+        edited |= photo_note.changed();
+        ui.add_space(6.0);
+
         // A dropdown rather than a text field, because the name has to match a
         // model Ollama can actually run — and, since Ollama drops support for
         // older ones, a typo and a retired model look identical from here.
@@ -3187,6 +3197,15 @@ impl SpeechApp {
         ui.add_space(12.0);
         ui.separator();
         ui.add(egui::Label::new(t!("settings.video.intro")).wrap());
+        ui.add_space(6.0);
+
+        // On by default: what is heard is a model's best guess at the frames,
+        // not a transcript, and that stays true of the description long after
+        // the one-time warning dialog has been seen and dismissed.
+        let ai_note = ui
+            .checkbox(&mut self.config.video_ai_note, t!("settings.video.ai_note"))
+            .on_hover_text(t!("settings.video.ai_note.hint"));
+        edited |= ai_note.changed();
         ui.add_space(6.0);
 
         let narrate = ui

@@ -425,6 +425,13 @@ happens the app retries once with a plain question rather than reporting
 failure, and says so in the log — which is what makes a 1.7B model like
 `moondream` usable here as well as the larger ones.
 
+A JPEG or HEIC photo's description ends with a line saying it was written by a
+local AI model running on Ollama, not transcribed from the photo — the same
+disclosure video gets, and for the same reason: what is heard is a guess at
+the picture, worth knowing wherever the description ends up. On by default;
+turn it off under **Settings**. A PNG gets no such line, since one read here
+is far more often a screenshot or a diagram than a photo.
+
 ## Describing video
 
 A video is read the same way as an image, several dozen times over. ffmpeg takes
@@ -458,6 +465,13 @@ description under the time it appears — rather than an error, and the log says
 which you got. That account is also what you get with the write-up turned off,
 and it is the more trustworthy of the two: every sentence in it came from a
 frame, where a joined-up narration is a model's account of what connects them.
+
+A video's description ends with a line saying it was written by a local AI
+model running on Ollama, not transcribed from the video — a fact worth
+knowing wherever the description ends up, not only in the one-time warning
+shown before it starts. On by default; turn it off under **Settings**. It
+applies to video only, since an image's description is one model call the
+user just watched happen rather than text that goes on to travel by itself.
 
 ## Right-click "Speak to file" (Windows)
 

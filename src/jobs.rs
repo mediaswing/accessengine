@@ -342,6 +342,10 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         }
     }
 
+    if config.photo_ai_note && extract::image::is_photo(&path) {
+        text = extract::image::ai_disclosure_note(&text);
+    }
+
     let note = t!(
         "job.note.image",
         model = model,
@@ -578,6 +582,10 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
                 note.push_str(&t!("job.note.frame_by_frame"));
             }
         }
+    }
+
+    if config.video_ai_note {
+        text = extract::video::ai_disclosure_note(&text);
     }
 
     let _ = tx.send(Update::Progress(1.0));

@@ -280,6 +280,20 @@ pub struct Config {
     /// checkbox was already ticked when they arrived. See [`crate::geocode`].
     pub lookup_photo_location: bool,
 
+    /// Whether a photo's description ends with a line saying it was written
+    /// by a local AI model.
+    ///
+    /// On by default, for the same reason as [`Config::video_ai_note`]: what
+    /// is heard is a model's best guess at the picture, not a transcript of
+    /// it, which is worth knowing wherever the description ends up rather than
+    /// only in the moment it was read. Limited to JPEG and HEIC/HEIF — the
+    /// formats a camera or phone actually produces — because those are the
+    /// images someone might mistake for a straight account of what a photo
+    /// shows; a PNG read here is far more often a screenshot or a diagram,
+    /// already known to be a picture of something rather than the thing
+    /// itself. See [`crate::extract::image::is_photo`].
+    pub photo_ai_note: bool,
+
     /// Ollama vision model used to turn an image into readable text.
     #[serde(deserialize_with = "deserialize_vision_model")]
     pub ollama_model: String,
@@ -314,6 +328,17 @@ pub struct Config {
     /// be seen the first time, and stays off only once somebody has ticked the
     /// checkbox on it themselves.
     pub video_warning_dismissed: bool,
+    /// Whether a video's description ends with a line saying it was written by
+    /// a local AI model.
+    ///
+    /// On by default: what is heard is a model's best guess at what the frames
+    /// show, not a transcript of the video — see [`crate::extract::video`] and
+    /// the warning shown before describing one — and that distinction belongs
+    /// with the description itself, not only in a dialog seen once and then
+    /// dismissed. Applies to video only; an image's description is one model
+    /// call the user just watched happen, not text that can travel on its own
+    /// the way a video's can.
+    pub video_ai_note: bool,
 
     /// Directory the last save went to, so the dialog reopens somewhere useful.
     pub last_save_dir: Option<PathBuf>,
@@ -339,6 +364,7 @@ impl Default for Config {
             system_rate: 175,
             dictionary: Vec::new(),
             lookup_photo_location: false,
+            photo_ai_note: true,
             ollama_model: DEFAULT_VISION_MODEL.to_string(),
             ollama_prompt: default_vision_prompt(),
             video_frame_prompt: default_frame_prompt(),
@@ -349,6 +375,7 @@ impl Default for Config {
             video_interval_secs: DEFAULT_INTERVAL_SECS,
             video_max_frames: DEFAULT_MAX_FRAMES,
             video_warning_dismissed: false,
+            video_ai_note: true,
             last_save_dir: None,
             last_audio_dir: None,
         }
@@ -545,6 +572,17 @@ mod tests {
         assert!(!old.lookup_photo_location);
     }
 
+    /// Unlike the location lookup above, the AI disclosure is on by default —
+    /// it costs nothing but a line of text and reaches no third party, so
+    /// there is no reason to make someone find and enable it first.
+    #[test]
+    fn the_photo_ai_note_is_on_until_it_is_turned_off() {
+        assert!(Config::default().photo_ai_note);
+
+        let old: Config = serde_json::from_str("{}").expect("an empty config should parse");
+        assert!(old.photo_ai_note);
+    }
+
     /// The appearance survives a save and a load, which is the whole point of
     /// it being a setting rather than a toggle that forgets.
     #[test]
@@ -705,6 +743,9 @@ mod tests {
         // And sees the "this may take a while" warning at least once, rather
         // than inheriting a dismissal nobody actually clicked.
         assert!(!config.video_warning_dismissed);
+        // And keeps the AI disclosure on, the same as anyone opening the app
+        // for the first time.
+        assert!(config.video_ai_note);
     }
 
     /// The sampling is what a video costs in time, so nonsense in the file must

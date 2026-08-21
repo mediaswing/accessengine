@@ -11,6 +11,7 @@
 //!   continuous narration — the thing a listener actually wants — and the
 //!   transcript stays as what to fall back to when that second pass fails.
 
+use crate::t;
 use std::time::Duration;
 
 /// When a frame appears, worded the way the rest of the app words time.
@@ -68,6 +69,17 @@ pub fn narration_is_usable(narration: &str, transcript: &str) -> bool {
 
 /// Below this, an answer is a refusal or a stub rather than a narration.
 const MINIMUM_NARRATION_CHARS: usize = 80;
+
+/// Appended to a video's finished description when [`crate::config::Config::video_ai_note`]
+/// is on, so what is heard says where it came from.
+///
+/// Added to the text itself rather than left to the one-time warning dialog
+/// before it: the dialog is seen once and dismissed, but the description can
+/// be saved, copied, or listened to on its own long after — and it is a
+/// model's best guess at the frames, not a transcript, every time it is heard.
+pub fn ai_disclosure_note(text: &str) -> String {
+    format!("{}\n\n{}", text, t!("video.ai_note"))
+}
 
 #[cfg(test)]
 mod tests {
@@ -157,5 +169,12 @@ mod tests {
     fn the_narration_request_puts_the_instruction_first() {
         let request = narration_request("  Write this up.  ", "At the start: A harbour.");
         assert_eq!(request, "Write this up.\n\nAt the start: A harbour.");
+    }
+
+    #[test]
+    fn the_ai_disclosure_is_appended_after_a_blank_line() {
+        let with_note = ai_disclosure_note("A description of the video.");
+        assert!(with_note.starts_with("A description of the video.\n\n"));
+        assert!(with_note.len() > "A description of the video.".len());
     }
 }
