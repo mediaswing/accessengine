@@ -45,6 +45,8 @@ pub enum Job {
     ReadImage { path: PathBuf, config: Box<Config> },
     /// Describe a video, arranging ffmpeg and Ollama first if they need it.
     ReadVideo { path: PathBuf, config: Box<Config> },
+    /// Summarise a network capture, arranging Ollama first if it needs it.
+    ReadPcap { path: PathBuf, config: Box<Config> },
     /// Runs Homebrew's own installer, answering the password it asks for with
     /// a macOS dialog.
     InstallHomebrew,
@@ -87,6 +89,7 @@ impl Job {
             Self::ReadDocument { path, .. } => t!("job.reading", name = file_name(path)),
             Self::ReadImage { path, .. } => t!("job.looking", name = file_name(path)),
             Self::ReadVideo { path, .. } => t!("job.watching", name = file_name(path)),
+            Self::ReadPcap { path, .. } => t!("job.summarising", name = file_name(path)),
             Self::InstallHomebrew => t!("job.installing.homebrew"),
             Self::InstallOllama => t!("job.installing.ollama"),
             Self::InstallFfmpeg => t!("job.installing.ffmpeg"),
@@ -119,6 +122,11 @@ pub enum Update {
     TextReady {
         text: String,
         note: String,
+        /// The "written by AI" line this text needs, if any. Carried rather
+        /// than already applied: half of what it says is which engine is about
+        /// to read it, and that is still the user's to change. See
+        /// [`extract::Disclosure`].
+        disclosure: Option<extract::Disclosure>,
     },
     ElevenLabsVoices(Vec<Voice>),
     /// The voice list could not be fetched; the UI shows this next to the
@@ -188,6 +196,7 @@ fn run(job: Job, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
         Job::ReadDocument { path, formatting } => read_document(path, formatting, tx),
         Job::ReadImage { path, config } => read_image(path, &config, tx, cancel),
         Job::ReadVideo { path, config } => read_video(path, &config, tx, cancel),
+        Job::ReadPcap { path, config } => read_pcap(path, &config, tx, cancel),
         Job::InstallHomebrew => install_homebrew(tx),
         Job::InstallOllama => install_ollama(tx),
         Job::InstallFfmpeg => install_ffmpeg(tx),
@@ -242,7 +251,142 @@ fn read_document(path: PathBuf, formatting: Formatting, tx: &Sender<Update>) -> 
         note.push_str(" · ");
         note.push_str(&caveat);
     }
-    let _ = tx.send(Update::TextReady { text, note });
+    let _ = tx.send(Update::TextReady {
+        text,
+        note,
+        disclosure: None,
+    });
+    Ok(())
+}
+
+/// Walks the capture path: count the packets, then ask a text model to write
+/// the counts up as prose.
+///
+/// The two halves are deliberately unequal. Everything the summary asserts is
+/// counted here, in this process, off the packets themselves; the model is
+/// given those counts and asked only to turn them into English. If it cannot
+/// be reached, or answers with a stub, the counted transcript is spoken
+/// instead — so a failure costs the listener some fluency and none of the
+/// facts. See [`crate::extract::pcap`].
+fn read_pcap(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Cancel) -> Result<()> {
+    let name = file_name(&path);
+
+    // Asked for before the file is walked, not after: a capture can take a
+    // while to count, and discovering at the end of it that there is no model
+    // to write it up would waste all of that.
+    let narrator = config.narration_model().to_string();
+    if config.pcap_narrate {
+        let _ = tx.send(Update::Status(t!("job.checking.ollama")));
+        match ollama::status() {
+            ollama::Status::NotInstalled => {
+                let _ = tx.send(Update::NeedsOllamaInstall);
+                return Ok(());
+            }
+            ollama::Status::NotRunning => {
+                let _ = tx.send(Update::Status(t!("job.starting.ollama")));
+                ollama::ensure_running()?;
+            }
+            ollama::Status::Running => {}
+        }
+        if narrator.is_empty() {
+            bail!("{}", t!("error.no_narration_model"));
+        }
+        let installed = ollama::installed_models()?;
+        if !ollama::has_model(&installed, &narrator) {
+            let _ = tx.send(Update::NeedsModel(narrator));
+            return Ok(());
+        }
+    }
+
+    if cancelled(cancel) {
+        return Ok(());
+    }
+    let _ = tx.send(Update::Status(t!("job.counting_packets", name = name)));
+    let _ = tx.send(Update::Progress(0.0));
+
+    // The capture reader has no idea how far through the file it is — a packet
+    // count is the only progress there is — so the bar is left indeterminate
+    // and the running total goes to the status line instead.
+    let counting = tx.clone();
+    let capture = extract::pcap::read(&path, |packets| {
+        let _ = counting.send(Update::Status(t!(
+            "job.counted_packets",
+            packets = packets,
+            name = name
+        )));
+        !cancelled(cancel)
+    })?;
+    if cancelled(cancel) {
+        return Ok(());
+    }
+    let _ = tx.send(Update::Progress(0.5));
+
+    let transcript = extract::pcap::transcript(&capture);
+    let mut note = t!("job.note.pcap", packets = capture.packets);
+    let mut text = transcript.clone();
+    let mut disclosure = None;
+
+    if capture.file.truncated {
+        let _ = tx.send(Update::Log(t!("log.pcap_truncated", name = name)));
+    }
+    if capture.file.capped {
+        let _ = tx.send(Update::Log(t!(
+            "log.pcap_capped",
+            packets = extract::pcap::file::MAX_PACKETS,
+            name = name
+        )));
+    }
+
+    if config.pcap_narrate {
+        let _ = tx.send(Update::Status(t!(
+            "job.narrating_capture",
+            narrator = narrator
+        )));
+        let request = extract::pcap::narration_request(&config.pcap_narration_prompt, &transcript);
+        // A rewrite of figures the app already has. If it fails, or comes back
+        // as a stub, the counted transcript is a complete answer on its own —
+        // so this never costs the user the job.
+        match ollama::narrate(&narrator, &request) {
+            Ok(narration) if extract::pcap::narration_is_usable(&narration.text, &transcript) => {
+                text = extract::tidy(&narration.text);
+                note = t!(
+                    "job.note.pcap_narrated",
+                    packets = capture.packets,
+                    narrator = narrator
+                );
+            }
+            Ok(_) => {
+                let _ = tx.send(Update::Log(t!(
+                    "log.pcap_narration_unusable",
+                    narrator = narrator
+                )));
+                note.push_str(&t!("job.note.counted_only"));
+            }
+            Err(error) => {
+                let _ = tx.send(Update::Log(t!(
+                    "log.pcap_narration_failed",
+                    narrator = narrator,
+                    error = format!("{error:#}")
+                )));
+                note.push_str(&t!("job.note.counted_only"));
+            }
+        }
+
+        // Only when a model actually wrote something. Asked for on a
+        // transcript the app counted itself, the note would be a lie in the
+        // one direction that matters: it would disclaim as a guess a set of
+        // figures that are not one.
+        if config.pcap_ai_note && text != transcript {
+            disclosure = Some(extract::Disclosure::Capture);
+        }
+    }
+
+    let _ = tx.send(Update::Progress(1.0));
+    let _ = tx.send(Update::TextReady {
+        text,
+        note,
+        disclosure,
+    });
     Ok(())
 }
 
@@ -342,16 +486,22 @@ fn read_image(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         }
     }
 
-    if config.photo_ai_note && extract::image::is_photo(&path) {
-        text = extract::image::ai_disclosure_note(&text, config.engine);
-    }
-
+    // The count is of what the model wrote about the picture. The disclosure
+    // is the app's own sentence rather than part of the description, and it is
+    // not written yet — its wording is settled when the text is spoken, not
+    // here.
     let note = t!(
         "job.note.image",
         model = model,
         characters = text.chars().count()
     );
-    let _ = tx.send(Update::TextReady { text, note });
+    let disclosure = (config.photo_ai_note && extract::image::is_photo(&path))
+        .then_some(extract::Disclosure::Photo);
+    let _ = tx.send(Update::TextReady {
+        text,
+        note,
+        disclosure,
+    });
     Ok(())
 }
 
@@ -584,12 +734,12 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         }
     }
 
-    if config.video_ai_note {
-        text = extract::video::ai_disclosure_note(&text, config.engine);
-    }
-
     let _ = tx.send(Update::Progress(1.0));
-    let _ = tx.send(Update::TextReady { text, note });
+    let _ = tx.send(Update::TextReady {
+        text,
+        note,
+        disclosure: config.video_ai_note.then_some(extract::Disclosure::Video),
+    });
     Ok(())
 }
 
@@ -848,12 +998,19 @@ pub fn speak_to_file(
 ) -> Result<PathBuf> {
     let name = || path.file_name().unwrap_or_default().to_string_lossy();
     match FileKind::from_path(path) {
-        Some(FileKind::Text) | Some(FileKind::Docx) | Some(FileKind::Pdf) | Some(FileKind::Csv) => {
-        }
-        Some(FileKind::Image) | Some(FileKind::Video) => {
+        Some(FileKind::Text) | Some(FileKind::Docx) | Some(FileKind::Pdf) | Some(FileKind::Csv)
+        | Some(FileKind::Pptx) => {}
+        Some(FileKind::Image) | Some(FileKind::Video) | Some(FileKind::Pcap) => {
             bail!("{}", t!("error.needs_ollama", name = name()))
         }
-        None => bail!("{}", t!("error.unreadable_type", name = name())),
+        // A file type the app has something specific to say about — a legacy
+        // .ppt — says it here too. The right-click menu is the one place a
+        // refusal arrives with no window to explain itself in, so the message
+        // has to carry the way out on its own.
+        None => match extract::unsupported_advice(path) {
+            Some(advice) => bail!("{advice}"),
+            None => bail!("{}", t!("error.unreadable_type", name = name())),
+        },
     }
 
     let extracted = extract::extract_document(path, config.formatting)?;
@@ -1193,10 +1350,24 @@ mod tests {
             assert_eq!(progress.last(), Some(&1.0), "the bar never reached the end");
 
             let ready = updates.iter().find_map(|u| match u {
-                Update::TextReady { text, note } => Some((text.clone(), note.clone())),
+                Update::TextReady {
+                    text,
+                    note,
+                    disclosure,
+                } => Some((text.clone(), note.clone(), *disclosure)),
                 _ => None,
             });
-            let (text, note) = ready.expect("the job should have produced text");
+            let (text, note, disclosure) = ready.expect("the job should have produced text");
+
+            // The disclosure is named, not written. Its wording depends on the
+            // engine that will read it aloud, which the user may still change,
+            // so a job that baked the sentence in here would be committing to
+            // an answer it cannot know yet — see [`extract::Disclosure`].
+            assert_eq!(disclosure, Some(extract::Disclosure::Video));
+            assert!(
+                !text.contains("Ollama, not transcribed"),
+                "the disclosure was written into the text at extraction time: {text}"
+            );
             eprintln!("\n=== narrate: {narrate} ===\nnote: {note}\n\n{text}\n");
             assert!(
                 text.chars().count() > 80,

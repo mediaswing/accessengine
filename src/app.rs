@@ -16,8 +16,8 @@ use crate::apikey::{self, KeySource};
 use crate::audio::{self, AudioFormat, Playback};
 use crate::config::{AUTO_LANGUAGE, Action, Config, EnginePreference, Formatting};
 use crate::extract::{
-    DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, PDF_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS,
-    VIDEO_EXTENSIONS,
+    CAPTURE_EXTENSIONS, DOC_EXTENSIONS, FileKind, IMAGE_EXTENSIONS, PDF_EXTENSIONS,
+    PRESENTATION_EXTENSIONS, TABLE_EXTENSIONS, TEXT_EXTENSIONS, VIDEO_EXTENSIONS,
 };
 use crate::jobs::{self, Cancel, Job, Update};
 use crate::playlist::Playlist;
@@ -442,6 +442,12 @@ pub struct SpeechApp {
     /// Re-run after the user resolves a [`Prompt`].
     deferred: Option<Job>,
 
+    /// The "written by AI" line [`SpeechApp::text`] needs, if any. Held apart
+    /// from the text because its wording depends on the engine, which is still
+    /// the user's to change — see [`extract::Disclosure`] and
+    /// [`SpeechApp::spoken_text`].
+    disclosure: Option<crate::extract::Disclosure>,
+
     /// Whether the "describing this video may take a while" warning is open.
     /// Asked before the job starts rather than mid-job, which is why it is not
     /// a [`Prompt`]: nothing has been sent to Ollama yet for it to answer.
@@ -533,6 +539,7 @@ impl SpeechApp {
             reset_opened: false,
             prompt_opened: false,
             deferred: None,
+            disclosure: None,
             confirm_video: false,
             video_dialog_opened: false,
             video_warning_checkbox: false,
@@ -594,11 +601,62 @@ impl SpeechApp {
 
     /// Resolves the engine choice against what is actually available.
     fn active_engine(&self) -> ActiveEngine {
+        // A capture summary is pinned to this computer unless the user has
+        // said otherwise — see [`capture_must_stay_local`]. Decided here, in
+        // the one place that answers "what will actually speak", so that every
+        // caller agrees: the job that is built, the audio cache, the check
+        // Apply makes for a missing key, and the line the Read pane shows.
+        //
+        // In particular it means a capture never asks for an API key it is not
+        // going to use.
+        if self.capture_stays_local() {
+            return if tts::system::SUPPORTED {
+                ActiveEngine::System
+            } else {
+                ActiveEngine::Unsupported
+            };
+        }
         match self.config.engine {
             EnginePreference::ElevenLabs if self.api_key.is_some() => ActiveEngine::ElevenLabs,
             EnginePreference::ElevenLabs => ActiveEngine::MissingKey,
             EnginePreference::System if tts::system::SUPPORTED => ActiveEngine::System,
             EnginePreference::System => ActiveEngine::Unsupported,
+        }
+    }
+
+    /// Whether the file on hand is a capture that must not leave this computer.
+    fn capture_stays_local(&self) -> bool {
+        capture_must_stay_local(self.file_kind, self.config.pcap_allow_cloud_voice)
+    }
+
+    /// Which engine is actually going to read the text aloud.
+    ///
+    /// What the disclosure line has to name, since half of what it says is
+    /// where the text is about to go. Anything short of ElevenLabs speaks on
+    /// this computer: the two remaining states, a missing key and a platform
+    /// with no system voices, are both turned back by `apply` before a word is
+    /// spoken.
+    fn speaking_engine(&self) -> EnginePreference {
+        match self.active_engine() {
+            ActiveEngine::ElevenLabs => EnginePreference::ElevenLabs,
+            _ => EnginePreference::System,
+        }
+    }
+
+    /// Which family of voices the picker should offer.
+    ///
+    /// The preference, unless a capture has pinned the reading to this
+    /// computer — in which case the system voices are the ones that will be
+    /// used, and so the ones worth choosing between.
+    ///
+    /// Deliberately not [`SpeechApp::speaking_engine`]: a missing key leaves
+    /// the ElevenLabs list on screen and disabled, because that is the list
+    /// the user is about to have once they enter one.
+    fn voice_family(&self) -> EnginePreference {
+        if self.capture_stays_local() {
+            EnginePreference::System
+        } else {
+            self.config.engine
         }
     }
 
@@ -625,7 +683,16 @@ impl SpeechApp {
     /// dictionary changes what the next Apply says without reopening anything —
     /// and so a long document isn't rescanned on every frame.
     fn spoken_text(&self) -> (String, usize) {
-        crate::dictionary::apply(&self.text, &self.config.dictionary)
+        // `config.engine` is the right thing to ask here: by the time any text
+        // is spoken, `apply` has already turned back the two states where the
+        // preference is not what would actually be used — a missing key and an
+        // unsupported platform.
+        speech_for(
+            &self.text,
+            self.disclosure,
+            self.speaking_engine(),
+            &self.config.dictionary,
+        )
     }
 
     /// Identifies a render so cached audio is only reused for the same text,
@@ -633,6 +700,9 @@ impl SpeechApp {
     fn fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.text.hash(&mut hasher);
+        // Part of what gets spoken, and the engine below decides its wording,
+        // so it belongs in here with the rest of what the audio depends on.
+        self.disclosure.hash(&mut hasher);
         // Changing a replacement changes the audio, so it has to change this.
         for rule in &self.config.dictionary {
             rule.from.hash(&mut hasher);
@@ -857,8 +927,10 @@ impl SpeechApp {
                     DOC_EXTENSIONS,
                     PDF_EXTENSIONS,
                     TABLE_EXTENSIONS,
+                    PRESENTATION_EXTENSIONS,
                     IMAGE_EXTENSIONS,
                     VIDEO_EXTENSIONS,
+                    CAPTURE_EXTENSIONS,
                 ]
                 .concat(),
             )
@@ -866,8 +938,10 @@ impl SpeechApp {
             .add_filter(t!("chooser.filter.docx"), DOC_EXTENSIONS)
             .add_filter(t!("chooser.filter.pdf"), PDF_EXTENSIONS)
             .add_filter(t!("chooser.filter.table"), TABLE_EXTENSIONS)
+            .add_filter(t!("chooser.filter.presentation"), PRESENTATION_EXTENSIONS)
             .add_filter(t!("chooser.filter.image"), IMAGE_EXTENSIONS)
             .add_filter(t!("chooser.filter.video"), VIDEO_EXTENSIONS)
+            .add_filter(t!("chooser.filter.capture"), CAPTURE_EXTENSIONS)
             .pick_file()
         {
             self.open_file(ctx, path);
@@ -875,12 +949,25 @@ impl SpeechApp {
     }
 
     fn open_file(&mut self, ctx: &egui::Context, path: PathBuf) {
+        // The same refusal `choose_file` makes, here rather than only there,
+        // because a dropped file arrives by this route without passing through
+        // it. Before anything is cleared, not after: the job that starts below
+        // would be turned back by `begin`, and the app would be left showing a
+        // file it never read with the previous one's text already gone.
+        if self.busy.is_some() {
+            return;
+        }
         let Some(kind) = FileKind::from_path(&path) else {
+            // Some unreadable types have a way out worth naming — a legacy
+            // .ppt only wants re-saving — and the status line is the one place
+            // a screen reader will announce it.
             self.set_status(
-                t!(
-                    "status.unreadable_type",
-                    name = path.file_name().unwrap_or_default().to_string_lossy()
-                ),
+                crate::extract::unsupported_advice(&path).unwrap_or_else(|| {
+                    t!(
+                        "status.unreadable_type",
+                        name = path.file_name().unwrap_or_default().to_string_lossy()
+                    )
+                }),
                 Tone::Error,
             );
             return;
@@ -891,6 +978,7 @@ impl SpeechApp {
         self.file_kind = Some(kind);
         self.text.clear();
         self.text_note.clear();
+        self.disclosure = None;
         self.cached = None;
         self.log.clear();
 
@@ -919,6 +1007,10 @@ impl SpeechApp {
                 config: Box::new(self.config.clone()),
             },
             FileKind::Video => Job::ReadVideo {
+                path,
+                config: Box::new(self.config.clone()),
+            },
+            FileKind::Pcap => Job::ReadPcap {
                 path,
                 config: Box::new(self.config.clone()),
             },
@@ -1405,12 +1497,17 @@ impl SpeechApp {
                         self.log.drain(..self.log.len() - 500);
                     }
                 }
-                Update::TextReady { text, note } => {
+                Update::TextReady {
+                    text,
+                    note,
+                    disclosure,
+                } => {
                     // The note, not the text: how much was extracted is the
                     // useful part, and the document itself is the user's.
                     crate::log::line(format!("extracted {note}"));
                     self.text = text;
                     self.text_note = note;
+                    self.disclosure = disclosure;
                     self.cached = None;
                     self.set_status(t!("status.ready"), Tone::Success);
                 }
@@ -1514,6 +1611,28 @@ impl SpeechApp {
         }
     }
 
+    /// Whether a modal dialog is on screen and owns the input.
+    ///
+    /// A dialog takes the keyboard and the window while it is up, so everything
+    /// that reads input from behind it has to stay inert: a shortcut that still
+    /// fired under a confirmation would raise a file chooser behind the
+    /// backdrop or switch to a pane nobody can see, and a file dropped on the
+    /// backdrop would start reading it while the question on screen still
+    /// waited for an answer.
+    ///
+    /// One list rather than a copy of it at each caller. Keeping the condition
+    /// in two places is exactly how the dropped-file path came to be missing
+    /// every dialog on it — including the video warning, which holds a file it
+    /// has not read yet, so a drop landing during it left the app with a
+    /// question about one video and a job reading something else.
+    fn dialog_is_open(&self) -> bool {
+        self.show_api_key
+            || self.prompt.is_some()
+            || self.confirm_reset
+            || self.confirm_video
+            || self.update_available.is_some()
+    }
+
     /// Takes a file dropped on the window, and refuses a handful.
     ///
     /// One file is an instruction. Several is a question this app has no way to
@@ -1530,6 +1649,12 @@ impl SpeechApp {
     /// line with its own label, so anything said here would be gone before it
     /// could be read out.
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        // Silently, as the shortcuts are: a modal is a question, and the answer
+        // to it is on screen. Saying something here would put it in a status
+        // line that is behind the backdrop.
+        if self.dialog_is_open() {
+            return;
+        }
         let dropped: Vec<PathBuf> = ctx.input(|input| {
             input
                 .raw
@@ -1559,12 +1684,7 @@ impl SpeechApp {
     /// Reads and consumes the global shortcuts. Consuming rather than observing
     /// means a shortcut never also reaches the control underneath it.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        // A dialog owns the keyboard while it is open, so the shortcuts behind
-        // it stay inert and Escape unambiguously means "close this". All three
-        // of them: a shortcut that still fired under the reset confirmation
-        // would raise a file chooser behind the backdrop, or switch to a pane
-        // nobody can see.
-        if self.show_api_key || self.prompt.is_some() || self.confirm_reset || self.confirm_video {
+        if self.dialog_is_open() {
             return;
         }
 
@@ -1769,13 +1889,23 @@ impl SpeechApp {
                 );
             }
         }
+
+        // The picker keeps saying what the user chose; this says what will
+        // actually happen to the file they have open, and why. Substituting a
+        // voice without a word would be the worst of both — the one user this
+        // app is built for would hear a different voice and be told nothing at
+        // all about the reason.
+        if self.capture_stays_local() && self.config.engine == EnginePreference::ElevenLabs {
+            let colour = crate::theme::palette(ui.visuals()).warn;
+            ui.colored_label(colour, t!("read.engine.capture_local"));
+        }
     }
 
     fn voice_field(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let caption = Self::caption(ui, &t!("read.voice.caption"));
 
-        match self.config.engine {
+        match self.voice_family() {
             EnginePreference::ElevenLabs => {
                 if self.api_key.is_some() && !self.elevenlabs_voices.loaded && self.busy.is_none() {
                     self.load_elevenlabs_voices(&ctx);
@@ -2899,6 +3029,10 @@ impl SpeechApp {
             self.config_dirty = true;
         }
 
+        if self.capture_settings(ui) {
+            self.config_dirty = true;
+        }
+
         ui.add_space(12.0);
         ui.separator();
         ui.add(egui::Label::new(t!("settings.reset.intro")).wrap());
@@ -3321,6 +3455,67 @@ impl SpeechApp {
         edited
     }
 
+    /// The network-capture half of the Settings pane. Returns whether anything
+    /// changed.
+    ///
+    /// Deliberately short. There is only one decision here worth offering —
+    /// whether a model writes the summary up or the counted figures are read
+    /// as they are — because everything else about reading a capture is
+    /// counting, and counting has no settings.
+    fn capture_settings(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut edited = false;
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add(egui::Label::new(t!("settings.pcap.intro")).wrap());
+        ui.add_space(6.0);
+
+        // Off until somebody turns it on, and first in the section, because it
+        // is the only control here that decides whether any of this leaves the
+        // computer. See [`capture_must_stay_local`].
+        let cloud = ui
+            .checkbox(
+                &mut self.config.pcap_allow_cloud_voice,
+                t!("settings.pcap.cloud_voice"),
+            )
+            .on_hover_text(t!("settings.pcap.cloud_voice.hint"));
+        edited |= cloud.changed();
+        ui.add_space(6.0);
+
+        let narrate = ui
+            .checkbox(&mut self.config.pcap_narrate, t!("settings.pcap.narrate"))
+            .on_hover_text(t!("settings.pcap.narrate.hint"));
+        edited |= narrate.changed();
+
+        // Only meaningful when a model is writing something. With the rewrite
+        // off, what is read out was counted rather than written, and a line
+        // disclaiming it as AI would be wrong in the direction that matters.
+        if self.config.pcap_narrate {
+            ui.add_space(6.0);
+            let ai_note = ui
+                .checkbox(&mut self.config.pcap_ai_note, t!("settings.pcap.ai_note"))
+                .on_hover_text(t!("settings.pcap.ai_note.hint"));
+            edited |= ai_note.changed();
+
+            ui.add_space(6.0);
+            let caption = ui.label(t!("settings.pcap.prompt.caption"));
+            let prompt = ui.add(
+                egui::TextEdit::multiline(&mut self.config.pcap_narration_prompt)
+                    .desired_rows(3)
+                    .desired_width(FORM_WIDTH),
+            );
+            let _ = caption.labelled_by(prompt.id);
+            edited |= prompt.changed();
+
+            if ui.button(t!("settings.pcap.prompt.reset")).clicked() {
+                self.config.pcap_narration_prompt = crate::config::default_pcap_prompt();
+                self.config_dirty = true;
+            }
+        }
+
+        edited
+    }
+
     /// Confirms before putting the settings back to their defaults.
     ///
     /// Asking first because the damage is invisible: a reset takes back a
@@ -3406,7 +3601,7 @@ impl SpeechApp {
             return;
         }
         let opening = std::mem::take(&mut self.video_dialog_opened);
-        let mut decision: Option<bool> = None;
+        let mut answer: Option<VideoAnswer> = None;
 
         let modal = egui::Modal::new(egui::Id::new("confirm_video")).show(ctx, |ui| {
             ui.set_max_width(560.0);
@@ -3427,7 +3622,7 @@ impl SpeechApp {
                 )
                 .clicked()
             {
-                decision = Some(true);
+                answer = Some(VideoAnswer::Describe);
             }
             let cancel = ui.add(
                 egui::Button::new(t!("video_warning.cancel"))
@@ -3441,19 +3636,21 @@ impl SpeechApp {
                 cancel.request_focus();
             }
             if cancel.clicked() {
-                decision = Some(false);
+                answer = Some(VideoAnswer::Cancel);
             }
         });
 
-        if decision.is_none() && modal.should_close() {
-            decision = Some(false);
+        // Escape, or a click on the backdrop. Deliberately its own answer
+        // rather than another Cancel — see [`warning_stays_off`].
+        if answer.is_none() && modal.should_close() {
+            answer = Some(VideoAnswer::Dismissed);
         }
 
-        let Some(confirmed) = decision else {
+        let Some(answer) = answer else {
             return;
         };
         self.confirm_video = false;
-        if self.video_warning_checkbox {
+        if warning_stays_off(answer, self.video_warning_checkbox) {
             self.config.video_warning_dismissed = true;
             self.config_dirty = true;
         }
@@ -3461,7 +3658,7 @@ impl SpeechApp {
         let Some(path) = self.pending_video.take() else {
             return;
         };
-        if !confirmed {
+        if answer != VideoAnswer::Describe {
             self.set_status(t!("status.video_skipped"), Tone::Info);
             return;
         }
@@ -3865,9 +4062,193 @@ impl eframe::App for SpeechApp {
     }
 }
 
+/// Whether a file of this kind must be read on this computer rather than sent
+/// to a cloud voice.
+///
+/// True for a network capture, unless the user has gone and allowed it. A
+/// capture summary is the one thing this app produces that is *about somebody
+/// else's* — it names the machines on a network and the domain names they
+/// asked for, which together say a good deal about who was doing what. The app
+/// is usually reading one because something has gone wrong, which is the least
+/// appealing moment for that description to be posted to a third party because
+/// an engine dropdown happened to be set to ElevenLabs beforehand.
+///
+/// Nothing else is treated this way. A document is the user's own text and
+/// they chose to have it read aloud; there is no case for second-guessing
+/// that. This is the same answer, for the same reason, that the app already
+/// gives to looking up where a photo was taken.
+fn capture_must_stay_local(kind: Option<FileKind>, allowed_to_leave: bool) -> bool {
+    kind == Some(FileKind::Pcap) && !allowed_to_leave
+}
+
+/// How the "describing this video" warning was answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VideoAnswer {
+    /// The button that starts the work.
+    Describe,
+    /// The button that does not.
+    Cancel,
+    /// Escape, or a click on the backdrop.
+    Dismissed,
+}
+
+/// Whether answering the warning this way should turn it off for good.
+///
+/// Pressing either button is an answer to the question the dialog asked, and
+/// "not this video, and stop asking" is a coherent thing to mean — so Cancel
+/// commits the checkbox just as Describe does.
+///
+/// Escape and the backdrop are not answers. Everywhere else in this app they
+/// mean "not now" and change nothing — the reset confirmation and the install
+/// prompt both say so — and writing a setting to disk is not nothing. It is
+/// also the gesture most likely to be made by somebody who has just realised
+/// they are in the wrong dialog, possibly having tabbed through and ticked the
+/// checkbox on the way to finding out. Turning a safety warning off for good
+/// on the strength of that is the one outcome here worth ruling out.
+fn warning_stays_off(answer: VideoAnswer, checkbox_ticked: bool) -> bool {
+    checkbox_ticked && answer != VideoAnswer::Dismissed
+}
+
+/// The text as it will actually leave this app: the document, the disclosure it
+/// needs if it needs one, and the dictionary over both.
+///
+/// A free function rather than a method so that the order of those three is
+/// something a test can pin down. The order is the whole point:
+///
+/// * The disclosure is worded **here**, not where the text was extracted,
+///   because half of what it says is which engine is about to read it aloud —
+///   and that is the user's to change right up until they press Apply. Written
+///   at extraction time, it said "read using this computer's own voice" about a
+///   description that was then uploaded to ElevenLabs, which is precisely the
+///   claim it exists to make.
+/// * The dictionary goes over the top of it, as it always has, so a rule that
+///   fixes how a voice pronounces "ElevenLabs" fixes it in the disclosure too.
+fn speech_for(
+    text: &str,
+    disclosure: Option<crate::extract::Disclosure>,
+    engine: EnginePreference,
+    dictionary: &[crate::dictionary::Replacement],
+) -> (String, usize) {
+    let text = match disclosure {
+        Some(kind) => kind.note(text, engine),
+        None => text.to_string(),
+    };
+    crate::dictionary::apply(&text, dictionary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A capture summary names the machines on somebody's network and the
+    /// addresses they looked up. It stays on this computer until the user
+    /// says otherwise, whatever the engine picker happens to be set to.
+    #[test]
+    fn a_capture_stays_on_this_computer_until_it_is_allowed_to_leave() {
+        assert!(capture_must_stay_local(Some(FileKind::Pcap), false));
+        // Allowed, it is read like anything else.
+        assert!(!capture_must_stay_local(Some(FileKind::Pcap), true));
+    }
+
+    /// Only captures. A document is the user's own text and they chose to have
+    /// it read aloud; second-guessing that would be the app deciding what
+    /// somebody may do with their own file.
+    #[test]
+    fn nothing_but_a_capture_is_pinned_to_this_computer() {
+        for kind in [
+            FileKind::Text,
+            FileKind::Docx,
+            FileKind::Pdf,
+            FileKind::Csv,
+            FileKind::Pptx,
+            FileKind::Image,
+            FileKind::Video,
+        ] {
+            assert!(
+                !capture_must_stay_local(Some(kind), false),
+                "{kind:?} should not be pinned to this computer"
+            );
+        }
+        assert!(!capture_must_stay_local(None, false));
+    }
+
+    /// Ticking "don't ask again" and then pressing a button means it: both
+    /// buttons are answers, and "not this video, and stop asking" is a
+    /// coherent thing to want.
+    #[test]
+    fn either_button_commits_the_dont_ask_again_checkbox() {
+        assert!(warning_stays_off(VideoAnswer::Describe, true));
+        assert!(warning_stays_off(VideoAnswer::Cancel, true));
+        // And an unticked box changes nothing, whichever button was pressed.
+        assert!(!warning_stays_off(VideoAnswer::Describe, false));
+        assert!(!warning_stays_off(VideoAnswer::Cancel, false));
+    }
+
+    /// Escape is not an answer. It is the gesture of somebody getting out of a
+    /// dialog they did not mean to be in — possibly having tabbed over the
+    /// checkbox on the way — and it must not switch off a safety warning for
+    /// good.
+    #[test]
+    fn escaping_the_warning_never_turns_it_off_for_good() {
+        assert!(!warning_stays_off(VideoAnswer::Dismissed, true));
+        assert!(!warning_stays_off(VideoAnswer::Dismissed, false));
+    }
+
+    /// The regression this exists for. A description is written once, but the
+    /// engine that will read it aloud is a dropdown the user can change
+    /// afterwards — so the sentence naming that engine has to be composed when
+    /// the text is spoken, not when it was extracted.
+    ///
+    /// Before this, describing a video with a system voice selected and then
+    /// switching to ElevenLabs uploaded the whole description to a cloud
+    /// service while the line riding along with it said the reading was
+    /// happening on this computer.
+    #[test]
+    fn the_disclosure_follows_the_engine_rather_than_the_moment_of_extraction() {
+        let text = "A harbour, boats moored along a quay.";
+        let disclosure = Some(crate::extract::Disclosure::Video);
+
+        let (local, _) = speech_for(text, disclosure, EnginePreference::System, &[]);
+        let (cloud, _) = speech_for(text, disclosure, EnginePreference::ElevenLabs, &[]);
+
+        // The same description, and a different account of where it is going.
+        assert!(local.starts_with(text), "{local}");
+        assert!(cloud.starts_with(text), "{cloud}");
+        assert_ne!(local, cloud);
+        // Only the cloud one may say the text is leaving this computer.
+        assert!(cloud.contains("ElevenLabs"), "{cloud}");
+        assert!(!local.contains("ElevenLabs"), "{local}");
+    }
+
+    /// Text that needs no disclosure — a Word document, or a capture the app
+    /// counted rather than had written up — is left exactly as it was.
+    #[test]
+    fn text_with_nothing_to_disclose_gains_nothing() {
+        let text = "The minutes of the meeting.";
+        for engine in [EnginePreference::System, EnginePreference::ElevenLabs] {
+            let (spoken, _) = speech_for(text, None, engine, &[]);
+            assert_eq!(spoken, text);
+        }
+    }
+
+    /// The dictionary runs over the disclosure as well as the document, so a
+    /// rule that fixes a mispronounced name fixes it wherever it appears.
+    #[test]
+    fn the_dictionary_reaches_into_the_disclosure_too() {
+        let rule = crate::dictionary::Replacement {
+            from: "ElevenLabs".to_string(),
+            to: "Eleven Labs".to_string(),
+            whole_word: true,
+        };
+        let (spoken, replaced) = speech_for(
+            "A description.",
+            Some(crate::extract::Disclosure::Photo),
+            EnginePreference::ElevenLabs,
+            std::slice::from_ref(&rule),
+        );
+        assert!(replaced > 0, "{spoken}");
+        assert!(spoken.contains("Eleven Labs"), "{spoken}");
+    }
 
     /// The characters that quietly break a hand-written `file://` URL, in the
     /// place they actually turn up: somebody's home folder.

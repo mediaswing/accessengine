@@ -7,7 +7,8 @@ cannot use a mouse, or find small low-contrast text hard going.
 Choose a file, choose a voice, choose what to do with it, press **Apply**. That
 is the whole app. Speech comes from the voices already built into macOS and
 Windows, so it works with no account and no setup; add an ElevenLabs API key and
-you get their voices instead. It reads text, Word documents, PDFs and tables.
+you get their voices instead. It reads text, Word documents, PDFs, tables and
+PowerPoint decks.
 Images work too: hand it a photo or a screenshot and a vision model running on
 your own machine reads the text out of it — and so does video, which is taken
 apart into stills and described a frame at a time.
@@ -57,6 +58,9 @@ This is the point of the app rather than a feature of it.
 - **Reads `.pdf`.** The page is redrawn and the words are worked back out of
   where the glyphs land, since a PDF stores neither paragraphs nor words — see
   [Reading PDFs](#reading-pdfs).
+- **Reads `.pptx`.** Each slide is announced by number and title before
+  anything on it, so you always know where you are — see
+  [Reading presentations](#reading-presentations).
 - **Two speech engines.** The voices built into your operating system, or
   ElevenLabs. Choosing ElevenLabs asks for an API key there and then, with a
   link to where ElevenLabs keeps them, and checks the key as soon as you paste
@@ -87,11 +91,16 @@ This is the point of the app rather than a feature of it.
   written up as one continuous description. Nothing is uploaded anywhere. From
   there it is an ordinary piece of text: read it aloud, or save it as WAV or MP3
   like anything else.
+- **Summarises network captures** (`.pcap`, `.pcapng`, `.cap`) — see
+  [Reading network captures](#reading-network-captures). Every packet is
+  counted here on your machine; a local text model then writes those figures up
+  as something worth listening to, and if it cannot, the counted figures are
+  read out as they are.
 - **Offers to install Ollama and ffmpeg** — with Homebrew on macOS, winget on
   Windows — the first time you open a file that needs one. It never installs
   anything without asking, and it shows you the command it would run.
 - **A right-click "Speak to file" entry, on Windows.** Turn it on once in
-  **Settings** and any text, Word, PDF or CSV file gets a **Speak to file**
+  **Settings** and any text, Word, PDF, CSV or PowerPoint file gets a **Speak to file**
   option in Explorer's right-click menu — no window opens, the audio just
   appears next to the file, using whatever engine and voice you last used.
 
@@ -394,6 +403,46 @@ know a section had been there. One marker covers a whole run of consecutive
 pages: on the file this was built against that is a fifteen-page stretch, which
 announced page by page would interrupt fifteen times to say the same sentence.
 
+## Reading presentations
+
+A slide is a heap of floating text boxes. There is no reading order in the file
+worth the name, and nothing in it says which box is the point — so a deck read
+out as one long run of text is a stream of fragments with no way to tell where
+one slide stopped and the next began.
+
+So the shape is put back before anything is spoken:
+
+- **Every slide is announced by number and title in one breath** — "Slide 4 of
+  12. Second-quarter results." A listener who has lost their place gets both at
+  once, rather than a bare number or nothing at all.
+- **Bullet points get a full stop each.** Slides are written without
+  punctuation far more often than not, and three bullets run together are one
+  baffling sentence.
+- **Speaker notes are read**, under a "Speaker notes" heading at the end of the
+  slide. They are very often the actual sentences the three bullet points above
+  them were an aide-memoire for, and they live in a separate part of the file
+  that nothing reading only the slides will ever find.
+- **Pictures are announced by their alt text** — the one part of an image
+  written for somebody who cannot see it. A picture that has none is still
+  announced as "Image with no description", because a picture nobody described
+  is a hole in the slide, and silence there is indistinguishable from a slide
+  with no picture on it. The automatic name PowerPoint gives a shape
+  ("Picture 3") is never read: it sounds like a description and is not one.
+- **The slide number, footer and date placeholders are left out.** They are the
+  same words on every slide of most decks, and hearing a footer forty times
+  buries the forty slides it was on.
+- **Hidden slides are skipped**, and do not take up a number. They were hidden
+  deliberately, and a deck read aloud should match the deck as presented.
+
+The running order comes from the deck's own list of slides rather than from the
+names of the files inside it. Moving slide 12 to the front in PowerPoint
+rewrites that list and leaves `slide12.xml` called `slide12.xml`, so sorting by
+filename would present a reordered deck in the order it was first written.
+
+**Only `.pptx` is read.** The older `.ppt` is a 1997 binary format that shares
+nothing with it but a syllable; opening one gets a message telling you to open
+it in PowerPoint and save it again as `.pptx`, rather than a shrug.
+
 ## Reading images
 
 The first time you open an image, the app checks for Ollama and offers to set up
@@ -478,6 +527,58 @@ left this computer: read with a system voice, it says so; read with
 ElevenLabs, it says the text is being sent to that cloud service to be
 spoken. On by default; turn it off under **Settings**. JPEG and HEIC photos
 get the same line, for the same reason — see **Reading images** above.
+
+## Reading network captures
+
+A `.pcap` is a list of packets, and a list of packets read out is unusable — a
+quiet minute on one laptop is tens of thousands of lines, none of which means
+anything on its own. What anyone actually wants to know is the shape of it: who
+talked to whom, what about, for how long, and what went wrong.
+
+So a capture is read in two passes, and the split between them is the whole
+design:
+
+1. **Everything is counted, here, on your machine.** Packets are decoded as far
+   as their addresses, ports, protocol and TCP flags; conversations are gathered
+   so that a reply lands on the same entry as the request; the domain names
+   asked for over DNS are collected, since those are what actually say what a
+   machine was doing. The result is an ordered account of the facts, and every
+   number in it was counted rather than inferred.
+2. **A local text model turns those facts into English.** It is given the
+   counted account and asked only to write it up — not to decide what the facts
+   are. If Ollama cannot be reached, or the model answers with a stub, the
+   counted account is read out as it stands, so a failure costs you some
+   fluency and none of the figures.
+
+That division is deliberate. A model handed a table of addresses and ports knows
+a great deal about what such traffic *usually* means and will happily supply an
+explanation — an infection, a backup, a misconfigured server — that the packets
+do not support. A capture is nearly always being read because something has
+already gone wrong, so a plausible guess presented as a finding is the most
+expensive mistake this app could make. The prompt says so at length, and you can
+read and change it under **Settings**; the checkbox beside it turns the model
+off altogether and reads the counted figures instead.
+
+**A capture is read on your own computer unless you say otherwise.** A summary
+names the machines on your network and the addresses they looked up, which
+together say a good deal about who was doing what — so unlike everything else
+this app opens, it is not handed to ElevenLabs just because the engine dropdown
+was set that way when you opened the file. With **Allow captures to be read by
+ElevenLabs** off, which is how it ships, a capture is read by a voice on this
+computer whatever that dropdown says, and the Read pane tells you so rather
+than quietly swapping the voice. It is the same answer the app gives to looking
+up where a photo was taken, for the same reason.
+
+The summary ends with a line saying which parts were counted and which were
+written by a model, and which voice is about to read it — on by default, and
+worth keeping, because a sentence about what a network did tends to get repeated
+to somebody else as fact.
+
+Both container formats are read — the classic `.pcap` in either byte order and
+either timestamp precision, and `.pcapng` — along with Ethernet, raw IP, BSD
+loopback and both Linux "any" pseudo-headers, IPv4 and IPv6, TCP, UDP, ICMP and
+ARP. VLAN tags are stepped over rather than allowed to hide the packet behind
+them.
 
 ## Right-click "Speak to file" (Windows)
 
@@ -566,12 +667,35 @@ treated as untrusted.
   archive already holds. `media.txt` is parsed with no entity resolution, so it
   cannot reach out to a file or a URL on the way past.
 - **Input is bounded.** Images are capped at 64 MB, plain text at 64 MB, a
-  `.docx` body at 128 MB *after decompression*, a playlist at 500 tracks with
+  `.docx` body at 128 MB *after decompression*, a `.pptx` at 32 MB per part and
+  128 MB across the whole deck *after decompression* — a per-part limit alone is
+  no protection when a presentation may hold any number of slides — a playlist at 500 tracks with
   each capped at 256 MB *after decompression*, and a PDF at 128 MB on disk with
   a further ceiling on the text taken out of it — a zip bomb is a few hundred
   kilobytes on disk, and an app that dies on one is an app that fails the person
   relying on it to read their post. PDF streams are compressed too, and a
   malformed one can describe an endless page.
+- **A capture file is treated as hostile input, because that is what it is.** A
+  `.pcap` is a recording of what arrived off a network, so every length inside
+  it is attacker-controlled. It is read as a stream and never held in memory;
+  each length is checked against what is actually there before it is used;
+  nothing is allocated on the strength of a number read out of the file; and a
+  packet that ends early yields nothing rather than a panic. The tables the
+  summary is built from stop growing at a fixed ceiling and count the overflow
+  instead — a port scan is half a million one-packet conversations, which is one
+  fact about the capture rather than half a million of them.
+- **The names out of a capture are treated as text somebody else chose.** Every
+  other figure in a capture summary is counted by the app; the domain names
+  looked up are bytes off the wire, and they are the one part that is both
+  spoken aloud and placed inside a model's prompt. Only the first question of a
+  query is read — never an answer, whose names are compression pointers back
+  into it — and only when every label holds what a hostname may actually
+  contain: letters, digits, hyphens and underscores. The transcript labels that
+  section as text from the file rather than instructions, in the transcript
+  itself and not only in the prompt you can edit. That narrows the opening
+  rather than closing it: a name can still read as a sentence. What it costs if
+  someone manages it is a misleading piece of prose — the counted figures are
+  still there underneath, and the summary says a model wrote the words.
 - **Scratch files and directories are created exclusively** and, on macOS,
   readable only by their owner, so a name guessed in advance is an error rather
   than a write through someone else's symlink. Directories matter as much as
@@ -579,6 +703,13 @@ treated as untrusted.
   image found there is read back and described, so a directory somebody else had
   already put at that name would be both a copy of what you were watching and a
   way to put a picture in front of the model that never came out of your video.
+- **A network capture is not uploaded even then, unless you allow it.** A
+  capture summary is the one thing this app produces that is largely about
+  other people: the machines on a network and the names they asked for. So it
+  is read by a voice on this computer whatever the engine is set to, until
+  **Allow captures to be read by ElevenLabs** is turned on under **Settings**
+  — and the Read pane says which voice will read it rather than substituting
+  one silently.
 - **Nothing is uploaded except to ElevenLabs**, and only when you have chosen it.
   Images are read by a model on your own machine, and the picture itself never
   leaves it. TLS certificate verification is never disabled.
@@ -601,8 +732,9 @@ Output Engine.
 | `src/theme.rs` | Fonts, the contrast-checked palette, and the form metrics |
 | `src/dictionary.rs` | Word replacement |
 | `src/jobs.rs` | Background work and the messages it sends back |
-| `src/extract/` | `.txt`, `.docx`, `.csv`, image and video → text |
+| `src/extract/` | `.txt`, `.docx`, `.csv`, `.pptx`, image and video → text |
 | `src/extract/pdf/` | `.pdf` → text: objects, filters, pages, fonts, page description |
+| `src/extract/pcap/` | `.pcap`/`.pcapng` → counted facts: containers, packet decoding, the summary |
 | `src/tts/` | The ElevenLabs and system-voice engines, and text chunking |
 | `src/audio.rs` | PCM, WAV/MP3 encoding, playback and the transport |
 | `src/playlist.rs` | A zip of audio as a running order, and what `media.txt` says about it |

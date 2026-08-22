@@ -340,6 +340,44 @@ pub struct Config {
     /// the way a video's can.
     pub video_ai_note: bool,
 
+    /// Whether a network capture's counted facts are rewritten as prose by a
+    /// text model before they are spoken.
+    ///
+    /// Off leaves the transcript, which is the honest raw material: every
+    /// number in it was counted off the packets and none of it came from a
+    /// model. On is the default because that transcript is a table, and a
+    /// table read aloud is the thing this app exists to avoid.
+    pub pcap_narrate: bool,
+    /// The instruction for that rewrite. Uses the same model as the video
+    /// narrator — see [`Config::narration_model`] — since it is the same job:
+    /// no picture involved, only text in and text out.
+    pub pcap_narration_prompt: String,
+    /// Whether a capture's summary ends with a line saying it was written by a
+    /// local AI model.
+    ///
+    /// On by default, and the case for it is stronger than the video one. A
+    /// sentence about what a network did gets repeated to somebody else as
+    /// fact — to an IT department, or in an incident report — and the person
+    /// repeating it should know which parts were counted and which parts a
+    /// model wrote. See [`crate::extract::pcap::ai_disclosure_note`].
+    pub pcap_ai_note: bool,
+    /// Whether a capture summary may be read by ElevenLabs, a cloud service.
+    ///
+    /// Off until the user turns it on, which is the same answer
+    /// [`Config::lookup_photo_location`] gives to the same question, for the
+    /// same reason. A capture summary is not a preference that happens to be
+    /// stored in a file — it is the addresses of the machines on somebody's
+    /// network and the names those machines looked up, which together say a
+    /// good deal about who they are and what they were doing. That is not
+    /// something to send to a third party because a dropdown elsewhere in the
+    /// app was already set to ElevenLabs when the file was opened.
+    ///
+    /// Off, a capture is read by a system voice whatever the engine picker
+    /// says, and the Read pane says so rather than quietly substituting one.
+    /// Nothing else the app opens is treated this way: a document is the
+    /// user's own text and they chose to have it read aloud.
+    pub pcap_allow_cloud_voice: bool,
+
     /// Directory the last save went to, so the dialog reopens somewhere useful.
     pub last_save_dir: Option<PathBuf>,
     /// Directory the audio player last opened a file from.
@@ -376,6 +414,10 @@ impl Default for Config {
             video_max_frames: DEFAULT_MAX_FRAMES,
             video_warning_dismissed: false,
             video_ai_note: true,
+            pcap_narrate: true,
+            pcap_narration_prompt: default_pcap_prompt(),
+            pcap_ai_note: true,
+            pcap_allow_cloud_voice: false,
             last_save_dir: None,
             last_audio_dir: None,
         }
@@ -466,6 +508,19 @@ pub fn default_frame_prompt() -> String {
 /// worse than useless to someone who cannot check it against the picture.
 pub fn default_narration_prompt() -> String {
     t!("prompt.narration")
+}
+
+/// The instruction for turning a capture's counted facts into prose.
+///
+/// The constraint against inventing detail is the load-bearing part here, as
+/// it is for video, but for a different reason. A model handed a table of
+/// addresses and ports knows a great deal about what such traffic usually
+/// means, and will fill in an explanation — "the machine was infected", "this
+/// is a backup running" — that the packets do not support. A capture is nearly
+/// always being read because something has gone wrong, so a plausible guess
+/// presented as a finding is the most expensive mistake this app could make.
+pub fn default_pcap_prompt() -> String {
+    t!("prompt.pcap")
 }
 
 /// ffmpeg's scene score for an ordinary cut. Lower catches camera movement and
@@ -570,6 +625,20 @@ mod tests {
         // as "off" rather than as "whatever serde felt like".
         let old: Config = serde_json::from_str("{}").expect("an empty config should parse");
         assert!(!old.lookup_photo_location);
+    }
+
+    /// A capture summary names the machines on somebody's network and what
+    /// they looked up. Like the location lookup above, and unlike anything
+    /// else the app reads, it does not go to a cloud service until somebody
+    /// says it may.
+    #[test]
+    fn a_capture_is_not_sent_to_the_cloud_until_it_is_allowed_to_be() {
+        assert!(!Config::default().pcap_allow_cloud_voice);
+
+        // Including for somebody upgrading, who never saw the switch and must
+        // not be opted in by having missed it.
+        let old: Config = serde_json::from_str("{}").expect("an empty config should parse");
+        assert!(!old.pcap_allow_cloud_voice);
     }
 
     /// Unlike the location lookup above, the AI disclosure is on by default —

@@ -21,9 +21,10 @@ use std::path::PathBuf;
 
 /// Extensions the right-click entry covers.
 ///
-/// Deliberately not [`extract::IMAGE_EXTENSIONS`] or [`extract::VIDEO_EXTENSIONS`]:
-/// those go through Ollama/ffmpeg and can run for minutes, and a headless run
-/// has no progress bar or cancel button to show for it. Built from the same
+/// Deliberately not [`extract::IMAGE_EXTENSIONS`], [`extract::VIDEO_EXTENSIONS`]
+/// or [`extract::CAPTURE_EXTENSIONS`]: those go through Ollama/ffmpeg and can
+/// run for minutes, and a headless run has no progress bar or cancel button to
+/// show for it. Built from the same
 /// lists the Open dialog uses, so this can never cover a file type
 /// [`extract::extract_document`] doesn't actually handle.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -33,6 +34,7 @@ pub fn extensions() -> Vec<&'static str> {
         extract::DOC_EXTENSIONS,
         extract::PDF_EXTENSIONS,
         extract::TABLE_EXTENSIONS,
+        extract::PRESENTATION_EXTENSIONS,
     ]
     .concat()
 }
