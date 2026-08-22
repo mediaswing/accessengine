@@ -1050,6 +1050,45 @@ mod tests {
         assert!(!spoken.contains("\n4."), "{spoken}");
     }
 
+    /// Reads a real presentation off disk and prints what the app would say
+    /// about it.
+    ///
+    /// Ignored and driven by an environment variable, for the same reason the
+    /// video pipeline test is: it needs a file this repository does not carry
+    /// and cannot generate. Everything else in this module is a fixture
+    /// written to exercise a rule, which means every one of them is shaped by
+    /// the same understanding of the format that the reader is — so they
+    /// cannot catch a convention nobody thought to fake.
+    ///
+    /// What counts as a real file here is one written by a real producer:
+    /// PowerPoint, Keynote's export, Google Slides' download, LibreOffice, or
+    /// python-pptx. Hand-assembled XML in a zip is another fixture wearing a
+    /// file extension.
+    ///
+    ///     SOE_SAMPLE_PPTX=~/deck.pptx cargo test real_presentation -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs a real .pptx; set SOE_SAMPLE_PPTX to one"]
+    fn a_real_presentation_reads_end_to_end() {
+        let path = std::env::var("SOE_SAMPLE_PPTX")
+            .expect("set SOE_SAMPLE_PPTX to the path of a real .pptx");
+        let spoken = extract(std::path::Path::new(&path)).expect("the deck should read");
+
+        eprintln!("\n=== {path} ===\n{spoken}\n");
+
+        assert!(
+            spoken.starts_with("Presentation with "),
+            "no opening count: {spoken}"
+        );
+        assert!(spoken.contains("Slide 1 of "), "no first slide: {spoken}");
+        // A deck nobody can hear anything from is the failure this is looking
+        // for: the parts were found, but no text came out of them.
+        let words = spoken.split_whitespace().count();
+        assert!(
+            words > 20,
+            "only {words} words came out of the deck: {spoken}"
+        );
+    }
+
     /// A zip that is not a presentation, and a presentation with nothing in
     /// it, both have to fail as messages rather than as panics.
     #[test]

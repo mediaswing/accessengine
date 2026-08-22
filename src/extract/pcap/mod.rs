@@ -944,6 +944,47 @@ mod tests {
         assert_eq!(spoken_bytes(5 * 1024 * 1024), "5.0 megabytes");
     }
 
+    /// Reads a real capture off disk and prints the counted transcript.
+    ///
+    /// Ignored and driven by an environment variable: this repository carries
+    /// no capture, and one cannot be fabricated for the purpose. Every fixture
+    /// in this module was assembled byte by byte from the specification by the
+    /// same hand that wrote the reader, so the two agree by construction and a
+    /// convention neither of them knows about would go unnoticed.
+    ///
+    /// A real capture means one a capture tool wrote: `tcpdump -w`, Wireshark
+    /// or dumpcap, or one of the sample captures on the Wireshark wiki. A file
+    /// whose bytes were composed by hand — or by a model — is a fixture, and a
+    /// worse one than those above, because a length it got wrong is
+    /// indistinguishable from a length this reader got wrong.
+    ///
+    /// Only the counting is checked. The narration pass needs Ollama and is a
+    /// separate question from whether the packets were read correctly.
+    ///
+    ///     SOE_SAMPLE_PCAP=~/capture.pcapng cargo test real_capture -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs a real .pcap or .pcapng; set SOE_SAMPLE_PCAP to one"]
+    fn a_real_capture_reads_end_to_end() {
+        let path = std::env::var("SOE_SAMPLE_PCAP").expect("set SOE_SAMPLE_PCAP to a real capture");
+        let capture = read(Path::new(&path), |_| true).expect("the capture should read");
+        let spoken = transcript(&capture);
+
+        eprintln!("\n=== {path} ===\n{spoken}\n");
+
+        assert!(capture.packets > 0, "no packets were read");
+        // The failure worth catching: the container parsed, so packets were
+        // counted, but nothing inside them was understood — which is what a
+        // link layer this app does not decode looks like from the outside.
+        assert!(
+            !capture.conversations.is_empty() || capture.arp > 0,
+            "{} packets read but nothing was decoded past the link layer \
+             ({} undecoded) — check the capture's link type",
+            capture.packets,
+            capture.undecoded
+        );
+        assert!(spoken.contains("What the capture holds."), "{spoken}");
+    }
+
     /// An empty file is a message rather than a summary of nothing.
     #[test]
     fn a_capture_with_no_packets_in_it_is_refused_by_name() {
