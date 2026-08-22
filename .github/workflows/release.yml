@@ -79,6 +79,8 @@ jobs:
           # The list is by conformance, not by extension, so it is shorter than
           # the set of things the app reads: .csv and .tsv arrive under
           # public.plain-text, and all six video formats under public.movie.
+          # A capture is the exception in the other direction — it has no
+          # system type at all, so one is declared below and referenced here.
           # Checking one of these is a one-line question to the system rather
           # than a guess — UTType(filenameExtension:).conforms(to:).
           cat > "$APP/Contents/Info.plist" <<PLIST
@@ -122,13 +124,43 @@ jobs:
                           <string>public.plain-text</string>
                           <string>net.daringfireball.markdown</string>
                           <string>org.openxmlformats.wordprocessingml.document</string>
+                          <string>org.openxmlformats.presentationml.presentation</string>
                           <string>com.adobe.pdf</string>
                           <string>public.jpeg</string>
                           <string>public.png</string>
                           <string>public.heic</string>
                           <string>public.heif</string>
                           <string>public.movie</string>
+                          <string>io.accessengine.pcap</string>
                       </array>
+                  </dict>
+              </array>
+              <!-- A capture file has no system-provided type: macOS knows
+                   nothing about .pcap beyond it being data, so "Open With"
+                   cannot offer this app for one until the app says what the
+                   extension means. Imported rather than exported because the
+                   format is libpcap's rather than ours — we are describing
+                   somebody else's type, not defining one. -->
+              <key>UTImportedTypeDeclarations</key>
+              <array>
+                  <dict>
+                      <key>UTTypeIdentifier</key>
+                      <string>io.accessengine.pcap</string>
+                      <key>UTTypeDescription</key>
+                      <string>Network capture</string>
+                      <key>UTTypeConformsTo</key>
+                      <array>
+                          <string>public.data</string>
+                      </array>
+                      <key>UTTypeTagSpecification</key>
+                      <dict>
+                          <key>public.filename-extension</key>
+                          <array>
+                              <string>pcap</string>
+                              <string>pcapng</string>
+                              <string>cap</string>
+                          </array>
+                      </dict>
                   </dict>
               </array>
           </dict>
