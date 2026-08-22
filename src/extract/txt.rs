@@ -44,10 +44,10 @@ pub(super) fn decode(bytes: &[u8]) -> String {
 }
 
 fn decode_utf16(bytes: &[u8], to_unit: fn([u8; 2]) -> u16) -> String {
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| to_unit([pair[0], pair[1]]))
-        .collect();
+    // A trailing odd byte is not half a character, and is dropped — which is
+    // what the remainder of `as_chunks` is and why it is discarded here.
+    let (pairs, _odd_byte) = bytes.as_chunks::<2>();
+    let units: Vec<u16> = pairs.iter().copied().map(to_unit).collect();
     String::from_utf16_lossy(&units)
 }
 

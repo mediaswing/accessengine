@@ -505,10 +505,8 @@ fn code_of(bytes: &[u8]) -> u32 {
 /// saying it means nothing, and pushing one into the text would put a stray
 /// control character into the speech.
 fn utf16be(bytes: &[u8]) -> String {
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
-        .collect();
+    let (pairs, _odd_byte) = bytes.as_chunks::<2>();
+    let units: Vec<u16> = pairs.iter().copied().map(u16::from_be_bytes).collect();
     String::from_utf16_lossy(&units)
         .chars()
         .filter(|character| *character != '\0' && *character != '\u{FFFD}')
