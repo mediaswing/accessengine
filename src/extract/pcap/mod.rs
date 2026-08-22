@@ -387,7 +387,7 @@ fn hosts_section(capture: &Capture) -> String {
     for (address, host) in hosts.iter().take(HOSTS_SPOKEN) {
         out.push_str(&format!(
             "{}: sent {}, received {}, {} sent.\n",
-            address,
+            spoken_address(**address),
             counted(host.sent, "packet", "packets"),
             counted(host.received, "packet", "packets"),
             spoken_bytes(host.bytes_sent)
@@ -402,10 +402,9 @@ fn conversations_section(capture: &Capture) -> String {
         return String::new();
     }
     let total = capture.conversations.len() as u64 + capture.overflow_conversations;
-    let mut out = format!(
-        "\nThe conversations ({} in all), busiest first.\n",
-        counted(total, "conversation", "conversations")
-    );
+    // The plain number, as the other two sections use: "The conversations (2
+    // conversations in all)" says the word twice in six.
+    let mut out = format!("\nThe conversations ({total} in all), busiest first.\n");
 
     for (key, conversation) in busiest.iter().take(CONVERSATIONS_SPOKEN) {
         let share = if capture.packets > 0 {
@@ -430,11 +429,24 @@ fn conversations_section(capture: &Capture) -> String {
         ));
         if let (Some(first), Some(last)) = (conversation.first, conversation.last) {
             let within = first.saturating_sub(capture.first.unwrap_or(first));
-            out.push_str(&format!(
-                ", starting {} into the capture and lasting {}",
-                crate::audio::spoken_time(within),
-                crate::audio::spoken_time(last.saturating_sub(first))
-            ));
+            let lasted = last.saturating_sub(first);
+            // "starting 0 seconds into the capture" is a clumsy way to say a
+            // conversation opens it, and a single packet does not last any
+            // length of time — both are said by not saying them.
+            if within < Duration::from_secs(1) {
+                out.push_str(", from the start of the capture");
+            } else {
+                out.push_str(&format!(
+                    ", starting {} in",
+                    crate::audio::spoken_time(within)
+                ));
+            }
+            if lasted >= Duration::from_secs(1) {
+                out.push_str(&format!(
+                    " and lasting {}",
+                    crate::audio::spoken_time(lasted)
+                ));
+            }
         }
         // UDP has no idea whether anyone was listening, so it has no verdict
         // and must not leave a stray space where one would have been.
@@ -494,7 +506,8 @@ fn queries_section(capture: &Capture) -> String {
     );
     for (name, count) in queries.iter().take(QUERIES_SPOKEN) {
         out.push_str(&format!(
-            "{name}, asked for {}.\n",
+            "{}, asked for {}.\n",
+            spoken_name(name),
             counted(**count, "time", "times")
         ));
     }
@@ -575,10 +588,50 @@ fn protocol_share(capture: &Capture) -> String {
 /// One end of a conversation, with its port only when it has a meaningful one.
 fn endpoint((address, port): (IpAddr, u16)) -> String {
     if port == 0 {
-        address.to_string()
+        spoken_address(address)
     } else {
-        format!("{address} port {port}")
+        format!("{} port {port}", spoken_address(address))
     }
+}
+
+/// An address written the way it should be said rather than the way it is
+/// written down.
+///
+/// A synthesiser handed `192.168.1.5` reads "192 168 1 5": the dots are
+/// punctuation to it, so they become pauses or nothing at all, and four bare
+/// numbers in a row are not an address anybody can write down or repeat. The
+/// separators have to be words. This is the same decision, for the same
+/// reason, that [`crate::extract::video::moment`] makes about the colon in a
+/// timestamp.
+///
+/// IPv6 gets the same treatment, including the doubled colon that stands for a
+/// run of zeroes — an address is hard enough to follow aloud without the one
+/// piece of punctuation that changes its meaning going unsaid.
+fn spoken_address(address: IpAddr) -> String {
+    match address {
+        IpAddr::V4(v4) => v4
+            .octets()
+            .iter()
+            .map(|octet| octet.to_string())
+            .collect::<Vec<_>>()
+            .join(" dot "),
+        // Written out from the formatted form rather than the groups, so that
+        // the `::` the formatter chose to elide with is the one described.
+        IpAddr::V6(_) => address
+            .to_string()
+            .replace("::", " double colon ")
+            .replace(':', " colon ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+/// A domain name written to be said: `example.com` is "example dot com", which
+/// is how anybody reads one out loud, and how it has to arrive if a listener is
+/// to write it down.
+fn spoken_name(name: &str) -> String {
+    name.split('.').collect::<Vec<_>>().join(" dot ")
 }
 
 /// A byte count as it would be said aloud rather than as a number with a unit
@@ -799,11 +852,11 @@ mod tests {
 
         let spoken = transcript(&capture);
         assert!(
-            spoken.contains("updates.example.com, asked for 2 times."),
+            spoken.contains("updates dot example dot com, asked for 2 times."),
             "{spoken}"
         );
         assert!(
-            spoken.contains("telemetry.example.net, asked for 1 time."),
+            spoken.contains("telemetry dot example dot net, asked for 1 time."),
             "{spoken}"
         );
     }
@@ -829,7 +882,10 @@ mod tests {
         // The fixture writes its packets a second apart.
         assert!(spoken.contains("It runs for 2 seconds."), "{spoken}");
         assert!(spoken.contains("TCP 100 percent"), "{spoken}");
-        assert!(spoken.contains("192.168.1.5"), "{spoken}");
+        assert!(spoken.contains("192 dot 168 dot 1 dot 5"), "{spoken}");
+        // The written form must not survive anywhere: a synthesiser reads the
+        // dots as pauses and the address arrives as four unrelated numbers.
+        assert!(!spoken.contains("192.168.1.5"), "{spoken}");
     }
 
     /// A capture of a port scan is half a million one-packet conversations,
@@ -889,9 +945,89 @@ mod tests {
 
         assert_eq!(capture.conversations.len(), 40);
         // The busiest is named; the quietest is not.
-        assert!(spoken.contains("10.0.0.39"), "{spoken}");
-        assert!(!spoken.contains("10.0.0.0 "), "{spoken}");
-        assert!(spoken.contains("40 conversations in all"), "{spoken}");
+        assert!(spoken.contains("10 dot 0 dot 0 dot 39"), "{spoken}");
+        assert!(!spoken.contains("10 dot 0 dot 0 dot 0 "), "{spoken}");
+        // Counted in full even though only the busiest twelve are named.
+        assert!(spoken.contains("The conversations (40 in all)"), "{spoken}");
+    }
+
+    /// Prints a summary in full, so the spoken shape of one can be read back
+    /// rather than inferred from assertions about its parts.
+    #[test]
+    #[ignore = "prints a sample summary; run with --nocapture to read it"]
+    fn a_sample_summary_reads_back_as_speech() {
+        let query = |name: &str| {
+            fixture::ethernet(
+                0x0800,
+                &fixture::ipv4(
+                    17,
+                    [192, 168, 1, 5],
+                    [192, 168, 1, 1],
+                    &fixture::udp(51_000, 53, &fixture::dns_query(name, false)),
+                ),
+            )
+        };
+        let mut frames = fixture::handshake([192, 168, 1, 5], [93, 184, 216, 34], 443);
+        frames.push(query("updates.example.com"));
+        let capture = capture_of("soe-pcap-sample.pcap", &frames);
+        let spoken = transcript(&capture);
+        eprintln!("\n{spoken}\n");
+
+        // Not only a sample. No written-out address may survive anywhere in a
+        // summary, in any section, however it got there.
+        //
+        // The test is for a run of digits and dots carrying more than one dot,
+        // which is an address and never anything else. A single dot is left
+        // alone deliberately: "1.5 megabytes" is a decimal, a synthesiser says
+        // "one point five", and that is exactly right.
+        for token in spoken.split_whitespace() {
+            let token = token.trim_end_matches([',', '.', ':', ';']);
+            let numeric = !token.is_empty()
+                && token
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || byte == b'.');
+            assert!(
+                !(numeric && token.matches('.').count() > 1),
+                "an address survived into the speech as {token:?}: {spoken}"
+            );
+        }
+    }
+
+    /// The defect a real capture found: the transcript was correct and unusable.
+    /// A synthesiser handed "192.168.1.5" reads "192 168 1 5" — the dots are
+    /// punctuation to it — and four bare numbers are not an address anybody
+    /// can write down or repeat back.
+    #[test]
+    fn addresses_are_spelt_the_way_they_have_to_be_spoken() {
+        assert_eq!(
+            spoken_address(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 5))),
+            "192 dot 168 dot 1 dot 5"
+        );
+        // The point of the exercise: no bare separator survives.
+        assert!(!spoken_address(IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1))).contains('.'));
+
+        // IPv6, including the doubled colon that stands for a run of zeroes —
+        // the one piece of punctuation in an address that changes its meaning,
+        // so the one that least deserves to go unsaid.
+        let v6: IpAddr = "2001:db8::1".parse().unwrap();
+        assert_eq!(spoken_address(v6), "2001 colon db8 double colon 1");
+        assert!(!spoken_address(v6).contains(':'));
+
+        let loopback: IpAddr = "::1".parse().unwrap();
+        assert_eq!(spoken_address(loopback), "double colon 1");
+    }
+
+    /// A domain name has the same problem and the same answer: "example dot
+    /// com" is how anybody reads one out.
+    #[test]
+    fn names_are_spelt_the_way_they_have_to_be_spoken() {
+        assert_eq!(
+            spoken_name("updates.example.com"),
+            "updates dot example dot com"
+        );
+        // A single-label name is left as it is rather than gaining a stray
+        // separator.
+        assert_eq!(spoken_name("localhost"), "localhost");
     }
 
     /// Summarising is meant to compress. Judging a capture's summary by the
