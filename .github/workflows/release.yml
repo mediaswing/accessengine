@@ -43,9 +43,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # llvm-tools is not in rustup's default profile, and without it the
+      # `strip = true` in Cargo.toml quietly does nothing: rustc strips by
+      # running rust-objcopy, which links libLLVM.dylib out of that component,
+      # and a rust-objcopy that cannot start is reported as a build *warning*
+      # rather than an error. The build then succeeds and ships a binary
+      # several megabytes larger with its whole symbol table intact.
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: llvm-tools
 
       # Run before packaging so a release cannot ship code whose own tests fail.
       # These are not only unit tests: on both platforms the suite renders a real
@@ -185,6 +192,19 @@ jobs:
           if [ -n "$leaked" ]; then
             echo "error: the binary links libraries that will not exist on a user's Mac:"
             echo "$leaked"
+            exit 1
+          fi
+
+          # Having asked for llvm-tools above, check that it actually did the
+          # job. `strip = true` is a request rather than a guarantee, and its
+          # failure mode is a line in a build log that nobody reads — which is
+          # exactly how a release ships debug symbols for several versions
+          # without anyone noticing. A stripped Mach-O has no debug-map
+          # entries; an unstripped one has an OSO entry per object file.
+          oso=$(nm -pa "$APP/Contents/MacOS/accessengine" | grep -c ' OSO ' || true)
+          if [ "$oso" -ne 0 ]; then
+            echo "error: the binary was not stripped — $oso debug-map entries remain."
+            echo "Cargo's strip = true failed silently; look for a rust-objcopy warning above."
             exit 1
           fi
 
