@@ -611,6 +611,94 @@ mod tests {
         assert!(error.contains("damaged"), "{error}");
     }
 
+    /// A pcapng in the shape a real tool writes one, rather than the minimal
+    /// one the fixture builds.
+    ///
+    /// The interface block is the part worth exercising: dumpcap and Wireshark
+    /// both attach options to it, and one of them — `if_tsresol` — decides what
+    /// every timestamp in the file *means*. A reader that ignored it would date
+    /// a nanosecond capture a thousand times too far into the epoch and never
+    /// fail a test built from a fixture that omits the option. The unknown
+    /// block afterwards is the other half: real files carry blocks this app has
+    /// no interest in, and it has to step over them rather than lose its place.
+    #[test]
+    fn a_pcapng_with_interface_options_and_unknown_blocks_reads_correctly() {
+        let frame = fixture::ethernet(0x0806, &[0x22; 28]);
+        let mut out = Vec::new();
+
+        // Section header.
+        out.extend_from_slice(&0x0A0D_0D0Au32.to_le_bytes());
+        out.extend_from_slice(&28u32.to_le_bytes());
+        out.extend_from_slice(&0x1A2B_3C4Du32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&(-1i64).to_le_bytes());
+        out.extend_from_slice(&28u32.to_le_bytes());
+
+        // Interface description, carrying if_name ("en0") and if_tsresol
+        // (nanoseconds), then the end-of-options marker.
+        let mut options = Vec::new();
+        options.extend_from_slice(&2u16.to_le_bytes());
+        options.extend_from_slice(&3u16.to_le_bytes());
+        options.extend_from_slice(b"en0");
+        options.push(0); // padded to four
+        options.extend_from_slice(&9u16.to_le_bytes());
+        options.extend_from_slice(&1u16.to_le_bytes());
+        options.extend_from_slice(&[9, 0, 0, 0]); // 10^-9, then padding
+        options.extend_from_slice(&0u16.to_le_bytes());
+        options.extend_from_slice(&0u16.to_le_bytes());
+
+        let idb_len = 20 + options.len();
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&(idb_len as u32).to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&262_144u32.to_le_bytes());
+        out.extend_from_slice(&options);
+        out.extend_from_slice(&(idb_len as u32).to_le_bytes());
+
+        // A name-resolution block, which this app does not read and must not
+        // trip over.
+        out.extend_from_slice(&4u32.to_le_bytes());
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&[0xAB; 4]);
+        out.extend_from_slice(&16u32.to_le_bytes());
+
+        // One packet, timestamped in nanoseconds: two and a half seconds past
+        // the epoch second the other fixtures use.
+        let ticks = 1_700_000_000u64 * 1_000_000_000 + 500_000_000;
+        let padding = frame.len().next_multiple_of(4) - frame.len();
+        let total = 32 + frame.len() + padding;
+        out.extend_from_slice(&6u32.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&((ticks >> 32) as u32).to_le_bytes());
+        out.extend_from_slice(&(ticks as u32).to_le_bytes());
+        out.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+        out.extend_from_slice(&frame);
+        out.extend(std::iter::repeat_n(0u8, padding));
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+
+        // An interface-statistics block, which real captures end with.
+        out.extend_from_slice(&5u32.to_le_bytes());
+        out.extend_from_slice(&24u32.to_le_bytes());
+        out.extend_from_slice(&[0u8; 12]);
+        out.extend_from_slice(&24u32.to_le_bytes());
+
+        let (summary, packets) = read_all("soe-pcap-real-ng.pcapng", &out);
+
+        assert_eq!(summary.packets, 1);
+        assert!(!summary.truncated);
+        assert_eq!(packets[0].2, frame);
+        // The whole point: read as microseconds this would be some moment in
+        // 1970, not 2023.
+        assert_eq!(
+            packets[0].0,
+            Some(Duration::new(1_700_000_000, 500_000_000))
+        );
+    }
+
     #[test]
     fn a_file_that_is_not_a_capture_at_all_says_so_by_name() {
         let path = fixture::on_disk("soe-pcap-notacapture.pcap", b"this is just some text");

@@ -934,6 +934,122 @@ mod tests {
         );
     }
 
+    /// A slide in the shape PowerPoint actually writes one, rather than the
+    /// trimmed-down shapes above.
+    ///
+    /// Worth its own test because every difference here is a way the reader
+    /// could quietly return nothing on a real deck while passing every other
+    /// test in this file: namespaces bound to their real URIs rather than to
+    /// one-letter stand-ins, run properties sitting inside the run alongside
+    /// the text, a table whose cells are paragraphs several elements down, and
+    /// an `mc:AlternateContent` block wrapping a shape the way Office writes
+    /// one for a feature older versions cannot render.
+    #[test]
+    fn a_slide_shaped_the_way_powerpoint_writes_one_reads_in_full() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+       xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+       xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+    <p:grpSpPr><a:xfrm><a:off x="0" y="0"/></a:xfrm></p:grpSpPr>
+    <p:sp>
+      <p:nvSpPr>
+        <p:cNvPr id="2" name="Title 1"/>
+        <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+        <p:nvPr><p:ph type="ctrTitle"/></p:nvPr>
+      </p:nvSpPr>
+      <p:spPr/>
+      <p:txBody>
+        <a:bodyPr/><a:lstStyle/>
+        <a:p><a:r><a:rPr lang="en-GB" dirty="0"/><a:t>Second-quarter results</a:t></a:r>
+             <a:endParaRPr lang="en-GB" dirty="0"/></a:p>
+      </p:txBody>
+    </p:sp>
+    <p:sp>
+      <p:nvSpPr>
+        <p:cNvPr id="3" name="Content Placeholder 2"/>
+        <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+        <p:nvPr><p:ph idx="1"/></p:nvPr>
+      </p:nvSpPr>
+      <p:txBody>
+        <a:bodyPr/><a:lstStyle/>
+        <a:p><a:pPr lvl="0"/><a:r><a:rPr lang="en-GB"/><a:t>Revenue up 12 percent</a:t></a:r></a:p>
+        <a:p><a:pPr lvl="1"/><a:r><a:rPr lang="en-GB"/><a:t>Driven by the Bristol contract</a:t></a:r></a:p>
+      </p:txBody>
+    </p:sp>
+    <mc:AlternateContent>
+      <mc:Choice Requires="a14">
+        <p:sp>
+          <p:nvSpPr><p:cNvPr id="7" name="Note"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+          <p:txBody><a:bodyPr/><a:p><a:r><a:t>Figures are unaudited</a:t></a:r></a:p></p:txBody>
+        </p:sp>
+      </mc:Choice>
+    </mc:AlternateContent>
+    <p:graphicFrame>
+      <p:nvGraphicFramePr><p:cNvPr id="5" name="Table 4"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>
+      <a:graphic><a:graphicData><a:tbl>
+        <a:tr h="370840">
+          <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>Region</a:t></a:r></a:p></a:txBody></a:tc>
+          <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>Change</a:t></a:r></a:p></a:txBody></a:tc>
+        </a:tr>
+        <a:tr h="370840">
+          <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>Midlands</a:t></a:r></a:p></a:txBody></a:tc>
+          <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>up 4 percent</a:t></a:r></a:p></a:txBody></a:tc>
+        </a:tr>
+      </a:tbl></a:graphicData></a:graphic>
+    </p:graphicFrame>
+    <p:pic>
+      <p:nvPicPr>
+        <p:cNvPr id="6" name="Picture 5" descr="A bar chart of quarterly revenue"/>
+        <p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/>
+      </p:nvPicPr>
+      <p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+    </p:pic>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="8" name="Slide Number Placeholder 7"/><p:cNvSpPr/>
+        <p:nvPr><p:ph type="sldNum" sz="quarter" idx="12"/></p:nvPr></p:nvSpPr>
+      <p:txBody><a:bodyPr/><a:p><a:fld id="{X}" type="slidenum"><a:t>4</a:t></a:fld></a:p></p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"#;
+
+        let slide = parse_slide(xml).unwrap().expect("a visible slide");
+        assert_eq!(slide.title.as_deref(), Some("Second-quarter results"));
+        // The bullets, the shape Office wrapped for compatibility, and every
+        // cell of the table — in the order the slide lists them.
+        assert_eq!(
+            slide.body,
+            [
+                "Revenue up 12 percent",
+                "Driven by the Bristol contract",
+                "Figures are unaudited",
+                "Region",
+                "Change",
+                "Midlands",
+                "up 4 percent",
+            ]
+        );
+        assert_eq!(
+            slide.pictures,
+            [Some("A bar chart of quarterly revenue".to_string())]
+        );
+
+        // The slide-number placeholder is furniture, and the app announces the
+        // number itself — hearing "4" in the middle of the text would be the
+        // deck's own numbering arriving twice, differently.
+        let spoken = speak(&[slide]);
+        assert!(
+            spoken.contains("Slide 1 of 1. Second-quarter results."),
+            "{spoken}"
+        );
+        // The placeholder holds a `<a:fld>` whose text is the number 4. The app
+        // announces a slide's number itself, so letting that through would say
+        // the deck's own numbering a second time, differently, mid-slide.
+        assert!(!spoken.contains("\n4."), "{spoken}");
+    }
+
     /// A zip that is not a presentation, and a presentation with nothing in
     /// it, both have to fail as messages rather than as panics.
     #[test]
