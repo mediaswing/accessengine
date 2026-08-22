@@ -278,15 +278,49 @@ pub fn describe_image(model: &str, prompt: &str, image_base64: &str) -> Result<D
     )
 }
 
-/// Asks a model to rewrite the frame descriptions as continuous narration.
+/// What a narration pass is working from, which is the only thing that differs
+/// between the two callers of [`narrate`].
+///
+/// It exists because both of them end up describing themselves to somebody: in
+/// the log, and — when Ollama fails — in the sentence the user is shown. A
+/// capture summary that failed while "narrating the video" is a worse message
+/// than no message, since it names a file the user did not open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Narration {
+    /// Descriptions of the frames taken out of a video.
+    Video,
+    /// Figures counted out of a network capture.
+    Capture,
+}
+
+impl Narration {
+    /// What the model is being handed, for the log.
+    fn material(self) -> &'static str {
+        match self {
+            Self::Video => "frame descriptions",
+            Self::Capture => "counted capture figures",
+        }
+    }
+
+    /// What it is doing, as it appears in a failure the user reads.
+    fn doing(self) -> &'static str {
+        match self {
+            Self::Video => "narrating the video",
+            Self::Capture => "summarising the capture",
+        }
+    }
+}
+
+/// Asks a model to rewrite what it is given as continuous prose.
 ///
 /// No image goes with this one, which is why it can be answered by a text model
 /// as easily as by the vision model that produced the descriptions — see
 /// [`crate::config::Config::narration_model`].
-pub fn narrate(model: &str, request: &str) -> Result<Description> {
+pub fn narrate(model: &str, request: &str, about: Narration) -> Result<Description> {
     crate::log::line(format!(
-        "ollama: asking {model} to narrate {} characters of frame descriptions (num_ctx {NARRATION_CONTEXT_TOKENS})",
-        request.chars().count()
+        "ollama: asking {model} to narrate {} characters of {} (num_ctx {NARRATION_CONTEXT_TOKENS})",
+        request.chars().count(),
+        about.material()
     ));
     generate(
         model,
@@ -296,7 +330,7 @@ pub fn narrate(model: &str, request: &str) -> Result<Description> {
             "stream": false,
             "options": { "num_ctx": NARRATION_CONTEXT_TOKENS },
         }),
-        "narrating the video",
+        about.doing(),
     )
 }
 
@@ -502,7 +536,22 @@ pub fn install(mut on_line: impl FnMut(String)) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{explain_failure, has_model};
+    use super::{Narration, explain_failure, has_model};
+
+    /// A video and a capture are narrated by the same call, so the only thing
+    /// that can name the file the user actually opened is what the caller
+    /// passed — and "Ollama failed while narrating the video" is a worse
+    /// message than none at all on a `.pcap`.
+    #[test]
+    fn a_failure_names_the_work_that_was_actually_being_done() {
+        let capture = explain_failure("llama3.2", "context canceled", Narration::Capture.doing());
+        assert!(capture.contains("summarising the capture"), "{capture}");
+        assert!(!capture.contains("video"), "{capture}");
+
+        let video = explain_failure("llama3.2", "context canceled", Narration::Video.doing());
+        assert!(video.contains("narrating the video"), "{video}");
+        assert_ne!(capture, video);
+    }
 
     #[test]
     fn a_dropped_architecture_is_explained_rather_than_repeated() {

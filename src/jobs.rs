@@ -346,7 +346,7 @@ fn read_pcap(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Cance
         // A rewrite of figures the app already has. If it fails, or comes back
         // as a stub, the counted transcript is a complete answer on its own —
         // so this never costs the user the job.
-        match ollama::narrate(&narrator, &request) {
+        match ollama::narrate(&narrator, &request, ollama::Narration::Capture) {
             Ok(narration) if extract::pcap::narration_is_usable(&narration.text, &transcript) => {
                 text = extract::tidy(&narration.text);
                 note = t!(
@@ -705,7 +705,7 @@ fn read_video(path: PathBuf, config: &Config, tx: &Sender<Update>, cancel: &Canc
         // The narration is a rewrite of text the app already has. If it fails,
         // or comes back as a stub, the frame-by-frame account is still a full
         // description of the video — so this never costs the user the job.
-        match ollama::narrate(&narrator, &request) {
+        match ollama::narrate(&narrator, &request, ollama::Narration::Video) {
             Ok(narration) if extract::video::narration_is_usable(&narration.text, &transcript) => {
                 text = extract::tidy(&narration.text);
                 note = t!(
