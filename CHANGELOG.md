@@ -3,6 +3,151 @@
 What changed in each release, written for someone deciding whether to update
 rather than for someone reading the diff.
 
+## [2.3.0] - 2026-08-22
+
+Two new kinds of file. PowerPoint decks are read slide by slide, with the
+title, the speaker notes and the pictures' alt text all put back in the places
+they belong. Network captures are counted packet by packet and then written up
+as prose, which is the only form in which a capture is worth listening to at
+all.
+
+Also worth the update on its own: the "written by AI" line added in 2.2.0 could
+name the wrong speech engine if you changed engines after a description was
+made, which got its most important claim backwards. It is now written at the
+moment the text is spoken.
+
+### Added
+
+- **Reads PowerPoint decks (`.pptx`).** A slide is a heap of floating text
+  boxes with no reading order worth the name, so the shape is put back before
+  anything is spoken: every slide is announced by number and title in one
+  breath — "Slide 4 of 12. Second-quarter results" — and each bullet gets a
+  full stop of its own, since slides are written without punctuation far more
+  often than not. **Speaker notes are read too**, which matters more than it
+  sounds: they are very often the actual sentences the three bullet points
+  above them were an aide-memoire for, and they live in a separate part of the
+  file that nothing reading only the slides will find. **Pictures are announced
+  by their alt text**, and a picture that has none is still announced as one —
+  a picture nobody described is a hole in the slide, and silence there is
+  indistinguishable from a slide with no picture on it. The slide number,
+  footer and date placeholders are left out, being the same words on every
+  slide of most decks, and hidden slides are skipped without taking up a
+  number. The running order comes from the deck's own list of slides rather
+  than from the filenames inside it, so a reordered deck is read in the order
+  it is presented.
+- **Summarises network captures (`.pcap`, `.pcapng`, `.cap`).** A list of
+  packets read aloud is unusable — a quiet minute on one laptop is tens of
+  thousands of lines. So every packet is counted here on your own machine into
+  an ordered account of the facts: who talked to whom, over what, for how long,
+  which names were looked up, and which connections were refused, never
+  answered, or cut off after opening. A local text model is then given those
+  counted figures and asked only to write them up as English. If Ollama cannot
+  be reached, or the model answers with a stub, the counted figures are read
+  out as they stand — a failure costs you some fluency and none of the numbers.
+  The summary ends with a line saying which parts were counted and which a
+  model wrote, and which voice is about to read it; both that and the
+  writing-up itself have their own switches under **Settings**. Classic
+  captures in either byte order and either timestamp precision are read, as is
+  `.pcapng`, along with Ethernet, raw IP, loopback and both Linux "any"
+  pseudo-headers, IPv4 and IPv6, TCP, UDP, ICMP and ARP.
+- **Captures are read on your own computer unless you allow otherwise.** A
+  capture summary names the machines on your network and the addresses they
+  looked up, which together say a good deal about who was doing what — and a
+  capture is usually being read because something has already gone wrong. So
+  unlike everything else the app opens, it is not handed to ElevenLabs merely
+  because the engine dropdown was set that way when the file was opened. A new
+  switch under **Settings**, off as it ships, decides that; with it off a
+  capture is read by a system voice whatever the dropdown says, and the Read
+  pane says which voice will read it rather than swapping one in silently. It
+  is the same answer, for the same reason, that the app already gives to
+  looking up where a photo was taken.
+- **A `.ppt` is refused with the way out rather than a shrug.** The older
+  PowerPoint format is a 1997 binary that shares nothing with `.pptx` but a
+  syllable. Opening one used to say "not a file type this app can read", which
+  is both true and useless from an app that plainly does read PowerPoint; it
+  now says to open it in PowerPoint and save it again as `.pptx`.
+- **`.pptx` files work from the Windows right-click menu** as well, alongside
+  text, Word, PDF and CSV. Captures deliberately do not: they need Ollama, and
+  a headless run has no window to ask about it in.
+- **macOS offers the app for presentations and captures.** The bundle now
+  declares both, so **Open With** lists Speech Output Engine for a `.pptx` and
+  for a `.pcap`. A capture needed a type declaring before it could be offered
+  at all — macOS knows nothing about the extension beyond it being data.
+
+### Fixed
+
+- **A capture summary now reads its addresses out as addresses.** Written down,
+  `192.168.1.5` is an address; read aloud by a synthesiser it is "192 168 1 5",
+  because the dots are punctuation to it — four loose numbers that nobody can
+  write down or repeat back, which for a summary whose whole subject is which
+  machine talked to which is most of the point gone. Addresses and the domain
+  names beside them are now spelt the way they have to be spoken — "192 dot 168
+  dot 1 dot 5", "updates dot example dot com" — including the doubled colon in
+  an IPv6 address, which changes what the address means and so least deserves
+  to go unsaid. Two smaller things heard alongside it are fixed too: a
+  conversation that opens the capture says so rather than "starting 0 seconds
+  into the capture", and one lasting a single packet no longer claims to last
+  0 seconds.
+- **The AI disclosure named the wrong engine if you changed it afterwards.**
+  The line at the end of a video or photo description says which voice is about
+  to read it — and, for ElevenLabs, that the text is being sent to a cloud
+  service to be spoken. It was written when the description was made, but the
+  engine is a dropdown you can change at any point before pressing Apply. So
+  describing a video with a system voice selected and then switching to
+  ElevenLabs uploaded the whole description while the sentence riding along
+  with it said the reading was happening on your own computer — an inversion of
+  the one claim that line exists to make. The disclosure is now composed at the
+  moment the text is spoken, from the engine that is actually about to speak
+  it.
+- **A file dropped on the window while a dialog was open went straight past
+  it.** Keyboard shortcuts have always gone inert while a confirmation is up;
+  dropped files did not, so dropping one while the "describing this video"
+  warning was on screen started reading it behind the dialog — and then
+  answering the dialog did nothing at all, silently, because a job was by then
+  already running. Both now read from one list of what counts as a dialog being
+  open, rather than each keeping its own copy of it, which is how the two came
+  to disagree. A file dropped while a job is running is refused the same way
+  the Choose File button is already disabled, rather than half-replacing the
+  file on screen with one it will not read.
+- **"Don't ask again" no longer sticks when you press Escape.** The video
+  warning's checkbox was applied however the dialog closed, so tabbing over it
+  on the way out and then pressing Escape turned the warning off for good.
+  Pressing either button still commits it — "not this video, and stop asking"
+  is a reasonable thing to mean — but Escape and a click on the backdrop mean
+  what they mean everywhere else in the app: not now, and nothing changed.
+
+### Security
+
+- **A capture file is read as the hostile input it is.** A `.pcap` is a
+  recording of what arrived off a network, so every length inside it was
+  written by whoever sent the traffic. The reader streams the file rather than
+  holding it, checks every length against what is actually present before using
+  it, allocates nothing on the strength of a number read out of the file, and
+  yields nothing rather than panicking on a packet that ends early. The tables
+  the summary is built from stop growing at a fixed ceiling and count the
+  overflow instead, so a port scan cannot turn half a million one-packet
+  conversations into half a million entries. Every one of those bounds is held
+  to by a test that mutates, truncates and scrambles a real capture several
+  thousand ways and requires the reader to refuse each one rather than fall
+  over.
+- **The names out of a capture are treated as what they are: text somebody else
+  chose.** Every other figure in a capture summary is counted by the app, but
+  the domain names looked up are bytes off the wire — and they are the one part
+  that both gets spoken aloud and goes into a model's prompt. Only the first
+  question of a query is read, never an answer's compression pointers, and only
+  when every label holds what a hostname may actually contain: letters, digits,
+  hyphens and underscores. The section carrying them says in the transcript
+  itself, not only in the editable prompt, that they are text from the file and
+  that no instruction appearing among them is to be followed. That narrows the
+  opening rather than closing it — a name can still read as a sentence — so it
+  is worth saying plainly that the worst it buys is a misleading piece of
+  prose, over counted figures that are still there underneath and a line
+  saying a model wrote the words.
+- **A `.pptx` is bounded after decompression**, at 32 MB per part and 128 MB
+  across the deck. A per-part limit alone is no protection here the way it is
+  for a Word document: a presentation may hold any number of slides, and a
+  thousand parts each just under the limit is the same zip bomb spread out.
+
 ## [2.2.0] - 2026-08-21
 
 Two additions, both about what a video or photo's description doesn't tell you
