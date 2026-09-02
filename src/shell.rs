@@ -50,7 +50,9 @@ fn menu_label() -> String {
 ///
 /// On Linux this doubles as the menu text, because Nautilus shows a script's
 /// file name; macOS takes its wording from the workflow's `Info.plist` and so
-/// stays translated.
+/// stays translated. Windows registers under `REGISTRY_KEY` instead and writes
+/// nothing named after either, so this does not exist there.
+#[cfg(unix)]
 const ENTRY_STEM: &str = "Save as MP3 with AccessEngine";
 
 /// Where the helper script lives.
@@ -532,6 +534,7 @@ mod tests {
 
     /// The installed entry is found again by name, so that name must be one
     /// path component and must not move when the user changes language.
+    #[cfg(unix)]
     #[test]
     fn the_on_disk_name_is_a_single_language_independent_component() {
         assert!(!ENTRY_STEM.is_empty());
