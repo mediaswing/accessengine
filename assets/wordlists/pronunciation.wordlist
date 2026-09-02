@@ -1,0 +1,115 @@
+# Pronunciation — general English
+#
+# Fixes for words that synthesisers routinely get wrong. The left side is what
+# is written; the right side is a respelling of how it should sound.
+#
+# This file is yours to edit. It is copied into your settings folder on first
+# run, and the app never overwrites it afterwards.
+
+[pronounce]
+
+# --- Abbreviations that should be read as words, not letters ---
+#
+# Write these WITHOUT their trailing full stop. A stop between two letters is
+# part of the word ("e.g"), but the one at the end is punctuation, and leaving
+# it on would make a rule that can never match.
+e.g = for example
+i.e = that is
+etc = etcetera
+vs = versus
+approx = approximately
+NB = note
+RSVP = R S V P
+
+# Titles such as "Dr." and "Prof." are deliberately absent: every back end
+# already reads them correctly, and a rule here would leave the stop behind
+# ("Doctor. Smith"), making the voice pause mid-name.
+
+# --- British place names that trip up American voices ---
+Gloucester = Gloster
+Worcester = Wooster
+Worcestershire = Wooster-sher
+Leicester = Lester
+Bicester = Bister
+Towcester = Toaster
+Greenwich = Grennitch
+Norwich = Norritch
+Warwick = Worrick
+Berkeley = Barkley
+Derby = Darby
+Salisbury = Sawlsbry
+Edinburgh = Edinbura
+Loughborough = Luffbura
+Slaithwaite = Slathwait
+Belvoir = Beaver
+Beaulieu = Bewley
+Cholmondeley = Chumley
+Featherstonehaugh = Fanshaw
+Marylebone = Marlybone
+Southwark = Sutherk
+Holborn = Hoban
+Magdalen = Maudlin
+Alnwick = Annick
+Keighley = Keithley
+Frome = Froom
+Shrewsbury = Shrowsbry
+Hawarden = Harden
+Ruthin = Rithin
+Mousehole = Mowzel
+
+# --- Technology and jargon ---
+SQL = sequel
+SQLite = sequel light
+GUI = gooey
+JSON = Jason
+YAML = yammle
+API = A P I
+URL = U R L
+URI = U R I
+HTTP = H T T P
+HTTPS = H T T P S
+UUID = U U I D
+regex = redge ex
+nginx = engine ex
+PostgreSQL = post gres
+MySQL = my sequel
+Kubernetes = koo ber net eez
+Ubuntu = oo boon too
+Linux = linnux
+GNU = guh new
+cache = cash
+Chmod = C H mod
+sudo = soo doo
+tmux = tee mux
+vim = vim
+Xcode = X code
+macOS = mac O S
+iOS = i O S
+C# = C sharp
+C++ = C plus plus
+F# = F sharp
+Node.js = node jay ess
+jQuery = jay query
+LaTeX = lay tech
+PDF = P D F
+CSV = C S V
+AI = A I
+LLM = L L M
+GPU = G P U
+CPU = C P U
+RAM = ram
+SSD = S S D
+Wi-Fi = why fye
+
+# --- Words voices commonly stress wrongly ---
+awry = a rye
+epitome = eh pit oh me
+hyperbole = high per bo lee
+segue = seg way
+niche = neesh
+quay = key
+colonel = kernel
+salmon = sammon
+subtle = suttle
+Wednesday = Wensday
+February = Febyoo ary

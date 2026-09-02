@@ -1,0 +1,55 @@
+# Classroom / workplace safe — starter list
+#
+# A deliberately small, mild starter set. Every school and workplace draws the
+# line in a different place, so this is meant to be edited rather than trusted
+# as-is. It is copied into your settings folder on first run and never
+# overwritten afterwards.
+#
+# Sections:
+#   [replace]  say the word on the right instead
+#   [block]    handle according to the "Blocked words" setting
+#              (say a placeholder / say nothing / skip the whole sentence)
+#
+# Matching is case-insensitive and whole-word. A trailing `*` matches the rest
+# of the word, so `damn*` also catches `damned` and `damning`.
+#
+# IMPORTANT: this filter operates on whole words. It will not catch a word
+# spelled with symbols, split across a line break, or implied by context. Treat
+# it as a safety net for reading unfamiliar text aloud, not as a guarantee.
+
+[replace]
+
+# Mild profanity, softened rather than silenced, so the sentence still scans.
+damn = darn
+damned = darned
+damning = severe
+goddamn = goshdarn
+hell = heck
+crap = rubbish
+crappy = poor
+bloody = blooming
+bugger = bother
+bollocks = nonsense
+arse = backside
+arsed = bothered
+git = fool
+prat = fool
+plonker = fool
+twit = fool
+sod = bother
+blimey = goodness
+jeez = gosh
+
+# Coarse but common intensifiers.
+freaking = really
+frigging = really
+friggin = really
+effing = really
+
+[block]
+
+# Words replaced with the placeholder (default: "beep").
+# Add your own below — one per line, `*` allowed at either end.
+#
+# Left intentionally short: fill this in with the list your setting actually
+# uses, rather than inheriting someone else's judgement.

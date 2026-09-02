@@ -1,0 +1,14 @@
+# Normalise line endings for text files regardless of a contributor's
+# `core.autocrlf` setting, and mark bundled binary assets explicitly so
+# Windows checkouts (where autocrlf defaults to true) never attempt CRLF
+# translation on them. Git's own binary heuristic usually catches these, but
+# a compact WAV encoding is not guaranteed to contain a NUL byte in the
+# sampled region, so it is not something to rely on for audio assets that
+# have to play back byte-for-byte.
+* text=auto eol=lf
+
+*.ttf binary
+*.wav binary
+*.png binary
+*.ico binary
+*.icns binary
