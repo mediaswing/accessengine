@@ -171,6 +171,7 @@ player.now_playing       = "playing now"
 
 key.button         = "🔑  Enter your {provider} credentials…"
 key.button_refused = "🔑  Those credentials were refused — enter others…"
+key.button_change  = "🔑  Change your {provider} credentials…"
 
 key.title          = "Your {provider} credentials"
 key.needs_account  = "Needs an account —"

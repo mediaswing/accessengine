@@ -150,7 +150,14 @@ pub fn convert(input: &Path, output: Option<PathBuf>) -> Result<PathBuf> {
         plan.skipped
     );
 
-    let destination = output.unwrap_or_else(|| beside(input));
+    // An explicit --out is the caller saying where it goes, overwrite and
+    // all. A destination this app picked is not: right-clicking report.docx
+    // in a folder that already holds a hand-made report.mp3 must not silently
+    // destroy it, and there is no save dialog on this path to ask.
+    let destination = match output {
+        Some(path) => path,
+        None => free_beside(input)?,
+    };
     let request = cfg
         .voice_request()
         .context("no cloud engine is configured")?;
@@ -166,12 +173,70 @@ fn beside(input: &Path) -> PathBuf {
     input.with_extension("mp3")
 }
 
+/// The same, but stepping aside rather than over anything already there.
+///
+/// `report.mp3`, then `report (2).mp3`, and so on. Bounded because a folder
+/// that already holds a hundred of them is a mistake to report, not to add to.
+fn free_beside(input: &Path) -> Result<PathBuf> {
+    let first = beside(input);
+    if !first.exists() {
+        return Ok(first);
+    }
+    let stem = first
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    for n in 2..=99 {
+        let candidate = first.with_file_name(format!("{stem} ({n}).mp3"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    bail!(
+        "{} already exists, and so do the next 98 names after it. \
+         Pass --out to say where this one should go.",
+        first.display()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn parsed(args: &[&str]) -> Invocation {
         parse(args.iter().map(std::ffi::OsString::from))
+    }
+
+    /// Nothing the right-click entry writes may land on top of a file that is
+    /// already there: there is no save dialog on that path to ask first.
+    #[test]
+    fn a_chosen_destination_steps_aside_rather_than_over() {
+        let dir = std::env::temp_dir().join(format!("accessengine-cli-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let input = dir.join("report.docx");
+        std::fs::write(&input, b"x").expect("writing the input");
+        assert_eq!(free_beside(&input).expect("a free name"), dir.join("report.mp3"));
+
+        std::fs::write(dir.join("report.mp3"), b"precious").expect("writing an mp3");
+        assert_eq!(
+            free_beside(&input).expect("a free name"),
+            dir.join("report (2).mp3")
+        );
+
+        std::fs::write(dir.join("report (2).mp3"), b"also precious").expect("writing");
+        assert_eq!(
+            free_beside(&input).expect("a free name"),
+            dir.join("report (3).mp3")
+        );
+
+        // And the file that was already there is still what it was.
+        assert_eq!(
+            std::fs::read(dir.join("report.mp3")).expect("reading back"),
+            b"precious"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The argument this app is overwhelmingly given is a bare path from a

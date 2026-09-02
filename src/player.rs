@@ -217,6 +217,11 @@ fn worker_main(
     let mut device: Option<rodio::MixerDeviceSink> = None;
     let mut tracks: Vec<Track> = Vec::new();
     let mut current: Option<Playing> = None;
+    // Where the running order got to. Kept because `current` is cleared by
+    // Stop, by the end of the list and by a track that will not decode, and
+    // Skip still has to mean "the one after the one you were on" afterwards
+    // rather than silently meaning "the one after the first".
+    let mut last_index: usize = 0;
     // The next track, already begun under the tail of this one.
     let mut faded: Option<Playing> = None;
     let mut volume = 1.0f32;
@@ -263,11 +268,17 @@ fn worker_main(
                     match begin(out, &tracks, start, None, volume) {
                         Ok(playing) => {
                             emit(Event::Started(playing.index));
+                            last_index = playing.index;
                             current = Some(playing);
                         }
                         Err(e) => {
                             log::error!("starting playback: {e:#}");
                             emit(Event::Error(format!("{e:#}")));
+                            // Nothing is playing now, and the status still
+                            // says otherwise. Left alone, the tab keeps a
+                            // Pause button and a frozen position that no
+                            // press can clear.
+                            publish(&status, Status::default());
                         }
                     }
                 }
@@ -283,21 +294,28 @@ fn worker_main(
                 }
             }
             Ok(Command::Stop) => {
+                if let Some(playing) = current.as_ref() {
+                    last_index = playing.index;
+                }
                 stop_all(&mut current, &mut faded);
                 publish(&status, Status::default());
                 repaint();
             }
             Ok(Command::Skip(delta)) => {
-                let from = current.as_ref().map(|p| p.index).unwrap_or(0) as isize;
+                let from = current.as_ref().map(|p| p.index).unwrap_or(last_index) as isize;
                 let target = (from + delta).clamp(0, tracks.len().saturating_sub(1) as isize);
                 stop_all(&mut current, &mut faded);
                 if let Some(out) = device.as_ref() {
                     match begin(out, &tracks, target as usize, None, volume) {
                         Ok(playing) => {
                             emit(Event::Started(playing.index));
+                            last_index = playing.index;
                             current = Some(playing);
                         }
-                        Err(e) => emit(Event::Error(format!("{e:#}"))),
+                        Err(e) => {
+                            emit(Event::Error(format!("{e:#}")));
+                            publish(&status, Status::default());
+                        }
                     }
                 }
             }
@@ -336,6 +354,7 @@ fn worker_main(
             match faded.take() {
                 Some(next) => {
                     emit(Event::Started(next.index));
+                    last_index = next.index;
                     current = Some(next);
                 }
                 None => match ended + 1 {
@@ -346,17 +365,25 @@ fn worker_main(
                         match started {
                             Some(Ok(playing)) => {
                                 emit(Event::Started(playing.index));
+                                last_index = playing.index;
                                 current = Some(playing);
                             }
                             Some(Err(e)) => {
                                 log::error!("starting the next track: {e:#}");
                                 emit(Event::Error(format!("{e:#}")));
+                                last_index = next;
                                 current = None;
+                                publish(&status, Status::default());
                             }
-                            None => current = None,
+                            None => {
+                                last_index = ended;
+                                current = None;
+                                publish(&status, Status::default());
+                            }
                         }
                     }
                     _ => {
+                        last_index = ended;
                         current = None;
                         publish(&status, Status::default());
                         emit(Event::Finished);

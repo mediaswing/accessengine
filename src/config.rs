@@ -261,7 +261,7 @@ impl Default for Config {
             google_pitch: 0.0,
             polly_access_key_id: String::new(),
             polly_secret_access_key: String::new(),
-            polly_region: polly::DEFAULT_REGION.to_string(),
+            polly_region: String::new(),
             polly_profile: polly::DEFAULT_PROFILE.to_string(),
             polly_voice_id: String::new(),
             polly_voice_name: String::new(),
@@ -503,6 +503,11 @@ impl Config {
 
     /// The region Polly is asked in: the setting, then the environment, then
     /// whatever `~/.aws/config` says.
+    ///
+    /// The setting starts empty for that reason. Defaulting it to
+    /// [`polly::DEFAULT_REGION`] would make it never blank, and every branch
+    /// below it unreachable — silently ignoring the `AWS_REGION` of somebody
+    /// who has one.
     pub fn aws_region(&self) -> String {
         let configured = self.polly_region.trim();
         if !configured.is_empty() {
@@ -788,7 +793,10 @@ mod tests {
         assert_eq!(cfg.openai_model, openai::DEFAULT_MODEL);
         assert_eq!(cfg.openai_speed, 1.0);
         assert_eq!(cfg.deepgram_voice_id, deepgram::DEFAULT_VOICE);
-        assert_eq!(cfg.polly_region, polly::DEFAULT_REGION);
+        // The region is the exception: it stays blank so that `aws_region`
+        // can consult the environment and `~/.aws/config` before falling back
+        // to `polly::DEFAULT_REGION`.
+        assert!(cfg.polly_region.is_empty(), "{}", cfg.polly_region);
         assert_eq!(cfg.polly_engine, polly::DEFAULT_ENGINE);
         assert_eq!(cfg.google_speaking_rate, 1.0);
     }

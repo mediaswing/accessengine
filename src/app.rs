@@ -703,6 +703,14 @@ impl AccessEngine {
             return;
         }
         self.plan_pos = position;
+        // The other half of the rule `load_tracks` keeps: the reading and the
+        // player are two things to listen to, and both at once is neither.
+        // Reachable from the keyboard alone — Space on the Player tab, with a
+        // playlist running, lands here.
+        if self.player_state.is_active() {
+            self.audio.send(PlayerCommand::Stop);
+            self.player_state = PlayState::Idle;
+        }
         self.follow_cursor = true;
         self.apply_voice_settings();
 
@@ -1539,9 +1547,19 @@ impl AccessEngine {
     /// engine is chosen and there is either nothing to send at all, or
     /// something the provider has since turned down.
     fn needs_api_key_for(&self, engine: EngineKind) -> bool {
-        engine.is_cloud()
-            && !self.cfg.api_key_from_env(engine)
+        self.can_enter_credentials_for(engine)
             && (!self.cfg.has_credentials(engine) || self.api_key_rejected)
+    }
+
+    /// Whether there is a credential here for the user to change at all.
+    ///
+    /// The Settings tab offers the button on this alone, rather than on
+    /// [`Self::needs_api_key_for`]: not every provider says "that key is no
+    /// good" in a way this app can recognise, and somebody who has saved a
+    /// credential with one character wrong needs a way back to the dialog even
+    /// when the failure came through as something else entirely.
+    fn can_enter_credentials_for(&self, engine: EngineKind) -> bool {
+        engine.is_cloud() && !self.cfg.api_key_from_env(engine)
     }
 
     fn api_key_button(&mut self, ui: &mut egui::Ui) {
@@ -1550,6 +1568,8 @@ impl AccessEngine {
         let engine = self.key_engine();
         let text = if self.api_key_rejected {
             t!("key.button_refused")
+        } else if self.cfg.has_credentials(engine) {
+            t!("key.button_change", provider = engine.provider_name())
         } else {
             t!("key.button", provider = engine.provider_name())
         };
@@ -1990,7 +2010,8 @@ impl AccessEngine {
         // say how long the track is would otherwise get a bar that lies about
         // where in it you are.
         if let Some(total) = status.total.filter(|t| !t.is_zero()) {
-            let mut at = status.elapsed.as_secs_f32();
+            let was = status.elapsed.as_secs_f32();
+            let mut at = was;
             let label = field_label(ui, &t!("player.position_label"));
             let width = ui.available_width();
             let response = ui
@@ -2004,7 +2025,12 @@ impl AccessEngine {
                 })
                 .inner
                 .labelled_by(label);
-            if response.drag_stopped() || response.lost_focus() {
+            // Only when the handle actually moved. `at` is re-seeded from the
+            // playhead every frame, so acting on `lost_focus` alone made
+            // tabbing away from the slider seek to where the track already
+            // was — a real `try_seek` mid-playback, and on a format that
+            // cannot seek, an error message for a jump nobody asked for.
+            if (response.drag_stopped() || response.lost_focus()) && at != was {
                 self.audio
                     .send(PlayerCommand::Seek(Duration::from_secs_f32(at)));
             }
@@ -2555,8 +2581,11 @@ impl AccessEngine {
         }
         // The key is not part of the form: it is a credential, it is entered in
         // its own dialog, and it is wanted as soon as the cloud engine is
-        // picked here rather than after an Apply.
-        if self.needs_api_key_for(self.draft.engine) {
+        // picked here rather than after an Apply. Offered whenever there is one
+        // to change, not only when this app has noticed it is wrong, so that a
+        // credential the provider turns down in some way we do not recognise is
+        // still fixable from the window.
+        if self.can_enter_credentials_for(self.draft.engine) {
             self.api_key_button(ui);
         }
 
@@ -2922,19 +2951,32 @@ impl AccessEngine {
 
     /// The AWS region, profile and synthesis engine.
     fn polly_settings(&mut self, ui: &mut egui::Ui) {
+        // Typed, not chosen from a list. AWS adds regions faster than
+        // `polly::REGIONS` can be updated, and a picker of nine was the only
+        // way to set this: somebody whose Polly quota is in `us-east-2` could
+        // not reach it, and could not blank the field to fall back to their
+        // own AWS config either. The list stays as a menu of the common ones.
         let label = field_label(ui, &t!("settings.polly_region"));
         let mut region = self.draft.polly_region.clone();
-        let width = ui.available_width();
-        egui::ComboBox::from_id_salt("polly-region")
-            .selected_text(region.clone())
-            .width(width)
-            .show_ui(ui, |ui| {
-                for name in polly::REGIONS {
-                    ui.selectable_value(&mut region, (*name).to_string(), *name);
-                }
-            })
-            .response
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("polly-region")
+                .selected_text("")
+                .width(24.0)
+                .show_ui(ui, |ui| {
+                    for name in polly::REGIONS {
+                        ui.selectable_value(&mut region, (*name).to_string(), *name);
+                    }
+                });
+            // Blank means "work it out": the environment, then ~/.aws/config,
+            // then the default. Showing what that comes to is what makes an
+            // empty field readable rather than alarming.
+            ui.add(
+                egui::TextEdit::singleline(&mut region)
+                    .hint_text(self.cfg.aws_region())
+                    .desired_width(f32::INFINITY),
+            )
             .labelled_by(label);
+        });
         self.draft.polly_region = region;
 
         // Which engines to offer: the ones the chosen voice can actually be

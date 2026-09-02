@@ -504,6 +504,9 @@ pub fn describe_api_error(provider: &str, status: reqwest::StatusCode, body: &st
     let message = extract_detail(body);
     match status.as_u16() {
         401 => format!("{provider} {KEY_REJECTED} Enter another on the General tab."),
+        400 | 403 if is_credential_complaint(body) => {
+            format!("{provider} {KEY_REJECTED} Enter another on the General tab.")
+        }
         403 => format!(
             "{provider} refused the request. The credentials may be right but not \
              permitted to use text to speech{}",
@@ -519,6 +522,38 @@ pub fn describe_api_error(provider: &str, status: reqwest::StatusCode, body: &st
         ),
         _ => format!("{provider} returned HTTP {status}{}", suffix(&message)),
     }
+}
+
+/// Whether an error body is the provider objecting to the credential itself,
+/// rather than to what that credential is allowed to do.
+///
+/// Only ElevenLabs, OpenAI and Deepgram answer a bad key with a plain 401. AWS
+/// signs every request, so a wrong key is a *signature* failure — a 403 naming
+/// `UnrecognizedClientException` or `InvalidSignatureException` — and Google
+/// answers `400 API key not valid`. Without this the UI reads both as "the
+/// credential is fine but not permitted", never offers the button for entering
+/// another, and one mistyped character can only be undone by hand-editing
+/// `config.json`.
+///
+/// Matched against the whole body rather than the extracted sentence because
+/// AWS puts the useful part in `__type`, which is not the human-readable
+/// `Message` that [`extract_detail`] picks out.
+fn is_credential_complaint(body: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        // AWS, from the SigV4 error table.
+        "UnrecognizedClientException",
+        "InvalidSignatureException",
+        "InvalidClientTokenId",
+        "SignatureDoesNotMatch",
+        "IncompleteSignature",
+        "MissingAuthenticationToken",
+        "InvalidAccessKeyId",
+        "ExpiredToken",
+        // Google.
+        "API_KEY_INVALID",
+        "API key not valid",
+    ];
+    MARKERS.iter().any(|marker| body.contains(marker))
 }
 
 fn suffix(message: &Option<String>) -> String {
@@ -664,6 +699,46 @@ mod tests {
             assert!(message.contains("API key"), "{message}");
         }
         assert!(!is_key_rejection("ElevenLabs rate limit hit."));
+    }
+
+    /// The two providers that never send a 401 for a bad credential. Without
+    /// this, saving one wrong character leaves the UI with no way back to the
+    /// dialog and `config.json` the only way out.
+    #[test]
+    fn a_signature_or_key_complaint_counts_however_it_arrives() {
+        let aws = describe_api_error(
+            "Amazon Polly",
+            reqwest::StatusCode::FORBIDDEN,
+            r#"{"__type":"UnrecognizedClientException","Message":"The security token included in the request is invalid."}"#,
+        );
+        assert!(is_key_rejection(&aws), "{aws}");
+
+        let signature = describe_api_error(
+            "Amazon Polly",
+            reqwest::StatusCode::FORBIDDEN,
+            r#"{"__type":"InvalidSignatureException","Message":"The request signature we calculated does not match."}"#,
+        );
+        assert!(is_key_rejection(&signature), "{signature}");
+
+        let google = describe_api_error(
+            "Google Cloud",
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":{"status":"INVALID_ARGUMENT","message":"API key not valid. Please pass a valid API key."}}"#,
+        );
+        assert!(is_key_rejection(&google), "{google}");
+    }
+
+    /// A credential that is real but not allowed to do this is a different
+    /// problem with a different answer, and must not be read as a bad key.
+    #[test]
+    fn a_permission_refusal_is_not_a_refused_key() {
+        let denied = describe_api_error(
+            "Amazon Polly",
+            reqwest::StatusCode::FORBIDDEN,
+            r#"{"__type":"AccessDeniedException","Message":"User is not authorized to perform polly:SynthesizeSpeech"}"#,
+        );
+        assert!(!is_key_rejection(&denied), "{denied}");
+        assert!(denied.contains("not permitted"), "{denied}");
     }
 
     #[test]

@@ -29,10 +29,29 @@ use anyhow::{Context, Result};
 use crate::config;
 use crate::t;
 
-/// What the entry is called in the menu, and what the files it makes are for.
+/// What the entry is called in the menu.
+///
+/// Display only. Nothing on disk is named after it — see [`ENTRY_STEM`].
 fn menu_label() -> String {
     t!("shell.menu_label")
 }
+
+/// The name the installed entry has on disk, in every language.
+///
+/// Deliberately not [`menu_label`]. The label is translated, and a path built
+/// from it changes when the user changes language: the entry installed as one
+/// name is then invisible to `is_installed`, "Add" writes a second one beside
+/// it, and "Remove" deletes nothing while reporting success — leaving an entry
+/// in the file manager that the app can no longer see or take away. A
+/// translation containing a `/` would not even be a single path component.
+/// Windows has always kept the two apart (`REGISTRY_KEY` for the key,
+/// `menu_label` for the value shown); this is the same separation for the
+/// platforms whose registration is a file.
+///
+/// On Linux this doubles as the menu text, because Nautilus shows a script's
+/// file name; macOS takes its wording from the workflow's `Info.plist` and so
+/// stays translated.
+const ENTRY_STEM: &str = "Save as MP3 with AccessEngine";
 
 /// Where the helper script lives.
 pub fn script_path() -> Option<PathBuf> {
@@ -218,7 +237,7 @@ fn workflow_path() -> Option<PathBuf> {
     directories::UserDirs::new().map(|dirs| {
         dirs.home_dir()
             .join("Library/Services")
-            .join(format!("{}.workflow", menu_label()))
+            .join(format!("{ENTRY_STEM}.workflow"))
     })
 }
 
@@ -454,7 +473,7 @@ fn scripts_dir() -> Option<PathBuf> {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn entry_path() -> Option<PathBuf> {
-    scripts_dir().map(|dir| dir.join(menu_label()))
+    scripts_dir().map(|dir| dir.join(ENTRY_STEM))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -510,6 +529,19 @@ fn xml_escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The installed entry is found again by name, so that name must be one
+    /// path component and must not move when the user changes language.
+    #[test]
+    fn the_on_disk_name_is_a_single_language_independent_component() {
+        assert!(!ENTRY_STEM.is_empty());
+        assert!(ENTRY_STEM.is_ascii(), "{ENTRY_STEM}");
+        assert!(
+            !ENTRY_STEM.contains('/') && !ENTRY_STEM.contains('\\'),
+            "{ENTRY_STEM}"
+        );
+        assert_eq!(Path::new(ENTRY_STEM).components().count(), 1);
+    }
 
     /// Whatever else changes, the script must never carry a credential: it is
     /// a plain file in a folder, and the whole point is that it asks the app.
