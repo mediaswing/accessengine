@@ -9,6 +9,22 @@ page.
 
 ## [Unreleased]
 
+### Added
+
+- PowerPoint presentations can be read. Both formats open — `.pptx`, and the
+  `.ppt` that came before it, along with `.pptm`, `.pps` and `.ppsx` — and
+  which one a file is is decided by what is inside it rather than by its name,
+  so a `.pptx` that arrived renamed to `.ppt` still opens.
+
+  Each slide is announced by its number, and a slide with no text on it says so
+  rather than being skipped: someone following along by ear is counting, and a
+  deck whose fourth slide is one photograph should not renumber the fifth.
+  Master slides and layouts are left out, because their placeholder text is
+  "Click to edit Master title style". Speaker notes are not read. A
+  password-protected presentation says so rather than reading out ciphertext,
+  and a presentation whose slides would expand to more than 64 MB of XML is
+  refused rather than allowed to fill memory.
+
 ### Changed
 
 - A CSV is read as a table rather than as lines of text. Each row is announced

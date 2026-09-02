@@ -28,6 +28,11 @@ reqwest = { version = "0.13.4", default-features = false, features = [
     "rustls",
 ] }
 
+# PowerPoint. A `.pptx` is a zip of XML: `deflate` is the only method Office
+# has ever written one with, and the rest of the crate's formats would be dead
+# weight. The legacy `.ppt` container is read by `src/powerpoint.rs` itself.
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
 # Support
 anyhow = "1.0.104"
 base64 = "0.23.1"

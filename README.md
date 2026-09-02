@@ -14,12 +14,13 @@ Windows and Linux. The binary is `accessengine`.
 
 ## What it does
 
-**Reads files aloud.** Open a `.txt`, `.md`, `.csv`, `.json`, `.log`, `.rst` or
-`.org` file. Markdown is stripped down to prose first, so you hear the words
-rather than the asterisks — code blocks are skipped, links read as their text,
-and images are announced by their alt text. A CSV is read as a table: each
-value arrives under the name of its column, so nothing depends on remembering
-a header line from four rows back. The document is
+**Reads files aloud.** Open a `.txt`, `.md`, `.csv`, `.json`, `.log`, `.rst`,
+`.org`, `.ppt` or `.pptx` file. Markdown is stripped down to prose first, so you
+hear the words rather than the asterisks — code blocks are skipped, links read
+as their text, and images are announced by their alt text. A CSV is read as a
+table: each value arrives under the name of its column, so nothing depends on
+remembering a header line from four rows back. A presentation is read slide by
+slide, each announced by number. The document is
 cut into sentences (or paragraphs, your choice); the one being spoken is
 highlighted, and clicking any sentence starts reading from there.
 
@@ -37,6 +38,19 @@ append to the document, or copy. If the photo is geotagged, where it was
 taken is added to the end of the description — as coordinates, because turning
 those into a place name would mean sending them to a geocoding service.
 Nothing is uploaded anywhere.
+
+**Reads presentations.** Both PowerPoint formats open: `.pptx` and the
+`.ppt` that came before it, along with `.pptm`, `.pps` and `.ppsx`. Each slide
+is announced by its number, and a slide with nothing on it says so rather than
+being skipped, so following along by ear keeps the same count as the person at
+the front of the room. Master slides and layouts are left out — their
+placeholder text is "Click to edit Master title style", and hearing that
+between every slide would be worse than hearing nothing.
+
+The file is identified by what is inside it rather than by its name, so a
+`.pptx` that arrived renamed to `.ppt` still opens. A presentation saved with a
+password says so instead of reading out the ciphertext. Speaker notes are not
+read.
 
 **Wordlists.** The distinctive part — see below.
 

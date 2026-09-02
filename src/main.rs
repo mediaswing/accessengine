@@ -27,6 +27,7 @@ mod config;
 mod document;
 mod export;
 mod logging;
+mod powerpoint;
 mod speech;
 mod theme;
 mod update;

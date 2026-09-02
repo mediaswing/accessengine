@@ -45,8 +45,10 @@ pub struct Document {
     pub chunks: Vec<Chunk>,
 }
 
-pub const SUPPORTED_EXTENSIONS: &[&str] =
-    &["txt", "text", "md", "markdown", "csv", "log", "json", "rst", "org"];
+pub const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "txt", "text", "md", "markdown", "csv", "log", "json", "rst", "org", "ppt", "pptx", "pptm",
+    "pps", "ppsx",
+];
 
 /// Markup this reader used to strip and no longer does.
 ///
@@ -70,9 +72,6 @@ impl Document {
             );
         }
 
-        let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        let text = normalise_line_endings(&decode_text(&raw)?);
-
         let ext = path
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -84,10 +83,20 @@ impl Document {
                 path.display()
             );
         }
-        let text = match ext.as_str() {
-            "md" | "markdown" | "rst" => strip_markdown(&text),
-            "csv" => table_to_prose(&text),
-            _ => text,
+
+        // A presentation is a container of one sort or another rather than
+        // text, so it is opened by the module that understands the container
+        // rather than decoded as characters first.
+        let text = if crate::powerpoint::handles(&ext) {
+            crate::powerpoint::text_from_file(path)?
+        } else {
+            let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+            let text = normalise_line_endings(&decode_text(&raw)?);
+            match ext.as_str() {
+                "md" | "markdown" | "rst" => strip_markdown(&text),
+                "csv" => table_to_prose(&text),
+                _ => text,
+            }
         };
 
         let title = path

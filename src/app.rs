@@ -295,7 +295,7 @@ impl AccessEngine {
         let picked = rfd::FileDialog::new()
             .set_title("Choose a file to read aloud or an image to describe")
             .add_filter("Documents and images", &everything)
-            .add_filter("Text documents", SUPPORTED_EXTENSIONS)
+            .add_filter("Documents and presentations", SUPPORTED_EXTENSIONS)
             .add_filter("Images", IMAGE_EXTENSIONS)
             .add_filter("All files", &["*"])
             .pick_file();
