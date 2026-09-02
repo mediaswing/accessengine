@@ -242,15 +242,27 @@ section is optional, and only applies if you choose one of the other engines.
 
 | Engine | What you need | Where to get it |
 | --- | --- | --- |
-| **ElevenLabs** | An API key | [elevenlabs.io/app/settings/api-keys](https://elevenlabs.io/app/settings/api-keys) — under Settings |
-| **OpenAI** | An API key | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) — shown once, on creation |
-| **Deepgram** | An API key | Deepgram console → your project → Settings → API Keys |
-| **Google Cloud** | An API key, in a project with the Cloud Text-to-Speech API enabled | Google Cloud console → APIs & Services → Credentials |
-| **Amazon Polly** | AWS credentials and a region | See [Amazon Polly](#amazon-polly) below |
+| **ElevenLabs** | An API key | [elevenlabs.io/app/settings/api-keys](https://elevenlabs.io/app/settings/api-keys) — see [ElevenLabs](#elevenlabs) |
+| **OpenAI** | An API key | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) — see [OpenAI](#openai) |
+| **Deepgram** | An API key | Deepgram console → Settings → API Keys — see [Deepgram](#deepgram) |
+| **Google Cloud** | An API key, in a project with the Cloud Text-to-Speech API enabled | See [Google Cloud](#google-cloud) |
+| **Amazon Polly** | AWS credentials and a region | See [Amazon Polly](#amazon-polly) |
 
-To set one up: choose the engine on the **Settings** tab, press the credentials
-button that appears, and paste yours in. Then go back to **General** and press
-**Fetch my voices**.
+The same three steps set up any of them:
+
+1. Choose the engine on the **Settings** tab.
+2. Press the credentials button that appears, and paste yours in.
+3. Go back to **General** and press **Fetch my voices**.
+
+That third step is the one that tells you whether the credential works, so it
+is worth doing before a long document rather than after. If a provider turns
+your credential down, the button says so and offers to take another; it is on
+the Settings tab whenever a cloud engine is chosen, so a credential saved with
+one character wrong can always be replaced from the window.
+
+There is a section for each below — after a note on where credentials are
+kept — covering what that provider wants and what it puts on the Settings tab
+that the others do not.
 
 ### Your credentials
 
@@ -274,6 +286,70 @@ and no account of ours behind any of these. Credentials never appear in the log
 file — every one of them is redacted wherever it could be printed, and there
 are tests that hold it to that.
 
+### ElevenLabs
+
+The most straightforward of the five: one key, and nothing to enable first.
+
+1. Sign up at [elevenlabs.io/sign-up](https://elevenlabs.io/sign-up).
+2. Take the key from **Settings → API Keys**
+   ([elevenlabs.io/app/settings/api-keys](https://elevenlabs.io/app/settings/api-keys)).
+   Unlike OpenAI's, it can be read again later.
+3. Paste it in, then **Fetch my voices** — which returns the voices on your own
+   account, so anything you have cloned or added from the voice library is in
+   the list alongside the stock ones.
+
+Settings adds a **model**, which is free text with a menu of the four worth
+knowing about: Multilingual v2 (the default, and the best quality), Turbo v2.5,
+Flash v2.5 for the lowest latency, and v3 for the most expressive. It is free
+text so a model announced tomorrow can be typed in today.
+
+It also adds the two sliders ElevenLabs itself exposes — **Stability**, where
+lower is more expressive and higher more consistent, and **Similarity**, how
+closely the output tracks the original recording. Both are worth a Test button
+press rather than reasoning about.
+
+### OpenAI
+
+1. Sign up at [platform.openai.com/signup](https://platform.openai.com/signup).
+   Text to speech is billed against the account like anything else on the
+   platform, so it needs credit on it; a key alone is not enough.
+2. Create a secret key at
+   [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
+   **It is shown once, on creation.** Copy it then or make another later.
+3. Paste it in and **Fetch my voices**.
+
+OpenAI publishes no endpoint that lists voices — they are a fixed, documented
+set, and the API rejects anything outside it — so the list comes from this app.
+**Fetch my voices** still makes a request, to `/v1/models`, because that is what
+actually answers the question you are pressing the button to ask: whether the
+key works. A menu that filled itself in without a single request would leave a
+bad key to be discovered halfway through a document.
+
+Settings adds a **model** — GPT-4o mini TTS (the default), TTS-1 for the lowest
+latency, or TTS-1 HD — and **How to read it**, a free-text instruction such as
+*read slowly and clearly, as if to a class*. Only GPT-4o mini TTS listens to
+that; the older two ignore it, and the app says so under the box.
+
+The **Speed** slider is the mirror image: the older two models honour it, and
+GPT-4o mini TTS — the default — does not. To change the pace of the default
+model, ask for it in **How to read it** instead.
+
+### Deepgram
+
+1. Sign up at [console.deepgram.com/signup](https://console.deepgram.com/signup).
+2. Take a key from the console, under your project's **Settings → API Keys**.
+3. Paste it in and **Fetch my voices**.
+
+The voice list is fetched from Deepgram's own `/v1/models`, so it is what your
+account can actually use rather than a list baked in here that would go stale
+the week Deepgram adds a voice.
+
+Deepgram makes no distinction between a voice and a model: `aura-2-thalia-en`
+*is* the voice, and it is sent as the model. So the voice picker on **General**
+is the whole of the choice, and Deepgram is the one provider with no model
+setting — a second control meaning the same as the first would be worse than
+none. The Settings tab says as much where the model would otherwise be.
+
 ### Google Cloud
 
 Google's own preferred credential is a *service account*: a JSON file holding
@@ -285,10 +361,16 @@ a key, all for one provider out of five.
 
 So what you need is:
 
-1. A Google Cloud project with the **Cloud Text-to-Speech API** enabled.
-2. An API key from **APIs & Services → Credentials** in that project.
+1. A Google Cloud project with billing enabled —
+   [create one](https://console.cloud.google.com/projectcreate) — with the
+   **Cloud Text-to-Speech API** turned on for it.
+2. An API key from **APIs & Services → Credentials**
+   ([console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials))
+   in that project.
 3. **Restrict that key to the Cloud Text-to-Speech API.** An unrestricted Cloud
    API key is a key to the whole project; this one only ever needs to speak.
+
+Then paste it in and press **Fetch my voices** as with any other engine.
 
 Google offers well over a thousand voices, so the voice picker gains a filter
 box. Each is labelled with its language, its gender where stated, and its
@@ -298,15 +380,29 @@ both how it sounds and what it costs.
 ### Amazon Polly
 
 Polly is the one provider whose credential is a set rather than a single
-string, so it uses the standard AWS chain rather than anything invented here:
+string. You need an AWS account
+([sign up](https://portal.aws.amazon.com/billing/signup)) and an access key
+from **IAM → Security credentials**
+([console](https://console.aws.amazon.com/iam/home#/security_credentials)).
+
+Rather than invent anything, this app asks the standard AWS chain, in order:
 
 1. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and optionally
    `AWS_SESSION_TOKEN` from the environment;
 2. an access key ID and secret access key typed into this app;
 3. the profile in `~/.aws/credentials` — the file the AWS CLI writes, so a
    machine already set up for `aws` needs nothing entered here at all. Which
-   profile is a setting; the region comes from the setting, then `AWS_REGION`,
-   then `~/.aws/config`.
+   profile is a setting.
+
+So on a machine where `aws` already works, there is nothing to enter: choose
+Amazon Polly and press **Fetch my voices**.
+
+The **AWS region** is typed rather than chosen, because AWS adds regions faster
+than any list here could be updated; the arrow beside it offers the common
+ones. Leave it blank and the same kind of chain applies — `AWS_REGION`, then
+`AWS_DEFAULT_REGION`, then `~/.aws/config`, then `eu-west-2` — and the field
+shows what that has come to as its hint. Pick the region your Polly quota is
+in: asking for a voice in one you have not been granted fails per sentence.
 
 The credentials want the **AmazonPollyReadOnlyAccess** policy, which is enough
 to list voices and speak, and nothing else.
