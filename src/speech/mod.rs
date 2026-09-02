@@ -44,6 +44,10 @@ pub enum EngineKind {
 /// heard of falls back to the system voices rather than taking the rest of the
 /// file down with it.
 ///
+/// The snake_case spellings are what builds before 1.3 wrote. A file still
+/// carrying one is read back as the engine it names, not quietly reset to the
+/// system voices; the next save rewrites it in the current spelling.
+///
 /// The derived implementation would fail the whole `Config`, and `Config::load`
 /// answers a parse failure with `Default::default()` — so one unknown word
 /// would cost the user every other setting they have. That is the shape a
@@ -52,12 +56,12 @@ impl<'de> Deserialize<'de> for EngineKind {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let name = String::deserialize(deserializer)?;
         Ok(match name.as_str() {
-            "System" => Self::System,
-            "ElevenLabs" => Self::ElevenLabs,
-            "OpenAI" | "OpenAi" => Self::OpenAi,
-            "Deepgram" => Self::Deepgram,
-            "Google" => Self::Google,
-            "Polly" => Self::Polly,
+            "System" | "system" => Self::System,
+            "ElevenLabs" | "eleven_labs" => Self::ElevenLabs,
+            "OpenAI" | "OpenAi" | "open_ai" | "openai" => Self::OpenAi,
+            "Deepgram" | "deepgram" => Self::Deepgram,
+            "Google" | "google" => Self::Google,
+            "Polly" | "polly" => Self::Polly,
             other => {
                 log::warn!("settings name a speech engine this build has not got ({other}); using the system voices");
                 Self::System
@@ -219,6 +223,21 @@ mod tests {
             let json = serde_json::to_string(&engine).expect("serialises");
             let back: EngineKind = serde_json::from_str(&json).expect("parses");
             assert_eq!(back, engine, "{json}");
+        }
+    }
+
+    /// Builds before 1.3 wrote the engine in snake_case; a settings file still
+    /// holding one names a real engine, not an unknown word.
+    #[test]
+    fn the_pre_1_3_spellings_still_load() {
+        for (written, expected) in [
+            (r#""eleven_labs""#, EngineKind::ElevenLabs),
+            (r#""open_ai""#, EngineKind::OpenAi),
+            (r#""system""#, EngineKind::System),
+            (r#""polly""#, EngineKind::Polly),
+        ] {
+            let parsed: EngineKind = serde_json::from_str(written).expect("parses");
+            assert_eq!(parsed, expected, "{written}");
         }
     }
 

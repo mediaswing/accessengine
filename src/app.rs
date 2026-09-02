@@ -1452,8 +1452,8 @@ impl AccessEngine {
         ui.add_space(14.0);
         let blocker = self.apply_blocker();
         let apply = wide_button_enabled(ui, blocker.is_none(), &t!("common.apply"));
-        let apply = match blocker {
-            Some(reason) => apply.on_disabled_hover_text(reason),
+        let apply = match &blocker {
+            Some(reason) => apply.on_disabled_hover_text(reason.as_str()),
             None => apply.on_hover_text(match self.cfg.output {
                 config::Output::ReadAloud => t!("general.apply_read_hint"),
                 config::Output::SaveAudio => t!("general.apply_save_hint"),
@@ -1461,6 +1461,14 @@ impl AccessEngine {
         };
         if apply.clicked() {
             self.apply_general(ui.ctx());
+        }
+        // A greyed-out button with the reason hidden in hover text is a dead
+        // end: somebody who has just chosen "Save the reading as an MP3" and
+        // found Apply dead has no cause to go hunting for a tooltip, and a
+        // screen reader never lands on one at all. Say it on the screen.
+        if let Some(reason) = blocker {
+            ui.add_space(4.0);
+            ui.label(RichText::new(reason).weak().small());
         }
     }
 

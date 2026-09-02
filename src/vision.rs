@@ -337,10 +337,23 @@ fn send_or_start(
     }
 }
 
-fn list_models(base_url: &str) -> Result<Vec<ModelInfo>> {
+/// Ollama writes `null` where the API documents a list: `families` for a model
+/// that carries no family metadata, and `models` itself on some builds. A plain
+/// `#[serde(default)]` covers a missing key but not an explicit null, so one
+/// such field would fail the whole list and leave the user with no models at
+/// all rather than the one entry that lacks the detail.
+fn null_is_empty<'de, D, T>(deserializer: D) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn parse_models(body: &str) -> Result<Vec<ModelInfo>> {
     #[derive(Deserialize)]
     struct Tags {
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_is_empty")]
         models: Vec<Tag>,
     }
     #[derive(Deserialize)]
@@ -351,18 +364,11 @@ fn list_models(base_url: &str) -> Result<Vec<ModelInfo>> {
     }
     #[derive(Deserialize, Default)]
     struct Details {
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_is_empty")]
         families: Vec<String>,
     }
 
-    let url = format!("{}/api/tags", normalise(base_url));
-    let response = send_or_start(client(LIST_TIMEOUT)?.get(&url), base_url)?;
-
-    if !response.status().is_success() {
-        bail!("Ollama returned HTTP {} from {url}", response.status());
-    }
-
-    let tags: Tags = response.json().context("reading the model list")?;
+    let tags: Tags = serde_json::from_str(body).context("reading the model list")?;
     let mut models: Vec<ModelInfo> = tags
         .models
         .into_iter()
@@ -379,6 +385,17 @@ fn list_models(base_url: &str) -> Result<Vec<ModelInfo>> {
             .then_with(|| a.name.cmp(&b.name))
     });
     Ok(models)
+}
+
+fn list_models(base_url: &str) -> Result<Vec<ModelInfo>> {
+    let url = format!("{}/api/tags", normalise(base_url));
+    let response = send_or_start(client(LIST_TIMEOUT)?.get(&url), base_url)?;
+
+    if !response.status().is_success() {
+        bail!("Ollama returned HTTP {} from {url}", response.status());
+    }
+
+    parse_models(&response.text().context("reading the model list")?)
 }
 
 fn describe_image(
@@ -765,6 +782,27 @@ mod tests {
         assert!(looks_like_vision("qwen2.5vl:7b", &[]));
         assert!(looks_like_vision("custom-model", &["clip".to_string()]));
         assert!(!looks_like_vision("llama3:8b", &["llama".to_string()]));
+    }
+
+    /// Ollama sends `"families": null` for models with no family metadata, and
+    /// that used to fail the whole list.
+    #[test]
+    fn null_lists_in_the_model_list_are_read_as_empty() {
+        let body = r#"{"models":[
+            {"name":"llama3:8b","details":{"families":["llama"]}},
+            {"name":"nomic-embed-text:latest","details":{"families":null}},
+            {"name":"llava:13b","details":{}}
+        ]}"#;
+        let models = parse_models(body).expect("a null family is not a failure");
+        let names: Vec<&str> = models.iter().map(|m| m.name.as_str()).collect();
+        // Vision first, then by name.
+        assert_eq!(names, ["llava:13b", "llama3:8b", "nomic-embed-text:latest"]);
+    }
+
+    #[test]
+    fn a_null_model_list_is_no_models() {
+        assert!(parse_models(r#"{"models":null}"#).unwrap().is_empty());
+        assert!(parse_models("{}").unwrap().is_empty());
     }
 
     #[test]
