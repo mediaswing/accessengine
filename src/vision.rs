@@ -4,6 +4,7 @@
 //! reports that and everything else in the app carries on working. Nothing is
 //! sent to a third party.
 
+use crate::t;
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use serde::Deserialize;
@@ -59,7 +60,7 @@ impl Vision {
 
     /// Ask Ollama which models are installed.
     pub fn list_models(&mut self, base_url: String, repaint: impl Fn() + Send + 'static) {
-        self.start("Looking for local models…", repaint, move || {
+        self.start(&t!("vision.looking_for_models"), repaint, move || {
             match list_models(&base_url) {
                 Ok(models) => VisionResult::Models(models),
                 Err(e) => VisionResult::Error(format!("{e:#}")),
@@ -78,7 +79,7 @@ impl Vision {
         geotag: bool,
         repaint: impl Fn() + Send + 'static,
     ) {
-        let message = format!("Describing the image with {model}…");
+        let message = t!("vision.describing", model = model);
         self.start(&message, repaint, move || {
             match describe_image(&base_url, &model, &prompt, &image, geotag) {
                 Ok(text) => VisionResult::Description(text),
@@ -449,7 +450,7 @@ fn describe_image(
             .and_then(|r| r.error)
             .unwrap_or_else(|| text.clone());
         if status == reqwest::StatusCode::NOT_FOUND {
-            bail!("Ollama does not have '{model}'. Pull it first: ollama pull {model}");
+            bail!(t!("error.model_missing", model = model));
         }
         bail!("Ollama returned HTTP {status}: {}", detail.trim());
     }
@@ -585,14 +586,14 @@ fn heif_to_jpeg(image: &Path) -> Result<Vec<u8>> {
 fn location_sentence(image: &Path) -> Option<String> {
     let (latitude, longitude) = coordinates(image)?;
     Some(match reverse_geocode(latitude, longitude) {
-        Ok(Some(place)) => format!("Taken in {place}."),
+        Ok(Some(place)) => t!("vision.taken_in", place = place),
         Ok(None) => {
             log::info!("no place name for {latitude:.4}, {longitude:.4}");
-            "The place this photo was taken could not be looked up.".to_string()
+            t!("vision.place_unknown")
         }
         Err(e) => {
             log::warn!("looking up the photo location: {e:#}");
-            "The place this photo was taken could not be looked up.".to_string()
+            t!("vision.place_unknown")
         }
     })
 }
@@ -746,12 +747,9 @@ fn dms_to_decimal(degrees: f64, minutes: f64, seconds: f64, hemisphere: &str) ->
 /// is specific enough to be worth saying out loud.
 fn connection_error(e: reqwest::Error, base_url: &str) -> anyhow::Error {
     if e.is_connect() {
-        anyhow::anyhow!(
-            "Could not reach Ollama at {base_url}. Start it with `ollama serve`, \
-             or change the address in Settings."
-        )
+        anyhow::anyhow!(t!("error.ollama_unreachable", url = base_url))
     } else if e.is_timeout() {
-        anyhow::anyhow!("The local model took too long to reply. Try a smaller model.")
+        anyhow::anyhow!(t!("error.model_timeout"))
     } else {
         anyhow::Error::new(e).context(format!("talking to Ollama at {base_url}"))
     }

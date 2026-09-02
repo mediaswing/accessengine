@@ -4,6 +4,8 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::t;
+
 /// How finely to cut the document up. Smaller chunks give tighter progress
 /// tracking and faster response to skip/stop; larger chunks sound more natural
 /// and, on ElevenLabs, cost fewer requests.
@@ -15,10 +17,10 @@ pub enum ChunkMode {
 
 impl ChunkMode {
     pub const ALL: [ChunkMode; 2] = [ChunkMode::Sentence, ChunkMode::Paragraph];
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            ChunkMode::Sentence => "Sentence",
-            ChunkMode::Paragraph => "Paragraph",
+            ChunkMode::Sentence => t!("chunk.sentence"),
+            ChunkMode::Paragraph => t!("chunk.paragraph"),
         }
     }
 }
@@ -65,11 +67,11 @@ impl Document {
         // Refuse absurd files rather than freezing the UI thread on read.
         const MAX_BYTES: u64 = 64 * 1024 * 1024;
         if meta.len() > MAX_BYTES {
-            bail!(
-                "{} is {:.1} MB; the reader caps files at 64 MB",
-                path.display(),
-                meta.len() as f64 / 1_048_576.0
-            );
+            bail!(t!(
+                "error.file_too_large",
+                path = path.display(),
+                size = format!("{:.1}", meta.len() as f64 / 1_048_576.0)
+            ));
         }
 
         let ext = path
@@ -77,11 +79,11 @@ impl Document {
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
         if UNSUPPORTED_MARKUP.contains(&ext.as_str()) {
-            bail!(
-                "{} is {ext}, which this reader no longer opens. Save it as plain text or \
-                 markdown first.",
-                path.display()
-            );
+            bail!(t!(
+                "error.markup_file",
+                path = path.display(),
+                kind = ext
+            ));
         }
 
         // A presentation is a container of one sort or another rather than
@@ -145,7 +147,7 @@ impl Document {
 fn decode_text(raw: &[u8]) -> Result<String> {
     let raw = raw.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(raw);
     if raw.starts_with(&[0xFF, 0xFE]) || raw.starts_with(&[0xFE, 0xFF]) {
-        bail!("this looks like a UTF-16 file; please re-save it as UTF-8");
+        bail!(t!("error.utf16"));
     }
     match std::str::from_utf8(raw) {
         Ok(s) => Ok(s.to_string()),

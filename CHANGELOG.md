@@ -10,6 +10,25 @@ page.
 ## [Unreleased]
 
 ### Added
+- The interface can be read in another language. Every word it says is now
+  looked up by key rather than written in place, and the keys are answered by a
+  plain text file: adding a language is a file dropped in the **languages**
+  folder beside the settings, not a rebuild. English is compiled into the
+  binary and is the fallback for every key a translation has not reached yet,
+  so a file is useful from its first line rather than only its last.
+
+  Settings gains a **Language** picker — following the computer, or a language
+  by name — and a **Re-read them** button, so a translator's loop is edit,
+  press, look. Anything wrong with a file is said on that tab rather than
+  logged where nobody will see it: which line could not be read and why, and
+  which files in the folder never became a language at all. Placeholders are
+  named rather than positional, so an inserted value can move to wherever a
+  language's grammar wants it, and a test holds every translation to the same
+  set of them as English. `ACCESSENGINE_LOCALE` overrides what the computer is
+  set to.
+
+  Ported from the `watchspend` project in this workspace, which has been doing
+  this for its own interface.
 
 - PowerPoint presentations can be read. Both formats open — `.pptx`, and the
   `.ppt` that came before it, along with `.pptm`, `.pps` and `.ppsx` — and
@@ -26,7 +45,6 @@ page.
   refused rather than allowed to fill memory.
 
 ### Changed
-
 - A CSV is read as a table rather than as lines of text. Each row is announced
   by number, and every value is spoken under the name of its column — the way
   a screen reader reads a table, and for the same reason: by the fourth row
@@ -42,8 +60,15 @@ page.
   line breaks and doubled quotes inside them. A first row that is all numbers
   is taken as data rather than as column names. Empty cells are left out.
 
-### Removed
+### Fixed
+- Three characters in the interface had no glyph in any bundled font and were
+  drawn as empty boxes: the arrows in the keyboard shortcuts table, and the
+  full-width plus on "Install a wordlist". The arrows now read as words, which
+  a screen reader announces sensibly as well. A test now checks every character
+  of every shipped language against the fonts the app installs, so the next one
+  is caught before it ships rather than by whoever cannot read it.
 
+### Removed
 - HTML is no longer read. `.html`, `.htm`, `.xhtml` and `.xml` have gone from
   the file picker, and a page handed to the app another way — on the command
   line, or through the dialog's "All files" — is turned away by name rather

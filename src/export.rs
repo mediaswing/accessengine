@@ -11,6 +11,7 @@
 //! frames and every segment is requested at the same rate and bitrate, so the
 //! result is a valid file that any player will read end to end.
 
+use crate::{t, tn};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -219,9 +220,9 @@ impl Estimate {
 pub fn approximate_duration(d: Duration) -> String {
     let seconds = d.as_secs();
     match seconds {
-        0..=44 => "less than a minute".to_string(),
-        45..=89 => "about a minute".to_string(),
-        90..=3599 => format!("about {} minutes", (seconds as f64 / 60.0).round() as u64),
+        0..=44 => t!("duration.under_a_minute"),
+        45..=89 => t!("duration.about_a_minute"),
+        90..=3599 => tn!("duration.minutes", (seconds as f64 / 60.0).round() as u64),
         _ => {
             let hours = seconds / 3600;
             let minutes = ((seconds % 3600) as f64 / 60.0).round() as u64;
@@ -230,11 +231,12 @@ pub fn approximate_duration(d: Duration) -> String {
             } else {
                 (hours, minutes)
             };
-            let hour_word = if hours == 1 { "hour" } else { "hours" };
             if minutes == 0 {
-                format!("about {hours} {hour_word}")
+                tn!("duration.hours", hours)
             } else {
-                format!("about {hours} {hour_word} {minutes} minutes")
+                // The hours carry the plural; the minutes are never one, since
+                // a single minute past the hour rounds away above.
+                tn!("duration.hours_minutes", hours, minutes = minutes)
             }
         }
     }
@@ -474,6 +476,13 @@ mod tests {
 
     #[test]
     fn durations_are_described_the_way_someone_would_say_them() {
+        // The wording is the language's, so the language has to be pinned:
+        // another test switching it while this one runs would otherwise fail
+        // this one, once every few dozen runs.
+        crate::i18n::with_language("en", durations_in_english);
+    }
+
+    fn durations_in_english() {
         let secs = |s| approximate_duration(Duration::from_secs(s));
         assert_eq!(secs(3), "less than a minute");
         assert_eq!(secs(44), "less than a minute");

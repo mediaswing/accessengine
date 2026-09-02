@@ -24,6 +24,7 @@
 //! are matched as phrases. A trailing or leading `*` is a wildcard, so `swear*`
 //! catches "swearing" and "swears".
 
+use crate::t;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -39,6 +40,21 @@ pub enum RuleKind {
     Replace,
     /// Say it differently; not a safety concern.
     Pronounce,
+}
+
+impl RuleKind {
+    /// What to call this kind of rule on screen.
+    ///
+    /// Separate from [`fmt::Display`], which the log uses: a log line read
+    /// months later by whoever is diagnosing the problem is easier to search
+    /// for in one language.
+    pub fn label(&self) -> String {
+        match self {
+            RuleKind::Block => t!("rule.blocked"),
+            RuleKind::Replace => t!("rule.replaced"),
+            RuleKind::Pronounce => t!("rule.pronunciation"),
+        }
+    }
 }
 
 impl fmt::Display for RuleKind {
@@ -70,11 +86,11 @@ impl BlockPolicy {
         BlockPolicy::SkipSentence,
     ];
 
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            BlockPolicy::Bleep => "Say a placeholder",
-            BlockPolicy::Remove => "Say nothing",
-            BlockPolicy::SkipSentence => "Skip the whole sentence",
+            BlockPolicy::Bleep => t!("block.bleep"),
+            BlockPolicy::Remove => t!("block.nothing"),
+            BlockPolicy::SkipSentence => t!("block.skip"),
         }
     }
 }

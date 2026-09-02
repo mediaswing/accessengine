@@ -52,6 +52,11 @@ The file is identified by what is inside it rather than by its name, so a
 password says so instead of reading out the ciphertext. Speaker notes are not
 read.
 
+**Speaks your language.** The interface is looked up by key rather than
+written in place, so adding a language is a plain text file dropped in a folder
+— see below. English ships in the binary and is the fallback for everything a
+translation has not reached yet.
+
 **Wordlists.** The distinctive part — see below.
 
 ---
@@ -119,6 +124,53 @@ these rules **without** the trailing dot.
 
 ---
 
+## Another language
+
+Every word the interface says is looked up by key, and the keys are answered by
+a plain text file. English is compiled into the binary; anything else is a file
+in the **languages** folder beside your settings, which the Settings tab names
+and has a button to open.
+
+Copy [`assets/lang/en.toml`](assets/lang/en.toml) — it is the reference file,
+and its header explains the format — change `code`, `name` and `plural` at the
+top, and translate the right of each line:
+
+```
+code   = "fr"
+name   = "Français"
+plural = "french"
+
+# Open a file, choose what should happen to it, then press Apply.
+general.subtitle = "Ouvrez un fichier, choisissez ce qui doit lui arriver, "
+                   "puis appuyez sur Appliquer."
+```
+
+Three things follow from how it is built:
+
+- **You do not have to finish.** Any key you have not reached falls back to
+  English, so the file is useful from its first line. Settings has a **Re-read
+  them** button, so the loop is edit, press, look — not edit, rebuild, restart.
+- **One bad line costs one line.** A stray quote does not lose you the file;
+  the Settings tab lists which lines could not be read, and why, along with any
+  file in the folder that never became a language at all.
+- **Placeholders are named.** `{name}`, never `{}`, so you can move an inserted
+  value to wherever your grammar wants it. Do not rename them.
+
+A file whose `code` matches a language already in the binary replaces it, which
+is how a shipped translation gets improved rather than only added to. English is
+the exception: it is the fallback everything else is measured against.
+
+`ACCESSENGINE_LOCALE=fr` overrides what the computer is set to, which is the
+quickest way to see a file in place without changing the whole machine.
+
+Two things are deliberately left in English. The log file, because a line read
+months later by whoever is diagnosing a fault is easier to search for in one
+language; and the prompt sent to the vision model, which is a setting on the
+Settings tab rather than a message — set it in whichever language you want your
+image descriptions written in.
+
+---
+
 ## Installing and running
 
 Needs a [Rust toolchain](https://rustup.rs). On Linux you also need
@@ -182,7 +234,7 @@ export ELEVENLABS_API_KEY=sk_...
 
 | | macOS | Linux | Windows |
 | --- | --- | --- | --- |
-| Settings & wordlists | `~/Library/Application Support/org.AccessEngine.AccessEngine/` | `~/.config/accessengine/` | `%APPDATA%\AccessEngine\AccessEngine\config\` |
+| Settings, wordlists & languages | `~/Library/Application Support/org.AccessEngine.AccessEngine/` | `~/.config/accessengine/` | `%APPDATA%\AccessEngine\AccessEngine\config\` |
 | Log file | same folder, `accessengine.log` | `~/.local/share/accessengine/` | `%APPDATA%\...\data\` |
 
 The **Diagnostics** section at the foot of the Settings tab shows the exact

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use crate::document::ChunkMode;
 use crate::speech::EngineKind;
+use crate::t;
 use crate::wordlist::BlockPolicy;
 
 fn project_dirs() -> Option<ProjectDirs> {
@@ -61,11 +62,11 @@ pub enum Appearance {
 impl Appearance {
     pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::System => "Follow the system",
-            Self::Light => "Light",
-            Self::Dark => "Dark",
+            Self::System => t!("appearance.system"),
+            Self::Light => t!("appearance.light"),
+            Self::Dark => t!("appearance.dark"),
         }
     }
 }
@@ -82,10 +83,10 @@ pub enum Output {
 impl Output {
     pub const ALL: [Self; 2] = [Self::ReadAloud, Self::SaveAudio];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::ReadAloud => "Read it aloud",
-            Self::SaveAudio => "Save the reading as an MP3",
+            Self::ReadAloud => t!("output.read_aloud"),
+            Self::SaveAudio => t!("output.save_audio"),
         }
     }
 }
@@ -126,6 +127,9 @@ pub struct Config {
     pub geotag_images: bool,
 
     // Appearance
+    /// The language the interface is written in: a code like `fr`, or
+    /// [`crate::i18n::AUTO`] for whatever this computer is set to.
+    pub language: String,
     /// Light, dark, or the system's choice. See [`Appearance`].
     pub appearance: Appearance,
     /// Whether the document and image preview takes the right of the window.
@@ -173,6 +177,7 @@ impl Default for Config {
             rate: None,
             pitch: None,
             volume: 1.0,
+            language: crate::i18n::AUTO.to_string(),
             appearance: Appearance::default(),
             show_preview: true,
             text_scale: 1.0,
@@ -216,6 +221,7 @@ impl std::fmt::Debug for Config {
             .field("elevenlabs_model", &self.elevenlabs_model)
             .field("ollama_url", &self.ollama_url)
             .field("ollama_model", &self.ollama_model)
+            .field("language", &self.language)
             .field("chunk_mode", &self.chunk_mode)
             .field("geotag_images", &self.geotag_images)
             .field("log_dir", &self.log_dir)

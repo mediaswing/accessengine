@@ -1,0 +1,526 @@
+# The Accessibility Engine language file — English
+#
+# This is the reference file. Every other language is checked against it by a
+# test: same keys, same {placeholders}. To start a new language, copy this file,
+# change `code`, `name` and `plural` at the top, and translate the right-hand
+# side of each line. Leave the keys alone.
+#
+# A few things worth knowing before you start:
+#
+#   {name}       and the other braced words are values the app fills in. You may
+#                move them anywhere in the sentence, but do not rename them.
+#   {n}          in a counted message is the number itself.
+#   .one/.other  a counted message. Give every form your language uses — see
+#                `plural` below.
+#   "…" "…"      a long value continued on the next line. The two are joined
+#                exactly as written, so mind the space at the end of the first.
+#
+# You do not have to finish. Any line you have not translated falls back to the
+# English one here, so the app stays usable from your very first line. Drop your
+# file in the languages folder — the Settings tab shows you where it is, and has
+# a button that re-reads it without restarting the app.
+#
+# Two things are deliberately not here. The log file is written in English,
+# because a line read months later by whoever is diagnosing a fault is easier
+# to search for in one language. And the prompt sent to the local vision model
+# is a setting rather than a message, so it is edited on the Settings tab —
+# in whatever language you want the description written in.
+
+code   = "en"
+name   = "English"
+
+# Which plural rule this language follows. One of:
+#   one_other   one form for 1, another for everything else (English, German,
+#               Spanish, Italian, Dutch, Swedish)
+#   french      as above, but 0 also takes the singular (French, pt-BR)
+#   polish      one / few / many
+#   russian     one / few / many, counted differently (Russian, Ukrainian)
+plural = "one_other"
+
+
+# ------------------------------------------------ the tab strip, across the top
+
+tab.general   = "General"
+tab.wordlists = "Wordlists"
+tab.settings  = "Settings"
+
+
+# ---------------------------------------- words that appear in several places
+
+common.cancel      = "Cancel"
+common.save        = "Save"
+common.apply       = "Apply"
+common.reset       = "Reset"
+common.close       = "Close"
+common.edit        = "Edit"
+common.clear       = "Clear"
+common.choose      = "Choose…"
+common.reload      = "Reload"
+common.open_folder = "Open folder"
+common.yes         = "yes"
+common.no          = "no"
+
+
+# ------------------------------------------------------------ the General tab
+
+general.title    = "General"
+general.subtitle = "Open a file, choose what should happen to it, then press Apply."
+
+general.open      = "📂  Open a file…"
+general.open_hint = "Ctrl/Cmd + O — a document to read, or an image to describe"
+
+general.do_this = "Do this:"
+
+# What is open, in a line, above the Apply button.
+general.nothing_open    = "Nothing open yet."
+general.image_pending   = "An image. It is described as soon as it opens."
+general.image_described = "An image, described. Apply reads the description aloud."
+general.word_counts     = "{words} words · {spoken} to speak"
+
+general.apply_read_hint = "Read this aloud in the voice above"
+general.apply_save_hint = "Write the whole reading to an audio file"
+
+# What Apply does with what is open.
+output.read_aloud = "Read it aloud"
+output.save_audio = "Save the reading as an MP3"
+
+
+# ------------------------------------- why a button cannot do anything yet
+
+block.no_document      = "Open a document first, or an image to be described."
+block.no_file          = "Open a file first."
+block.already_saving   = "Already saving. Cancel that first."
+block.needs_elevenlabs = "Saving audio needs the ElevenLabs engine — the system voices "
+                         "cannot be recorded to a file. Switch engine on the Settings tab."
+block.needs_key        = "Add your ElevenLabs API key on the General tab."
+block.needs_voice      = "Choose an ElevenLabs voice on the General tab first."
+
+
+# --------------------------------------------------------------- the voices
+
+engine.system     = "System voices"
+engine.elevenlabs = "ElevenLabs"
+
+voice.voice           = "Voice:"
+voice.filter          = "Filter the voices:"
+voice.filter_hint     = "name or language"
+voice.system_default  = "System default"
+voice.local_count.one   = "{n} voice, running on this computer."
+voice.local_count.other = "{n} voices, all running on this computer."
+
+voice.linux_hint = "On Linux this usually means speech-dispatcher is not installed. "
+                   "Try: sudo apt install speech-dispatcher"
+voice.use_elevenlabs = "You can still use ElevenLabs — switch engine on the Settings tab."
+
+voice.fetch             = "↻  Fetch my voices"
+voice.none_selected     = "No voice selected"
+voice.none_fetched      = "No voices fetched yet."
+voice.account_count.one   = "{n} voice on this account."
+voice.account_count.other = "{n} voices on this account."
+voice.key_needed        = "ElevenLabs needs an API key before it can list any voices."
+voice.key_refused       = "ElevenLabs would not accept the key it was given."
+voice.env_key_refused   = "ELEVENLABS_API_KEY was refused. That variable takes precedence, "
+                          "so it has to be corrected outside the app."
+
+
+# ------------------------------------------------------------- the API key
+
+key.button         = "🔑  Enter your ElevenLabs API key…"
+key.button_refused = "🔑  That key was refused — enter another…"
+
+key.title          = "Your ElevenLabs API key"
+key.needs_account  = "Needs an account —"
+key.sign_up        = "sign up"
+key.then           = ", then"
+key.find_key       = "find your key"
+key.under_settings = "under Settings."
+key.field          = "API key:"
+key.remember       = "Remember this key on this computer"
+key.warning        = "Stored as plain text in the settings file, readable by anything "
+                     "running as you. On a shared machine, prefer the ELEVENLABS_API_KEY "
+                     "variable."
+
+
+# ---------------------------------------------------------- the Wordlists tab
+
+wordlists.title    = "Wordlists"
+wordlists.subtitle = "Rewrite the text before it is spoken: soften or remove words that "
+                     "are not right for the room, and fix names the voice mispronounces."
+
+wordlists.enabled_caption = "Wordlists:"
+wordlists.on              = "Apply them to what is spoken"
+wordlists.off             = "Speak the document as written"
+wordlists.active_count    = "{active} of {total} lists active"
+
+wordlists.block_caption = "Blocked words:"
+block.bleep   = "Say a placeholder"
+block.nothing = "Say nothing"
+block.skip    = "Skip the whole sentence"
+wordlists.bleep_caption = "Say instead:"
+
+wordlists.installed      = "Installed lists"
+wordlists.installed_hint = "Tick the ones that should apply."
+wordlists.counts         = "{block} blocked · {replace} replaced · {pronounce} pronunciation"
+wordlists.edit_hint      = "Open in your text editor"
+# The accessible name of one row's Edit button, so it is not announced as the
+# same word six times over.
+wordlists.edit_named     = "Edit {name} in your text editor"
+wordlists.none           = "No wordlists found."
+wordlists.install        = "+  Install a wordlist…"
+wordlists.install_hint   = "Copy a wordlist file into the folder this app reads"
+
+# What the wordlists changed in the open document.
+changes.title       = "Changes to this document"
+changes.off         = "Wordlists are switched off."
+changes.no_document = "No document open."
+changes.none        = "Nothing in this document matched a rule."
+changes.skipped.one   = "{n} sentence will be skipped entirely."
+changes.skipped.other = "{n} sentences will be skipped entirely."
+changes.total.one     = "{n} substitution in total."
+changes.total.other   = "{n} substitutions in total."
+changes.explanation = "{kind} rule, from {origin}"
+changes.nothing     = "(nothing)"
+
+rule.blocked       = "blocked"
+rule.replaced      = "replaced"
+rule.pronunciation = "pronunciation"
+
+
+# ----------------------------------------------------------- the Settings tab
+
+settings.title    = "Settings"
+settings.subtitle = "Changes here take effect when you press Apply."
+
+settings.preview_caption = "Preview pane:"
+settings.preview_on      = "Show the document and image preview"
+settings.preview_off     = "Hide it — the tabs take the window"
+
+settings.engine = "Speech engine:"
+
+settings.updates     = "Automatic updates:"
+settings.updates_on  = "Check for a new version on startup"
+settings.updates_off = "Never check"
+
+settings.geotag      = "Geotagged photos:"
+settings.geotag_on   = "Say where the photo was taken"
+settings.geotag_off  = "Leave the location out"
+settings.geotag_note = "Looking a place up sends the photo's coordinates — never the "
+                       "photo itself — to OpenStreetMap."
+
+settings.theme      = "Theme:"
+appearance.system   = "Follow the system"
+appearance.light    = "Light"
+appearance.dark     = "Dark"
+
+settings.unapplied   = "Changed here, but not applied yet."
+settings.reset_hint  = "Reset puts every control back to the settings in use."
+settings.diagnostics = "Diagnostics"
+
+
+# ------------------------------------------------------------ the language
+
+settings.language      = "Language:"
+settings.language.auto = "Follow the system"
+# A language that was chosen and has since been taken out of the folder.
+settings.language.missing = "Not installed: {code}"
+settings.language.folder  = "Language files live in {path}"
+settings.language.reload  = "Re-read them"
+
+# Files in that folder that never became a language.
+settings.language.file_problems.one   = "{n} file in the languages folder could not be used:"
+settings.language.file_problems.other = "{n} files in the languages folder could not be used:"
+settings.language.file_problem = "{file} — {why}"
+settings.language.unreadable   = "it could not be read"
+settings.language.no_code      = "it has no `code` line, so there is no telling what language it is"
+settings.language.is_english   = "it says it is English, which is the one language a file "
+                                 "cannot replace"
+
+# Lines the parser could not use inside the language now in use.
+settings.language.line_problems.one   = "{n} line of this language file could not be read:"
+settings.language.line_problems.other = "{n} lines of this language file could not be read:"
+settings.language.line_problem = "line {line}: {what}"
+
+
+# ------------------------------------------------------- how the voice sounds
+
+settings.voice_heading = "How the voice sounds"
+settings.no_engine     = "No system speech engine on this computer."
+
+settings.speed       = "Speed:"
+settings.pitch       = "Pitch:"
+settings.volume      = "Volume:"
+settings.reset_voice = "Reset speed and pitch"
+settings.test        = "🔊  Test"
+
+settings.model            = "Model:"
+settings.stability        = "Stability:"
+settings.stability_hint   = "Lower is more expressive; higher is more consistent."
+settings.similarity       = "Similarity:"
+settings.similarity_hint  = "How closely the output tracks the original recording."
+settings.test_voice       = "🔊  Test this voice"
+settings.test_voice_hint  = "Speaks a sample with the settings as they are here"
+settings.test_note        = "A test uses the settings above, applied or not."
+
+# Spoken by the test buttons. A sentence with every letter of the alphabet in
+# it, so the voice is heard on all of them — replace it with whichever sentence
+# does that job in your language rather than translating this one word for word.
+settings.sample_text = "The quick brown fox jumps over the lazy dog."
+
+
+# --------------------------------------------------------------- reading
+
+settings.reading_heading = "Reading"
+settings.chunk           = "Read in:"
+chunk.sentence           = "Sentence"
+chunk.paragraph          = "Paragraph"
+settings.chunk_hint      = "Sentences give tighter highlighting and faster skipping. "
+                           "Paragraphs sound more natural and, on ElevenLabs, cost fewer "
+                           "requests."
+
+settings.sounds     = "Sound cues:"
+settings.sounds_on  = "Play a sound on finishing, and on errors"
+settings.sounds_off = "Stay silent"
+
+settings.text_size      = "Text size:"
+settings.text_size_hint = "Also Ctrl/Cmd + plus and minus, anywhere in the app."
+
+
+# ------------------------------------------------------------------- logs
+
+settings.logs_heading = "Logs"
+settings.log_folder   = "Log folder:"
+settings.log_today    = "Today: {path}"
+settings.logs_note    = "One file per day, kept for a fortnight. Clear deletes them now, "
+                        "including today's. Set ACCESSENGINE_DEBUG=1 for debug logging, or "
+                        "ACCESSENGINE_LOG=trace for everything; restart the app to apply."
+
+
+# --------------------------------------------------------- image descriptions
+
+settings.vision_heading = "Image descriptions"
+settings.ollama_url     = "Ollama address:"
+settings.ollama_local   = "On this computer: the picture never leaves the machine."
+settings.ollama_remote  = "That is not this computer. Images and their descriptions will "
+                          "be sent to {url}."
+settings.ollama_remote_plain = "That is not this computer. Images and their descriptions "
+                               "will be sent to {url}, unencrypted."
+
+settings.model_none         = "None selected"
+settings.model_vision       = "{name}  · reads images"
+settings.models_looking     = "Looking for models…"
+settings.models_none        = "No models found. Ollama has to be running, with a model "
+                              "that can read images pulled — for example `ollama pull "
+                              "llava`."
+settings.model_maybe_blind  = "That model may not accept images."
+settings.find_models        = "↻  Find installed models"
+settings.find_models_hint   = "Ask Ollama, at the address in use, what it has"
+
+settings.prompt       = "Prompt for image descriptions:"
+settings.prompt_reset = "Restore the default wording"
+
+
+# ------------------------------------------------------------- diagnostics
+
+diag.keyboard      = "Keyboard"
+diag.keyboard_note = "The unmodified keys act on whichever control has focus, so the "
+                     "chorded forms are the ones that always work."
+
+# The keys themselves, on the left of the table. `Ctrl/Cmd` names two keys that
+# are labelled the same way everywhere, but the words joining them are not.
+shortcut.open.keys   = "Ctrl/Cmd + O"
+shortcut.open.what   = "Open a document or an image"
+shortcut.play.keys   = "Space, or Ctrl/Cmd + P"
+shortcut.play.what   = "Play or pause"
+shortcut.stop.keys   = "Escape"
+shortcut.stop.what   = "Stop"
+shortcut.skip.keys   = "Right / Left, or Ctrl/Cmd + Right / Left"
+shortcut.skip.what   = "Next or previous sentence"
+shortcut.tab.keys    = "Tab"
+shortcut.tab.what    = "Move between controls"
+shortcut.enter.keys  = "Enter"
+shortcut.enter.what  = "In the document, read from the focused sentence"
+
+diag.engine       = "Speech engine"
+diag.system       = "System: {voices} voices · progress tracking {progress} · rate {rate} "
+                    "· pitch {pitch} · volume {volume}"
+diag.system_error = "System: {reason}"
+diag.document     = "Document: {chunks} chunks · {spoken} to speak · {skipped} skipped · "
+                    "{changes} substitutions"
+
+diag.settings_folder = "Settings folder"
+
+diag.updates          = "Updates"
+diag.check_now        = "Check for a new version now"
+diag.checking         = "Checking…"
+diag.update_available = "v{version} available"
+diag.show_dialog      = "Show dialog"
+diag.running          = "Running v{version}"
+
+diag.log_lines = "Recent log lines"
+diag.no_log    = "Nothing logged yet."
+
+
+# ------------------------------------------------------------- the dialogs
+
+dialog.update.title   = "Version {version} is available"
+dialog.update.running = "You are running v{version}."
+dialog.update.open    = "⬇  Open download page"
+dialog.update.later   = "Remind me later"
+dialog.update.skip    = "Skip this version"
+
+dialog.export.title     = "Save this reading as an MP3?"
+dialog.export.body.one   = "This document is {n} sentence, and it is one request to "
+                           "ElevenLabs against your account's quota."
+dialog.export.body.other = "This document is {n} sentences, and each one is a separate "
+                           "request to ElevenLabs against your account's quota."
+dialog.export.measured  = "It should take {duration}, going by how long this voice has "
+                          "been taking."
+dialog.export.guess     = "It should take {duration}, though this is a guess until the "
+                          "app has timed a few sentences."
+dialog.export.note      = "You can stop it at any point; a part-written file is discarded."
+dialog.export.confirm   = "Choose a file and save…"
+
+dialog.description.read = "▶  Read it aloud"
+dialog.description.save = "💾  Save as a text file…"
+
+
+# ---------------------------------------------------------- the file pickers
+
+pick.open_title             = "Choose a file to read aloud or an image to describe"
+pick.filter_everything      = "Documents and images"
+pick.filter_documents       = "Documents and presentations"
+pick.filter_images          = "Images"
+pick.filter_all             = "All files"
+pick.save_description_title = "Save the description"
+pick.filter_text            = "Text"
+pick.save_mp3_title         = "Save the reading as an MP3"
+pick.filter_mp3             = "MP3 audio"
+pick.add_wordlist_title     = "Add a wordlist"
+pick.filter_wordlists       = "Wordlists"
+pick.log_folder_title       = "Where should the logs be written?"
+
+
+# ------------------------------------------------------- the document pane
+
+doc.empty = "Open a file to read it aloud.\n\nCtrl/Cmd + O, or the button on the General "
+            "tab. An image opens here too, to be described."
+doc.virtualised = "Large document: showing the text around sentence {position} of {total}."
+doc.description_of    = "Description of {name}"
+doc.image_description = "Image description"
+
+image.no_preview          = "No preview for HEIC, but it can still be described."
+image.waiting             = "Waiting for Ollama…"
+image.show                = "Show the description"
+image.describe_again      = "Describe again"
+image.describe_again_hint = "Describe this image again, with the settings as they are now"
+image.no_model            = "No local model is selected — see Settings."
+
+# Shown while a description is being made, and added to a geotagged one.
+vision.looking_for_models = "Looking for local models…"
+vision.describing         = "Describing the image with {model}…"
+vision.taken_in           = "Taken in {place}."
+vision.place_unknown      = "The place this photo was taken could not be looked up."
+
+
+# ------------------------------------------------------------ the status bar
+
+status.ready        = "{app} — ready"
+status.error_prefix = "Error: {message}"
+
+status.opened_image    = "Opened {name}."
+status.opened_document = "Opened {title} — {words} words in {chunks} chunks"
+status.loaded          = "Loaded {title}"
+status.finished        = "Finished reading."
+status.stopping        = "Stopping…"
+status.image_described = "Image described."
+status.playing_sample  = "Playing a sample…"
+
+status.fetching_voices    = "Fetching voices from ElevenLabs…"
+status.voices_found.one   = "Found {n} ElevenLabs voice."
+status.voices_found.other = "Found {n} ElevenLabs voices."
+status.key_saved          = "API key saved. Fetch your voices to pick one."
+
+status.models_found.one   = "Ollama has {n} model installed, {vision} of which can read images."
+status.models_found.other = "Ollama has {n} models installed, {vision} of which can read images."
+
+status.saved            = "Saved {name}."
+status.saving_mp3.one   = "Saving {n} sentence to {name}…"
+status.saving_mp3.other = "Saving {n} sentences to {name}…"
+status.saving_progress  = "Saving sentence {done} of {total}"
+status.saved_mp3        = "Saved {name} ({size} MB) in {duration}."
+status.export_cancelled = "Saving cancelled; nothing was written."
+
+status.wordlists_reloaded.one   = "Reloaded {n} wordlist."
+status.wordlists_reloaded.other = "Reloaded {n} wordlists."
+
+status.no_logs            = "There were no log files to clear."
+status.logs_cleared.one   = "Cleared {n} log file."
+status.logs_cleared.other = "Cleared {n} log files."
+
+status.settings_reset       = "Settings put back to the ones in use."
+status.settings_applied     = "Settings applied."
+status.settings_applied_log = "Settings applied; logging to {path}."
+status.language_reloaded    = "Language files re-read; now in {name}."
+
+
+# --------------------------------------------------------- how long it takes
+
+duration.under_a_minute = "less than a minute"
+duration.about_a_minute = "about a minute"
+duration.minutes.one    = "about {n} minute"
+duration.minutes.other  = "about {n} minutes"
+duration.hours.one      = "about {n} hour"
+duration.hours.other    = "about {n} hours"
+duration.hours_minutes.one   = "about {n} hour {minutes} minutes"
+duration.hours_minutes.other = "about {n} hours {minutes} minutes"
+
+
+# ------------------------------------------------------------- the errors
+
+error.nothing_to_read     = "There is nothing to read. Open a file first."
+error.open_document       = "Could not open {path}: {reason}"
+error.file_too_large      = "{path} is {size} MB; the reader caps files at 64 MB"
+error.utf16               = "this looks like a UTF-16 file; please re-save it as UTF-8"
+error.markup_file         = "{path} is {kind}, which this reader no longer opens. Save it "
+                            "as plain text or markdown first."
+
+error.not_a_presentation   = "this is not a PowerPoint presentation"
+error.unreadable_zip       = "this file is not a readable zip"
+error.no_slides            = "this zip has no slides in it, so it is not a presentation"
+error.slides_too_large     = "this presentation's slides expand to more than 64 MB of XML"
+error.no_powerpoint_stream = "this file has no PowerPoint Document stream, so it is not a "
+                             "presentation"
+error.records_too_deep     = "the records in this presentation nest too deeply to be read"
+error.presentation_locked  = "this presentation is password-protected, so its text cannot "
+                             "be read"
+
+error.could_not_speak     = "Could not speak: {reason}"
+error.no_engine           = "No system speech engine is available."
+error.no_engine_reason    = "No system speech engine is available: {reason}"
+error.no_system_voice     = "No system voice available: {reason}"
+error.voice_select        = "Could not select that voice: {reason}"
+error.needs_voice         = "Choose an ElevenLabs voice first."
+error.choose_voice_general = "Choose a voice on the General tab first."
+error.needs_key_or_system = "Add your ElevenLabs API key on the General tab, or switch to "
+                            "system voices."
+error.enter_key_first     = "Enter your ElevenLabs API key first."
+error.no_key              = "No key was entered."
+
+error.export_start        = "Could not start saving."
+error.export_failed       = "Could not save: {reason}"
+error.save_description    = "Could not save the description: {reason}"
+
+error.no_vision_model = "None of the models installed in Ollama can read images. Pull one "
+                        "— for example `ollama pull llava` — then open the image again."
+error.model_missing   = "Ollama does not have '{model}'. Pull it first: ollama pull {model}"
+error.model_timeout   = "The local model took too long to reply. Try a smaller model."
+error.ollama_unreachable = "Could not reach Ollama at {url}. Start it with `ollama serve`, "
+                           "or change the address in Settings."
+
+error.no_settings_folder = "No settings folder is available on this system."
+error.language_folder    = "The languages folder could not be created: {reason}"
+error.log_folder         = "Settings applied, but that log folder could not be used: {reason}"
+error.clear_logs         = "Could not clear the logs: {reason}"
+error.wordlist_exists    = "A wordlist called {name} is already installed. Rename the new "
+                           "file, or edit the existing list."
+error.wordlist_add       = "Could not add that wordlist: {reason}"

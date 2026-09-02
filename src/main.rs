@@ -26,6 +26,7 @@ mod audio;
 mod config;
 mod document;
 mod export;
+mod i18n;
 mod logging;
 mod powerpoint;
 mod speech;

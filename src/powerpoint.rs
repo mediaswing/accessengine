@@ -18,6 +18,8 @@
 
 use anyhow::{bail, Context, Result};
 use std::io::Read;
+
+use crate::t;
 use std::path::Path;
 
 /// A zip archive: every `.pptx` is one.
@@ -55,7 +57,7 @@ fn text_from_bytes(raw: &[u8]) -> Result<String> {
     } else if raw.starts_with(&CFB_MAGIC) {
         legacy_slides(raw)?
     } else {
-        bail!("this is not a PowerPoint presentation");
+        bail!(t!("error.not_a_presentation"));
     };
     Ok(lay_out(&slides))
 }
@@ -90,7 +92,7 @@ fn lay_out(slides: &[Vec<String>]) -> String {
 /// The slides of a `.pptx`, in the order they are shown.
 fn modern_slides(raw: &[u8]) -> Result<Vec<Vec<String>>> {
     let cursor = std::io::Cursor::new(raw);
-    let mut archive = zip::ZipArchive::new(cursor).context("this file is not a readable zip")?;
+    let mut archive = zip::ZipArchive::new(cursor).with_context(|| t!("error.unreadable_zip"))?;
 
     // `ppt/slides/slide12.xml`. Sorted by the number rather than by the name,
     // or slide 10 would be read second — the archive's own order is whatever
@@ -100,7 +102,7 @@ fn modern_slides(raw: &[u8]) -> Result<Vec<Vec<String>>> {
         .filter_map(|name| slide_number(&name).map(|number| (number, name)))
         .collect();
     if names.is_empty() {
-        bail!("this zip has no slides in it, so it is not a presentation");
+        bail!(t!("error.no_slides"));
     }
     names.sort();
     names.truncate(MAX_SLIDES);
@@ -113,7 +115,7 @@ fn modern_slides(raw: &[u8]) -> Result<Vec<Vec<String>>> {
             .with_context(|| format!("reading {name}"))?;
         total += entry.size().min(MAX_SLIDE_BYTES);
         if total > MAX_TOTAL_BYTES {
-            bail!("this presentation's slides expand to more than 64 MB of XML");
+            bail!(t!("error.slides_too_large"));
         }
         let mut xml = String::new();
         // Capped as it is read, not after: the size a zip entry claims is a
@@ -260,7 +262,7 @@ fn legacy_slides(raw: &[u8]) -> Result<Vec<Vec<String>>> {
     let file = cfb::CompoundFile::open(raw)?;
     let stream = file
         .stream("PowerPoint Document")
-        .context("this file has no PowerPoint Document stream, so it is not a presentation")?;
+        .with_context(|| t!("error.no_powerpoint_stream"))?;
 
     let mut slides: Vec<Vec<String>> = Vec::new();
     walk_records(&stream, 0, None, &mut slides)?;
@@ -279,7 +281,7 @@ fn walk_records(
     slides: &mut Vec<Vec<String>>,
 ) -> Result<()> {
     if depth > MAX_RECORD_DEPTH {
-        bail!("the records in this presentation nest too deeply to be read");
+        bail!(t!("error.records_too_deep"));
     }
     let mut at = 0usize;
     while at + 8 <= buffer.len() {
@@ -299,7 +301,7 @@ fn walk_records(
         at = end;
 
         if record_type == CRYPT_SESSION_CONTAINER {
-            bail!("this presentation is password-protected, so its text cannot be read");
+            bail!(t!("error.presentation_locked"));
         }
         // A `recVer` of 0xF marks a container; anything else is a leaf.
         if version_instance & 0x000F == 0x000F {

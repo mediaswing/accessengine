@@ -17,7 +17,7 @@ use crate::theme;
 use crate::update::{UpdateChecker, UpdateInfo};
 use crate::vision::{self, ModelInfo, Vision, VisionResult, IMAGE_EXTENSIONS};
 use crate::wordlist::{self, BlockPolicy, Hit, WordlistSet};
-use crate::APP_NAME;
+use crate::{i18n, t, tn, APP_NAME};
 
 /// Settings are written this long after the last change, so dragging a slider
 /// does not mean a disk write per frame.
@@ -41,11 +41,11 @@ enum Tab {
 impl Tab {
     const ALL: [Self; 3] = [Self::General, Self::Wordlists, Self::Settings];
 
-    fn title(self) -> &'static str {
+    fn title(self) -> String {
         match self {
-            Self::General => "General",
-            Self::Wordlists => "Wordlists",
-            Self::Settings => "Settings",
+            Self::General => t!("tab.general"),
+            Self::Wordlists => t!("tab.wordlists"),
+            Self::Settings => t!("tab.settings"),
         }
     }
 }
@@ -157,6 +157,9 @@ impl AccessEngine {
         theme::apply(&cc.egui_ctx);
 
         let cfg = Config::load();
+        // Before any of the interface is built, so the first frame is already
+        // in the right language rather than in English for one repaint.
+        i18n::apply_setting(&cfg.language);
         theme::apply_appearance(&cc.egui_ctx, cfg.appearance);
         cc.egui_ctx.set_zoom_factor(cfg.text_scale);
 
@@ -293,11 +296,11 @@ impl AccessEngine {
             .copied()
             .collect();
         let picked = rfd::FileDialog::new()
-            .set_title("Choose a file to read aloud or an image to describe")
-            .add_filter("Documents and images", &everything)
-            .add_filter("Documents and presentations", SUPPORTED_EXTENSIONS)
-            .add_filter("Images", IMAGE_EXTENSIONS)
-            .add_filter("All files", &["*"])
+            .set_title(t!("pick.open_title"))
+            .add_filter(t!("pick.filter_everything"), &everything)
+            .add_filter(t!("pick.filter_documents"), SUPPORTED_EXTENSIONS)
+            .add_filter(t!("pick.filter_images"), IMAGE_EXTENSIONS)
+            .add_filter(t!("pick.filter_all"), &["*"])
             .pick_file();
         if let Some(path) = picked {
             self.open_path(&path, ctx);
@@ -331,7 +334,7 @@ impl AccessEngine {
         // user came for, so nothing further should have to be pressed.
         self.pending_describe = true;
         self.list_models_once(ctx);
-        self.info(format!("Opened {name}."));
+        self.info(t!("status.opened_image", name = name));
         self.advance_auto_describe(ctx);
     }
 
@@ -384,9 +387,9 @@ impl AccessEngine {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "description".to_string());
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Save the description")
+            .set_title(t!("pick.save_description_title"))
             .set_file_name(export::suggested_filename(&stem, "txt"))
-            .add_filter("Text", &["txt"])
+            .add_filter(t!("pick.filter_text"), &["txt"])
             .save_file()
         else {
             return;
@@ -395,12 +398,12 @@ impl AccessEngine {
         match std::fs::write(&path, &self.description) {
             Ok(()) => {
                 self.sounds.success();
-                self.info(format!(
-                    "Saved {}.",
-                    path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
+                self.info(t!(
+                    "status.saved",
+                    name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
                 ));
             }
-            Err(e) => self.error(format!("Could not save the description: {e}")),
+            Err(e) => self.error(t!("error.save_description", reason = e)),
         }
     }
 
@@ -411,8 +414,8 @@ impl AccessEngine {
             .image_path
             .as_ref()
             .and_then(|p| p.file_name())
-            .map(|n| format!("Description of {}", n.to_string_lossy()))
-            .unwrap_or_else(|| "Image description".to_string());
+            .map(|n| t!("doc.description_of", name = n.to_string_lossy()))
+            .unwrap_or_else(|| t!("doc.image_description"));
         self.set_document_text(&title, text);
         self.play();
     }
@@ -440,24 +443,21 @@ impl AccessEngine {
     /// The system voices are missing rather than disabled: the platform speech
     /// engines play to the sound card and offer no way to capture what they
     /// produce, so there is nothing to write.
-    fn export_blocker(&self) -> Option<&'static str> {
+    fn export_blocker(&self) -> Option<String> {
         if self.export.is_running() {
-            return Some("Already saving. Cancel that first.");
+            return Some(t!("block.already_saving"));
         }
         if self.plan.is_empty() {
-            return Some("Open a file first.");
+            return Some(t!("block.no_file"));
         }
         if self.cfg.engine != EngineKind::ElevenLabs {
-            return Some(
-                "Saving audio needs the ElevenLabs engine — the system voices cannot be \
-                 recorded to a file. Switch engine on the Settings tab.",
-            );
+            return Some(t!("block.needs_elevenlabs"));
         }
         if self.cfg.effective_api_key().is_empty() {
-            return Some("Add your ElevenLabs API key on the General tab.");
+            return Some(t!("block.needs_key"));
         }
         if self.cfg.elevenlabs_voice_id.is_empty() {
-            return Some("Choose an ElevenLabs voice on the General tab first.");
+            return Some(t!("block.needs_voice"));
         }
         None
     }
@@ -489,9 +489,9 @@ impl AccessEngine {
             return;
         }
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Save the reading as an MP3")
+            .set_title(t!("pick.save_mp3_title"))
             .set_file_name(export::suggested_filename(&self.doc.title, "mp3"))
-            .add_filter("MP3 audio", &["mp3"])
+            .add_filter(t!("pick.filter_mp3"), &["mp3"])
             .save_file()
         else {
             return;
@@ -510,12 +510,13 @@ impl AccessEngine {
             move || ctx.request_repaint(),
         );
         if self.export.is_running() {
-            self.info(format!(
-                "Saving {sentences} sentences to {}…",
-                path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
+            self.info(tn!(
+                "status.saving_mp3",
+                sentences,
+                name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
             ));
         } else {
-            self.error("Could not start saving.");
+            self.error(t!("error.export_start"));
         }
     }
 
@@ -528,12 +529,18 @@ impl AccessEngine {
                 let title = doc.title.clone();
                 self.doc = doc;
                 self.rebuild_plan();
-                self.info(format!(
-                    "Opened {title} — {words} words in {} chunks",
-                    self.doc.chunks.len()
+                self.info(t!(
+                    "status.opened_document",
+                    title = title,
+                    words = words,
+                    chunks = self.doc.chunks.len()
                 ));
             }
-            Err(e) => self.error(format!("Could not open {}: {e:#}", path.display())),
+            Err(e) => self.error(t!(
+                "error.open_document",
+                path = path.display(),
+                reason = format!("{e:#}")
+            )),
         }
     }
 
@@ -542,7 +549,7 @@ impl AccessEngine {
         self.preview = Preview::Document;
         self.doc = Document::from_text(title, text, self.cfg.chunk_mode);
         self.rebuild_plan();
-        self.info(format!("Loaded {title}"));
+        self.info(t!("status.loaded", title = title));
     }
 
     /// Rebuild the plan when the document may be playing. The wordlists decide
@@ -638,7 +645,7 @@ impl AccessEngine {
 
     fn play(&mut self) {
         if self.plan.is_empty() {
-            self.error("There is nothing to read. Open a file first.");
+            self.error(t!("error.nothing_to_read"));
             return;
         }
         // Resuming ElevenLabs is a real resume; the system engine has no pause,
@@ -667,7 +674,7 @@ impl AccessEngine {
             EngineKind::System => {
                 let Ok(system) = &mut self.system else {
                     let reason = self.system.as_ref().err().cloned().unwrap_or_default();
-                    self.error(format!("No system voice available: {reason}"));
+                    self.error(t!("error.no_system_voice", reason = reason));
                     return;
                 };
                 let result = if system.tracks_progress() {
@@ -681,16 +688,16 @@ impl AccessEngine {
                 };
                 match result {
                     Ok(()) => self.state = PlayState::Playing,
-                    Err(e) => self.error(format!("Could not speak: {e:#}")),
+                    Err(e) => self.error(t!("error.could_not_speak", reason = format!("{e:#}"))),
                 }
             }
             EngineKind::ElevenLabs => {
                 if self.cfg.effective_api_key().is_empty() {
-                    self.error("Add your ElevenLabs API key on the General tab, or switch to system voices.");
+                    self.error(t!("error.needs_key_or_system"));
                     return;
                 }
                 if self.cfg.elevenlabs_voice_id.is_empty() {
-                    self.error("Choose an ElevenLabs voice first.");
+                    self.error(t!("error.needs_voice"));
                     return;
                 }
                 let texts: Vec<String> = self.plan.iter().map(|p| p.text.clone()).collect();
@@ -770,7 +777,7 @@ impl AccessEngine {
                 self.state = PlayState::Idle;
                 self.plan_pos = 0;
                 self.sounds.success();
-                self.info("Finished reading.");
+                self.info(t!("status.finished"));
             } else {
                 self.start_from(next);
             }
@@ -806,7 +813,7 @@ impl AccessEngine {
                         self.state = PlayState::Idle;
                         self.plan_pos = 0;
                         self.sounds.success();
-                self.info("Finished reading.");
+                self.info(t!("status.finished"));
                     }
                 }
                 elevenlabs::Event::Stopped => {
@@ -825,7 +832,7 @@ impl AccessEngine {
                 elevenlabs::Event::Voices(voices) => {
                     self.api_key_rejected = false;
                     self.sounds.success();
-                    self.info(format!("Found {} ElevenLabs voices.", voices.len()));
+                    self.info(tn!("status.voices_found", voices.len()));
                     self.el_voices = voices;
                 }
             }
@@ -842,19 +849,19 @@ impl AccessEngine {
                     let sentences = self.plan.len().max(1) as u32;
                     self.export_estimate.record(elapsed / sentences);
                     self.sounds.success();
-                    self.info(format!(
-                        "Saved {} ({:.1} MB) in {}.",
-                        path.file_name().unwrap_or(path.as_os_str()).to_string_lossy(),
-                        bytes as f64 / 1_048_576.0,
-                        export::approximate_duration(elapsed)
+                    self.info(t!(
+                        "status.saved_mp3",
+                        name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy(),
+                        size = format!("{:.1}", bytes as f64 / 1_048_576.0),
+                        duration = export::approximate_duration(elapsed)
                     ));
                 }
-                export::Event::Cancelled => self.info("Saving cancelled; nothing was written."),
+                export::Event::Cancelled => self.info(t!("status.export_cancelled")),
                 export::Event::Failed(message) => {
                     if elevenlabs::is_key_rejection(&message) {
                         self.api_key_rejected = true;
                     }
-                    self.error(format!("Could not save: {message}"));
+                    self.error(t!("error.export_failed", reason = message));
                 }
                 // Progress is folded into the export itself.
                 export::Event::Progress(_) => {}
@@ -882,22 +889,19 @@ impl AccessEngine {
                         // look at a picture. Say so once, rather than leaving an
                         // image waiting for a model that is never coming.
                         self.pending_describe = false;
-                        self.error(
-                            "None of the models installed in Ollama can read images. \
-                             Pull one — for example `ollama pull llava` — then open the \
-                             image again.",
-                        );
+                        self.error(t!("error.no_vision_model"));
                     } else {
-                        self.info(format!(
-                            "Ollama has {} models installed, {vision_count} of which can read images.",
-                            self.models.len()
+                        self.info(tn!(
+                            "status.models_found",
+                            self.models.len(),
+                            vision = vision_count
                         ));
                         self.advance_auto_describe(ctx);
                     }
                 }
                 VisionResult::Description(text) => {
                     self.sounds.success();
-                    self.info("Image described.");
+                    self.info(t!("status.image_described"));
                     self.description = text;
                     // The description is the answer to the question the user
                     // asked by opening the picture, so it comes to them.
@@ -1060,14 +1064,16 @@ impl AccessEngine {
 
     /// Every shortcut, for the list in Diagnostics. Kept beside the handler so
     /// the two cannot drift apart.
-    const SHORTCUTS: &'static [(&'static str, &'static str)] = &[
-        ("Ctrl/Cmd + O", "Open a document or an image"),
-        ("Space, or Ctrl/Cmd + P", "Play or pause"),
-        ("Escape", "Stop"),
-        ("→ / ←, or Ctrl/Cmd + → / ←", "Next or previous sentence"),
-        ("Tab", "Move between controls"),
-        ("Enter", "In the document, read from the focused sentence"),
-    ];
+    fn shortcuts() -> [(String, String); 6] {
+        [
+            (t!("shortcut.open.keys"), t!("shortcut.open.what")),
+            (t!("shortcut.play.keys"), t!("shortcut.play.what")),
+            (t!("shortcut.stop.keys"), t!("shortcut.stop.what")),
+            (t!("shortcut.skip.keys"), t!("shortcut.skip.what")),
+            (t!("shortcut.tab.keys"), t!("shortcut.tab.what")),
+            (t!("shortcut.enter.keys"), t!("shortcut.enter.what")),
+        ]
+    }
 
     /// A newer release was found on GitHub. Only offers a link to the release
     /// page — see `src/update.rs` for why this never downloads anything.
@@ -1083,11 +1089,11 @@ impl AccessEngine {
         let mut open = true;
         let response = egui::Modal::new(egui::Id::new("update-available")).show(ctx, |ui| {
             ui.set_max_width(420.0);
-            ui.heading(format!("Version {} is available", info.version));
+            ui.heading(t!("dialog.update.title", version = info.version));
             ui.add_space(4.0);
-            ui.label(format!(
-                "You are running v{}.",
-                env!("CARGO_PKG_VERSION")
+            ui.label(t!(
+                "dialog.update.running",
+                version = env!("CARGO_PKG_VERSION")
             ));
 
             if !info.notes.trim().is_empty() {
@@ -1101,14 +1107,14 @@ impl AccessEngine {
 
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if ui.button("⬇  Open download page").clicked() {
+                if ui.button(t!("dialog.update.open")).clicked() {
                     logging::open_url(&info.url);
                     open = false;
                 }
-                if ui.button("Remind me later").clicked() {
+                if ui.button(t!("dialog.update.later")).clicked() {
                     open = false;
                 }
-                if ui.button("Skip this version").clicked() {
+                if ui.button(t!("dialog.update.skip")).clicked() {
                     self.cfg.skipped_update_version = info.version.clone();
                     self.mark_settings_dirty();
                     open = false;
@@ -1142,38 +1148,28 @@ impl AccessEngine {
 
         let response = egui::Modal::new(egui::Id::new("confirm-export")).show(ctx, |ui| {
             ui.set_max_width(430.0);
-            ui.heading("Save this reading as an MP3?");
+            ui.heading(t!("dialog.export.title"));
             ui.add_space(6.0);
-            ui.label(format!(
-                "This document is {sentences} sentences, and each one is a separate request \
-                 to ElevenLabs against your account's quota."
-            ));
+            ui.label(tn!("dialog.export.body", sentences));
             ui.add_space(6.0);
+            let duration = export::approximate_duration(estimate);
             ui.label(
-                RichText::new(format!(
-                    "It should take {}{}.",
-                    export::approximate_duration(estimate),
-                    if self.export_estimate.is_measured() {
-                        ", going by how long this voice has been taking"
-                    } else {
-                        ", though this is a guess until the app has timed a few sentences"
-                    }
-                ))
+                RichText::new(if self.export_estimate.is_measured() {
+                    t!("dialog.export.measured", duration = duration)
+                } else {
+                    t!("dialog.export.guess", duration = duration)
+                })
                 .strong(),
             );
             ui.add_space(4.0);
-            ui.label(
-                RichText::new("You can stop it at any point; a part-written file is discarded.")
-                    .weak()
-                    .small(),
-            );
+            ui.label(RichText::new(t!("dialog.export.note")).weak().small());
 
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if ui.button("Choose a file and save…").clicked() {
+                if ui.button(t!("dialog.export.confirm")).clicked() {
                     decision = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t!("common.cancel")).clicked() {
                     decision = Some(false);
                 }
             });
@@ -1207,8 +1203,8 @@ impl AccessEngine {
             .image_path
             .as_ref()
             .and_then(|p| p.file_name())
-            .map(|n| format!("Description of {}", n.to_string_lossy()))
-            .unwrap_or_else(|| "Image description".to_string());
+            .map(|n| t!("doc.description_of", name = n.to_string_lossy()))
+            .unwrap_or_else(|| t!("doc.image_description"));
         let description = self.description.clone();
 
         let mut read = false;
@@ -1230,13 +1226,13 @@ impl AccessEngine {
 
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if ui.button("▶  Read it aloud").clicked() {
+                if ui.button(t!("dialog.description.read")).clicked() {
                     read = true;
                 }
-                if ui.button("💾  Save as a text file…").clicked() {
+                if ui.button(t!("dialog.description.save")).clicked() {
                     save = true;
                 }
-                if ui.button("Close").clicked() {
+                if ui.button(t!("common.close")).clicked() {
                     close = true;
                 }
             });
@@ -1266,7 +1262,8 @@ impl AccessEngine {
             let gaps = ui.spacing().item_spacing.x * (Tab::ALL.len() - 1) as f32;
             let width = ((ui.available_width() - gaps) / Tab::ALL.len() as f32).max(60.0);
             for tab in Tab::ALL {
-                let button = egui::Button::selectable(self.tab == tab, centred(tab.title()))
+                let title = tab.title();
+                let button = egui::Button::selectable(self.tab == tab, centred(&title))
                     .corner_radius(6.0)
                     .min_size(egui::vec2(width, 34.0));
                 if ui.add(button).clicked() {
@@ -1286,14 +1283,17 @@ impl AccessEngine {
                     // it. Colour alone would say nothing to a screen reader, or
                     // to anyone who cannot tell this green from this red.
                     let palette = theme::palette(ui.visuals());
-                    let (colour, prefix) = match status.kind {
-                        StatusKind::Info => (palette.ok, ""),
-                        StatusKind::Error => (palette.bad, "Error: "),
+                    let (colour, text) = match status.kind {
+                        StatusKind::Info => (palette.ok, status.text.clone()),
+                        StatusKind::Error => (
+                            palette.bad,
+                            t!("status.error_prefix", message = status.text),
+                        ),
                     };
-                    ui.label(RichText::new(format!("{prefix}{}", status.text)).color(colour));
+                    ui.label(RichText::new(text).color(colour));
                 }
                 None => {
-                    ui.label(RichText::new(format!("{APP_NAME} — ready")).weak());
+                    ui.label(RichText::new(t!("status.ready", app = APP_NAME)).weak());
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
@@ -1303,12 +1303,13 @@ impl AccessEngine {
                 }
                 if self.export.is_running() {
                     let (done, total) = self.export.progress;
-                    if ui.small_button("Cancel").clicked() {
+                    if ui.small_button(t!("common.cancel")).clicked() {
                         self.export.cancel();
-                        self.info("Stopping…");
+                        self.info(t!("status.stopping"));
                     }
                     ui.label(
-                        RichText::new(format!("Saving sentence {} of {total}", done + 1)).weak(),
+                        RichText::new(t!("status.saving_progress", done = done + 1, total = total))
+                            .weak(),
                     );
                     ui.add(egui::Spinner::new().size(12.0));
                 }
@@ -1335,14 +1336,10 @@ impl AccessEngine {
     /// other choice lives on Settings; what changes from one document to the
     /// next lives here.
     fn general_tab(&mut self, ui: &mut egui::Ui) {
-        pane_header(
-            ui,
-            "General",
-            "Open a file, choose what should happen to it, then press Apply.",
-        );
+        pane_header(ui, &t!("general.title"), &t!("general.subtitle"));
 
-        if wide_button(ui, "📂  Open a file…")
-            .on_hover_text("Ctrl/Cmd + O — a document to read, or an image to describe")
+        if wide_button(ui, &t!("general.open"))
+            .on_hover_text(t!("general.open_hint"))
             .clicked()
         {
             self.open_file_dialog(ui.ctx());
@@ -1351,7 +1348,9 @@ impl AccessEngine {
         self.open_file_line(ui);
 
         let outputs = labelled_options(&config::Output::ALL, config::Output::label);
-        if let Some(output) = setting_choice(ui, "output", "Do this:", self.cfg.output, &outputs) {
+        if let Some(output) =
+            setting_choice(ui, "output", &t!("general.do_this"), self.cfg.output, &outputs)
+        {
             self.cfg.output = output;
             self.mark_settings_dirty();
         }
@@ -1363,12 +1362,12 @@ impl AccessEngine {
 
         ui.add_space(14.0);
         let blocker = self.apply_blocker();
-        let apply = wide_button_enabled(ui, blocker.is_none(), "Apply");
+        let apply = wide_button_enabled(ui, blocker.is_none(), &t!("common.apply"));
         let apply = match blocker {
             Some(reason) => apply.on_disabled_hover_text(reason),
             None => apply.on_hover_text(match self.cfg.output {
-                config::Output::ReadAloud => "Read this aloud in the voice above",
-                config::Output::SaveAudio => "Write the whole reading to an audio file",
+                config::Output::ReadAloud => t!("general.apply_read_hint"),
+                config::Output::SaveAudio => t!("general.apply_save_hint"),
             }),
         };
         if apply.clicked() {
@@ -1391,9 +1390,9 @@ impl AccessEngine {
                     .strong(),
                 );
                 let state = if self.description.is_empty() {
-                    "An image. It is described as soon as it opens.".to_string()
+                    t!("general.image_pending")
                 } else {
-                    "An image, described. Apply reads the description aloud.".to_string()
+                    t!("general.image_described")
                 };
                 ui.label(RichText::new(state).weak().small());
             }
@@ -1403,27 +1402,27 @@ impl AccessEngine {
                     title.on_hover_text(path.display().to_string());
                 }
                 ui.label(
-                    RichText::new(format!(
-                        "{} words · {} to speak",
-                        self.doc.word_count(),
-                        self.plan.len()
+                    RichText::new(t!(
+                        "general.word_counts",
+                        words = self.doc.word_count(),
+                        spoken = self.plan.len()
                     ))
                     .weak()
                     .small(),
                 );
             }
             _ => {
-                ui.label(RichText::new("Nothing open yet.").weak());
+                ui.label(RichText::new(t!("general.nothing_open")).weak());
             }
         }
     }
 
     /// Why Apply cannot do anything yet, or `None` if it can.
-    fn apply_blocker(&self) -> Option<&'static str> {
+    fn apply_blocker(&self) -> Option<String> {
         match self.cfg.output {
             config::Output::ReadAloud => {
                 if self.plan.is_empty() && self.description.is_empty() {
-                    Some("Open a document first, or an image to be described.")
+                    Some(t!("block.no_document"))
                 } else {
                     None
                 }
@@ -1466,11 +1465,11 @@ impl AccessEngine {
 
     fn api_key_button(&mut self, ui: &mut egui::Ui) {
         let text = if self.api_key_rejected {
-            "🔑  That key was refused — enter another…"
+            t!("key.button_refused")
         } else {
-            "🔑  Enter your ElevenLabs API key…"
+            t!("key.button")
         };
-        if wide_button(ui, text).clicked() {
+        if wide_button(ui, &text).clicked() {
             self.key_draft = self.cfg.elevenlabs_api_key.clone();
             self.show_key_dialog = true;
         }
@@ -1488,25 +1487,25 @@ impl AccessEngine {
 
         let response = egui::Modal::new(egui::Id::new("api-key")).show(ctx, |ui| {
             ui.set_max_width(460.0);
-            ui.heading("Your ElevenLabs API key");
+            ui.heading(t!("key.title"));
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                ui.label(RichText::new("Needs an account —").weak().small());
+                ui.label(RichText::new(t!("key.needs_account")).weak().small());
                 ui.hyperlink_to(
-                    RichText::new("sign up").small(),
+                    RichText::new(t!("key.sign_up")).small(),
                     "https://elevenlabs.io/sign-up",
                 );
-                ui.label(RichText::new(", then").weak().small());
+                ui.label(RichText::new(t!("key.then")).weak().small());
                 ui.hyperlink_to(
-                    RichText::new("find your key").small(),
+                    RichText::new(t!("key.find_key")).small(),
                     "https://elevenlabs.io/app/settings/api-keys",
                 );
-                ui.label(RichText::new("under Settings.").weak().small());
+                ui.label(RichText::new(t!("key.under_settings")).weak().small());
             });
 
             ui.add_space(8.0);
-            let label = field_label(ui, "API key:");
+            let label = field_label(ui, &t!("key.field"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.key_draft)
                     .password(true)
@@ -1518,24 +1517,17 @@ impl AccessEngine {
             ui.add_space(6.0);
             let mut remember = self.cfg.save_api_key;
             if ui
-                .checkbox(&mut remember, "Remember this key on this computer")
+                .checkbox(&mut remember, t!("key.remember"))
                 .changed()
             {
                 self.cfg.save_api_key = remember;
             }
             // On screen rather than in a tooltip: what happens to a credential
             // is not something to hide behind a pointer nobody may be using.
-            ui.label(
-                RichText::new(
-                    "Stored as plain text in the settings file, readable by anything running \
-                     as you. On a shared machine, prefer the ELEVENLABS_API_KEY variable.",
-                )
-                .weak()
-                .small(),
-            );
+            ui.label(RichText::new(t!("key.warning")).weak().small());
 
             ui.add_space(12.0);
-            match button_row(ui, &["Cancel", "Save"]) {
+            match button_row(ui, &[t!("common.cancel"), t!("common.save")]) {
                 Some(0) => close = true,
                 Some(_) => save = true,
                 None => {}
@@ -1552,9 +1544,9 @@ impl AccessEngine {
             self.show_key_dialog = false;
             self.key_draft.clear();
             if self.cfg.effective_api_key().is_empty() {
-                self.error("No key was entered.");
+                self.error(t!("error.no_key"));
             } else {
-                self.info("API key saved. Fetch your voices to pick one.");
+                self.info(t!("status.key_saved"));
             }
         } else if close {
             self.show_key_dialog = false;
@@ -1574,32 +1566,19 @@ impl AccessEngine {
                 ui.add_space(8.0);
                 ui.colored_label(
                     ui.visuals().error_fg_color,
-                    format!("No system speech engine is available: {reason}"),
+                    t!("error.no_engine_reason", reason = reason),
                 );
                 #[cfg(all(unix, not(target_os = "macos")))]
-                ui.label(
-                    RichText::new(
-                        "On Linux this usually means speech-dispatcher is not installed. \
-                         Try: sudo apt install speech-dispatcher",
-                    )
-                    .weak()
-                    .small(),
-                );
-                ui.label(
-                    RichText::new(
-                        "You can still use ElevenLabs — switch engine on the Settings tab.",
-                    )
-                    .weak()
-                    .small(),
-                );
+                ui.label(RichText::new(t!("voice.linux_hint")).weak().small());
+                ui.label(RichText::new(t!("voice.use_elevenlabs")).weak().small());
                 return;
             }
         };
 
-        let filter_label = field_label(ui, "Filter the voices:");
+        let filter_label = field_label(ui, &t!("voice.filter"));
         ui.add(
             egui::TextEdit::singleline(&mut self.voice_filter)
-                .hint_text("name or language")
+                .hint_text(t!("voice.filter_hint"))
                 .desired_width(f32::INFINITY),
         )
         .labelled_by(filter_label);
@@ -1611,10 +1590,10 @@ impl AccessEngine {
             .as_ref()
             .and_then(|id| voices.iter().find(|v| &v.id == id))
             .map(|v| format!("{} ({})", v.name, v.language))
-            .unwrap_or_else(|| "System default".to_string());
+            .unwrap_or_else(|| t!("voice.system_default"));
 
         let mut chosen: Option<String> = None;
-        let voice_label = field_label(ui, "Voice:");
+        let voice_label = field_label(ui, &t!("voice.voice"));
         let width = ui.available_width();
         egui::ComboBox::from_id_salt("system-voice")
             .selected_text(selected_name)
@@ -1635,18 +1614,15 @@ impl AccessEngine {
             .response
             .labelled_by(voice_label);
         ui.label(
-            RichText::new(format!(
-                "{} voices, all running on this computer.",
-                voices.len()
-            ))
-            .weak()
-            .small(),
+            RichText::new(tn!("voice.local_count", voices.len()))
+                .weak()
+                .small(),
         );
 
         if let Some(id) = chosen {
             if let Ok(system) = &mut self.system {
                 if let Err(e) = system.set_voice_by_id(&id) {
-                    self.error(format!("Could not select that voice: {e:#}"));
+                    self.error(t!("error.voice_select", reason = format!("{e:#}")));
                 } else {
                     self.cfg.system_voice_id = Some(id);
                     self.mark_settings_dirty();
@@ -1660,9 +1636,9 @@ impl AccessEngine {
             ui.add_space(8.0);
             ui.label(
                 RichText::new(if self.api_key_rejected {
-                    "ElevenLabs would not accept the key it was given."
+                    t!("voice.key_refused")
                 } else {
-                    "ElevenLabs needs an API key before it can list any voices."
+                    t!("voice.key_needed")
                 })
                 .weak()
                 .small(),
@@ -1672,31 +1648,27 @@ impl AccessEngine {
         }
         if self.api_key_rejected && self.cfg.api_key_from_env() {
             ui.add_space(8.0);
-            ui.colored_label(
-                ui.visuals().error_fg_color,
-                "ELEVENLABS_API_KEY was refused. That variable takes precedence, so it has \
-                 to be corrected outside the app.",
-            );
+            ui.colored_label(ui.visuals().error_fg_color, t!("voice.env_key_refused"));
         }
 
         ui.add_space(8.0);
-        if wide_button(ui, "↻  Fetch my voices").clicked() {
+        if wide_button(ui, &t!("voice.fetch")).clicked() {
             let key = self.cfg.effective_api_key();
             if key.is_empty() {
-                self.error("Enter your ElevenLabs API key first.");
+                self.error(t!("error.enter_key_first"));
             } else {
-                self.info("Fetching voices from ElevenLabs…");
+                self.info(t!("status.fetching_voices"));
                 self.eleven.send(ElCommand::FetchVoices { api_key: key });
             }
         }
 
         let selected = if self.cfg.elevenlabs_voice_name.is_empty() {
-            "No voice selected".to_string()
+            t!("voice.none_selected")
         } else {
             self.cfg.elevenlabs_voice_name.clone()
         };
         let mut chosen: Option<RemoteVoice> = None;
-        let voice_label = field_label(ui, "Voice:");
+        let voice_label = field_label(ui, &t!("voice.voice"));
         let width = ui.available_width();
         egui::ComboBox::from_id_salt("el-voice")
             .selected_text(selected)
@@ -1718,9 +1690,9 @@ impl AccessEngine {
             .labelled_by(voice_label);
         ui.label(
             RichText::new(if self.el_voices.is_empty() {
-                "No voices fetched yet.".to_string()
+                t!("voice.none_fetched")
             } else {
-                format!("{} voices on this account.", self.el_voices.len())
+                tn!("voice.account_count", self.el_voices.len())
             })
             .weak()
             .small(),
@@ -1735,22 +1707,14 @@ impl AccessEngine {
     // -------------------------------------------------------- wordlists tab
 
     fn wordlists_tab(&mut self, ui: &mut egui::Ui) {
-        pane_header(
-            ui,
-            "Wordlists",
-            "Rewrite the text before it is spoken: soften or remove words that are not \
-             right for the room, and fix names the voice mispronounces.",
-        );
+        pane_header(ui, &t!("wordlists.title"), &t!("wordlists.subtitle"));
 
         if let Some(enabled) = setting_choice(
             ui,
             "wordlists-enabled",
-            "Wordlists:",
+            &t!("wordlists.enabled_caption"),
             self.cfg.wordlists_enabled,
-            &[
-                (true, "Apply them to what is spoken"),
-                (false, "Speak the document as written"),
-            ],
+            &[(true, t!("wordlists.on")), (false, t!("wordlists.off"))],
         ) {
             self.cfg.wordlists_enabled = enabled;
             self.rebuild_plan_live();
@@ -1758,10 +1722,10 @@ impl AccessEngine {
         }
 
         ui.label(
-            RichText::new(format!(
-                "{} of {} lists active",
-                self.wordlists.active_count(),
-                self.wordlists.lists.len()
+            RichText::new(t!(
+                "wordlists.active_count",
+                active = self.wordlists.active_count(),
+                total = self.wordlists.lists.len()
             ))
             .weak()
             .small(),
@@ -1769,9 +1733,13 @@ impl AccessEngine {
 
         ui.add_enabled_ui(self.cfg.wordlists_enabled, |ui| {
             let policies = labelled_options(&BlockPolicy::ALL, |p: BlockPolicy| p.label());
-            if let Some(policy) =
-                setting_choice(ui, "block-policy", "Blocked words:", self.wordlists.policy, &policies)
-            {
+            if let Some(policy) = setting_choice(
+                ui,
+                "block-policy",
+                &t!("wordlists.block_caption"),
+                self.wordlists.policy,
+                &policies,
+            ) {
                 self.wordlists.policy = policy;
                 self.cfg.block_policy = policy;
                 self.rebuild_plan_live();
@@ -1779,7 +1747,7 @@ impl AccessEngine {
             }
 
             if self.wordlists.policy == BlockPolicy::Bleep {
-                let label = field_label(ui, "Say instead:");
+                let label = field_label(ui, &t!("wordlists.bleep_caption"));
                 if ui
                     .add(
                         egui::TextEdit::singleline(&mut self.cfg.bleep_text)
@@ -1795,12 +1763,8 @@ impl AccessEngine {
             }
 
             ui.add_space(14.0);
-            ui.label(RichText::new("Installed lists").strong());
-            ui.label(
-                RichText::new("Tick the ones that should apply.")
-                    .weak()
-                    .small(),
-            );
+            ui.label(RichText::new(t!("wordlists.installed")).strong());
+            ui.label(RichText::new(t!("wordlists.installed_hint")).weak().small());
             ui.add_space(4.0);
             let mut toggled = false;
             let mut to_open: Option<PathBuf> = None;
@@ -1815,18 +1779,21 @@ impl AccessEngine {
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         // Every row has an "Edit" button; the name says which.
                         let edit = named(
-                            ui.small_button("Edit"),
-                            &format!("Edit {} in your text editor", list.name),
+                            ui.small_button(t!("common.edit")),
+                            &t!("wordlists.edit_named", name = list.name),
                         );
-                        if edit.on_hover_text("Open in your text editor").clicked() {
+                        if edit.on_hover_text(t!("wordlists.edit_hint")).clicked() {
                             to_open = Some(list.path.clone());
                         }
                     });
                 });
                 let [block, replace, pronounce] = list.counts;
                 ui.label(
-                    RichText::new(format!(
-                        "{block} blocked · {replace} replaced · {pronounce} pronunciation"
+                    RichText::new(t!(
+                        "wordlists.counts",
+                        block = block,
+                        replace = replace,
+                        pronounce = pronounce
                     ))
                     .weak()
                     .small(),
@@ -1842,18 +1809,18 @@ impl AccessEngine {
             }
 
             if self.wordlists.lists.is_empty() {
-                ui.label(RichText::new("No wordlists found.").weak());
+                ui.label(RichText::new(t!("wordlists.none")).weak());
             }
 
             ui.add_space(10.0);
-            if wide_button(ui, "＋  Install a wordlist…")
-                .on_hover_text("Copy a wordlist file into the folder this app reads")
+            if wide_button(ui, &t!("wordlists.install"))
+                .on_hover_text(t!("wordlists.install_hint"))
                 .clicked()
             {
                 self.import_wordlist();
             }
             ui.add_space(6.0);
-            match button_row(ui, &["Open folder", "Reload"]) {
+            match button_row(ui, &[t!("common.open_folder"), t!("common.reload")]) {
                 Some(0) => {
                     if let Some(dir) = config::wordlist_dir() {
                         logging::open_path(&dir);
@@ -1871,7 +1838,7 @@ impl AccessEngine {
 
     fn reload_wordlists(&mut self) {
         let Some(dir) = config::wordlist_dir() else {
-            self.error("No settings folder is available on this system.");
+            self.error(t!("error.no_settings_folder"));
             return;
         };
         self.cfg.disabled_wordlists = self
@@ -1883,19 +1850,19 @@ impl AccessEngine {
             .collect();
         self.wordlists.lists = wordlist::discover(&dir, &self.cfg.disabled_wordlists);
         self.rebuild_plan_live();
-        self.info(format!("Reloaded {} wordlists.", self.wordlists.lists.len()));
+        self.info(tn!("status.wordlists_reloaded", self.wordlists.lists.len()));
     }
 
     fn import_wordlist(&mut self) {
         let Some(source) = rfd::FileDialog::new()
-            .set_title("Add a wordlist")
-            .add_filter("Wordlists", &["wordlist", "txt", "list"])
+            .set_title(t!("pick.add_wordlist_title"))
+            .add_filter(t!("pick.filter_wordlists"), &["wordlist", "txt", "list"])
             .pick_file()
         else {
             return;
         };
         let Some(dir) = config::wordlist_dir() else {
-            self.error("No settings folder is available on this system.");
+            self.error(t!("error.no_settings_folder"));
             return;
         };
         let Some(name) = source.file_name() else {
@@ -1905,15 +1872,14 @@ impl AccessEngine {
         // Never overwrite: an existing list is one the user may have spent an
         // afternoon on, and a silent replacement leaves nothing to undo.
         if destination.exists() {
-            self.error(format!(
-                "A wordlist called {} is already installed. Rename the new file, or edit \
-                 the existing list.",
-                name.to_string_lossy()
+            self.error(t!(
+                "error.wordlist_exists",
+                name = name.to_string_lossy()
             ));
             return;
         }
         if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::copy(&source, &destination).map(|_| ())) {
-            self.error(format!("Could not add that wordlist: {e}"));
+            self.error(t!("error.wordlist_add", reason = e));
             return;
         }
         self.reload_wordlists();
@@ -1922,17 +1888,17 @@ impl AccessEngine {
     /// Show exactly what the wordlists changed, so a teacher can check the
     /// filter did what they expected before playing it to a room.
     fn changes_review(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Changes to this document");
+        ui.heading(t!("changes.title"));
         if !self.cfg.wordlists_enabled {
-            ui.label(RichText::new("Wordlists are switched off.").weak());
+            ui.label(RichText::new(t!("changes.off")).weak());
             return;
         }
         if self.doc.is_empty() {
-            ui.label(RichText::new("No document open.").weak());
+            ui.label(RichText::new(t!("changes.no_document")).weak());
             return;
         }
         if self.hits.is_empty() && self.skipped_chunks == 0 {
-            ui.label(RichText::new("Nothing in this document matched a rule.").weak());
+            ui.label(RichText::new(t!("changes.none")).weak());
             return;
         }
 
@@ -1958,14 +1924,11 @@ impl AccessEngine {
         if self.skipped_chunks > 0 {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
-                format!(
-                    "{} sentence(s) will be skipped entirely.",
-                    self.skipped_chunks
-                ),
+                tn!("changes.skipped", self.skipped_chunks),
             );
         }
         ui.label(
-            RichText::new(format!("{} substitutions in total.", self.hits.len()))
+            RichText::new(tn!("changes.total", self.hits.len()))
                 .weak()
                 .small(),
         );
@@ -1976,7 +1939,11 @@ impl AccessEngine {
             .max_height(220.0)
             .show(ui, |ui| {
                 for change in &summary {
-                    let explanation = format!("{} rule, from {}", change.kind, change.origin);
+                    let explanation = t!(
+                        "changes.explanation",
+                        kind = change.kind.label(),
+                        origin = change.origin
+                    );
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         let colour = match change.kind {
@@ -1987,7 +1954,7 @@ impl AccessEngine {
                             .on_hover_text(&explanation);
                         ui.label("»");
                         let shown = if change.replacement.is_empty() {
-                            RichText::new("(nothing)").italics()
+                            RichText::new(t!("changes.nothing")).italics()
                         } else {
                             RichText::new(&change.replacement).strong()
                         };
@@ -2027,11 +1994,7 @@ impl AccessEngine {
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"));
         if heif {
-            ui.label(
-                RichText::new("No preview for HEIC, but it can still be described.")
-                    .weak()
-                    .small(),
-            );
+            ui.label(RichText::new(t!("image.no_preview")).weak().small());
         } else {
             ui.add(
                 egui::Image::new(file_preview_uri(path))
@@ -2049,7 +2012,7 @@ impl AccessEngine {
         } else if self.pending_describe {
             ui.horizontal(|ui| {
                 ui.add(egui::Spinner::new().size(14.0));
-                ui.label(RichText::new("Waiting for Ollama…").weak());
+                ui.label(RichText::new(t!("image.waiting")).weak());
             });
         } else {
             ui.horizontal(|ui| {
@@ -2058,7 +2021,7 @@ impl AccessEngine {
                 // being quietly discarded.
                 if !self.description.is_empty()
                     && !self.show_description
-                    && ui.button("Show the description").clicked()
+                    && ui.button(t!("image.show")).clicked()
                 {
                     self.show_description = true;
                 }
@@ -2067,9 +2030,9 @@ impl AccessEngine {
                 // the model or the prompt in Settings, and this asks again.
                 let can_repeat = !self.cfg.ollama_model.trim().is_empty();
                 if ui
-                    .add_enabled(can_repeat, egui::Button::new("Describe again"))
-                    .on_hover_text("Describe this image again, with the settings as they are now")
-                    .on_disabled_hover_text("No local model is selected — see Settings.")
+                    .add_enabled(can_repeat, egui::Button::new(t!("image.describe_again")))
+                    .on_hover_text(t!("image.describe_again_hint"))
+                    .on_disabled_hover_text(t!("image.no_model"))
                     .clicked()
                 {
                     self.describe_now(ui.ctx());
@@ -2087,28 +2050,31 @@ impl AccessEngine {
     /// of changes abandoned with Reset.
     fn settings_tab(&mut self, ui: &mut egui::Ui) {
         self.list_models_once(ui.ctx());
-        pane_header(
-            ui,
-            "Settings",
-            "Changes here take effect when you press Apply.",
-        );
+        pane_header(ui, &t!("settings.title"), &t!("settings.subtitle"));
+
+        self.language_setting(ui);
 
         if let Some(show) = setting_choice(
             ui,
             "preview-pane",
-            "Preview pane:",
+            &t!("settings.preview_caption"),
             self.draft.show_preview,
             &[
-                (true, "Show the document and image preview"),
-                (false, "Hide it — the tabs take the window"),
+                (true, t!("settings.preview_on")),
+                (false, t!("settings.preview_off")),
             ],
         ) {
             self.draft.show_preview = show;
         }
 
         let engines = labelled_options(&EngineKind::ALL, |e: EngineKind| e.label());
-        if let Some(engine) = setting_choice(ui, "engine", "Speech engine:", self.draft.engine, &engines)
-        {
+        if let Some(engine) = setting_choice(
+            ui,
+            "engine",
+            &t!("settings.engine"),
+            self.draft.engine,
+            &engines,
+        ) {
             self.draft.engine = engine;
         }
         // The key is not part of the form: it is a credential, it is entered in
@@ -2121,11 +2087,11 @@ impl AccessEngine {
         if let Some(check) = setting_choice(
             ui,
             "updates",
-            "Automatic updates:",
+            &t!("settings.updates"),
             self.draft.check_for_updates,
             &[
-                (true, "Check for a new version on startup"),
-                (false, "Never check"),
+                (true, t!("settings.updates_on")),
+                (false, t!("settings.updates_off")),
             ],
         ) {
             self.draft.check_for_updates = check;
@@ -2134,27 +2100,25 @@ impl AccessEngine {
         if let Some(geotag) = setting_choice(
             ui,
             "geotag",
-            "Geotagged photos:",
+            &t!("settings.geotag"),
             self.draft.geotag_images,
             &[
-                (true, "Say where the photo was taken"),
-                (false, "Leave the location out"),
+                (true, t!("settings.geotag_on")),
+                (false, t!("settings.geotag_off")),
             ],
         ) {
             self.draft.geotag_images = geotag;
         }
-        ui.label(
-            RichText::new(
-                "Looking a place up sends the photo's coordinates — never the photo itself — \
-                 to OpenStreetMap.",
-            )
-            .weak()
-            .small(),
-        );
+        ui.label(RichText::new(t!("settings.geotag_note")).weak().small());
 
         let themes = labelled_options(&config::Appearance::ALL, config::Appearance::label);
-        if let Some(appearance) = setting_choice(ui, "appearance", "Theme:", self.draft.appearance, &themes)
-        {
+        if let Some(appearance) = setting_choice(
+            ui,
+            "appearance",
+            &t!("settings.theme"),
+            self.draft.appearance,
+            &themes,
+        ) {
             self.draft.appearance = appearance;
         }
 
@@ -2177,36 +2141,146 @@ impl AccessEngine {
         ui.add_space(16.0);
         ui.separator();
         ui.add_space(8.0);
-        match button_row(ui, &["Reset", "Apply"]) {
+        match button_row(ui, &[t!("common.reset"), t!("common.apply")]) {
             Some(0) => self.reset_settings(),
             Some(_) => self.apply_settings(ui.ctx()),
             None => {}
         }
-        if self.settings_form_changed() {
-            ui.label(
-                RichText::new("Changed here, but not applied yet.")
-                    .weak()
-                    .small(),
-            );
-        } else {
-            ui.label(
-                RichText::new("Reset puts every control back to the settings in use.")
-                    .weak()
-                    .small(),
-            );
-        }
+        ui.label(
+            RichText::new(if self.settings_form_changed() {
+                t!("settings.unapplied")
+            } else {
+                t!("settings.reset_hint")
+            })
+            .weak()
+            .small(),
+        );
 
         ui.add_space(14.0);
-        egui::CollapsingHeader::new("Diagnostics")
+        egui::CollapsingHeader::new(t!("settings.diagnostics"))
             .id_salt("diagnostics")
             .show(ui, |ui| self.diagnostics(ui));
+    }
+
+    /// The language the interface is written in, and how to add another.
+    ///
+    /// The picker lists what is loaded rather than what exists: a language
+    /// arrives as a file in a folder, so the only way to know what is on offer
+    /// is to have read it. Anything in that folder that could not be read is
+    /// said here too, because a translator whose file is not in the list above
+    /// has nowhere else to find out why.
+    fn language_setting(&mut self, ui: &mut egui::Ui) {
+        let available = i18n::available();
+        let shown = if self.draft.language.trim() == i18n::AUTO {
+            t!("settings.language.auto")
+        } else {
+            available
+                .iter()
+                .find(|(code, _)| *code == self.draft.language)
+                .map(|(_, name)| name.clone())
+                // A language that was picked and has since been taken out of
+                // the folder: name the code, rather than showing an empty box.
+                .unwrap_or_else(|| t!("settings.language.missing", code = self.draft.language))
+        };
+
+        let label = field_label(ui, &t!("settings.language"));
+        let width = ui.available_width();
+        egui::ComboBox::from_id_salt("language")
+            .selected_text(shown)
+            .width(width)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.draft.language,
+                    i18n::AUTO.to_string(),
+                    t!("settings.language.auto"),
+                );
+                for (code, name) in &available {
+                    ui.selectable_value(&mut self.draft.language, code.clone(), name);
+                }
+            })
+            .response
+            .labelled_by(label);
+
+        if let Some(dir) = i18n::languages_dir() {
+            ui.label(
+                RichText::new(t!("settings.language.folder", path = dir.display()))
+                    .weak()
+                    .small(),
+            );
+            ui.add_space(4.0);
+            match button_row(
+                ui,
+                &[t!("common.open_folder"), t!("settings.language.reload")],
+            ) {
+                Some(0) => {
+                    // The folder is only made when there is something to put in
+                    // it, so opening it has to make it first.
+                    if let Err(e) = std::fs::create_dir_all(&dir) {
+                        self.error(t!("error.language_folder", reason = e));
+                    } else {
+                        logging::open_path(&dir);
+                    }
+                }
+                Some(_) => {
+                    i18n::reload();
+                    i18n::apply_setting(&self.cfg.language);
+                    self.info(t!("status.language_reloaded", name = i18n::current_name()));
+                }
+                None => {}
+            }
+        }
+
+        let files = i18n::folder_problems();
+        if !files.is_empty() {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                tn!("settings.language.file_problems", files.len()),
+            );
+            for problem in &files {
+                let name = problem
+                    .path
+                    .file_name()
+                    .unwrap_or(problem.path.as_os_str())
+                    .to_string_lossy();
+                ui.label(
+                    RichText::new(t!(
+                        "settings.language.file_problem",
+                        file = name,
+                        why = file_reason(&problem.reason)
+                    ))
+                    .weak()
+                    .small(),
+                );
+            }
+        }
+
+        // Lines the parser could not use inside the language actually in use.
+        // Never anything for English, which a test holds to the format.
+        let lines = i18n::current_problems();
+        if !lines.is_empty() {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                tn!("settings.language.line_problems", lines.len()),
+            );
+            for problem in lines.iter().take(10) {
+                ui.label(
+                    RichText::new(t!(
+                        "settings.language.line_problem",
+                        line = problem.line,
+                        what = problem.what
+                    ))
+                    .weak()
+                    .small(),
+                );
+            }
+        }
     }
 
     /// How the chosen engine sounds. Which voice is on General; this is the
     /// rest of it.
     fn voice_settings(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        ui.label(RichText::new("How the voice sounds").strong());
+        ui.label(RichText::new(t!("settings.voice_heading")).strong());
         match self.draft.engine {
             EngineKind::System => {
                 let (supports_rate, supports_pitch, supports_volume, default_rate, default_pitch) =
@@ -2219,35 +2293,33 @@ impl AccessEngine {
                             system.default_pitch_pos(),
                         ),
                         Err(_) => {
-                            ui.label(
-                                RichText::new("No system speech engine on this computer.")
-                                    .weak()
-                                    .small(),
-                            );
+                            ui.label(RichText::new(t!("settings.no_engine")).weak().small());
                             return;
                         }
                     };
 
                 if supports_rate {
                     let mut rate = self.draft.rate.unwrap_or(default_rate);
-                    if wide_slider(ui, "Speed:", &mut rate, 0.0..=1.0).changed() {
+                    if wide_slider(ui, &t!("settings.speed"), &mut rate, 0.0..=1.0).changed() {
                         self.draft.rate = Some(rate);
                     }
                 }
                 if supports_pitch {
                     let mut pitch = self.draft.pitch.unwrap_or(default_pitch);
-                    if wide_slider(ui, "Pitch:", &mut pitch, 0.0..=1.0).changed() {
+                    if wide_slider(ui, &t!("settings.pitch"), &mut pitch, 0.0..=1.0).changed() {
                         self.draft.pitch = Some(pitch);
                     }
                 }
                 if supports_volume {
                     let mut volume = self.draft.volume;
-                    if wide_slider(ui, "Volume:", &mut volume, 0.0..=1.0).changed() {
+                    if wide_slider(ui, &t!("settings.volume"), &mut volume, 0.0..=1.0).changed() {
                         self.draft.volume = volume;
                     }
                 }
                 ui.add_space(8.0);
-                if let Some(index) = button_row(ui, &["Reset speed and pitch", "🔊  Test"]) {
+                if let Some(index) =
+                    button_row(ui, &[t!("settings.reset_voice"), t!("settings.test")])
+                {
                     if index == 0 {
                         self.draft.rate = None;
                         self.draft.pitch = None;
@@ -2257,7 +2329,7 @@ impl AccessEngine {
                 }
             }
             EngineKind::ElevenLabs => {
-                let label = field_label(ui, "Model:");
+                let label = field_label(ui, &t!("settings.model"));
                 let mut model = self.draft.elevenlabs_model.clone();
                 let width = ui.available_width();
                 egui::ComboBox::from_id_salt("el-model")
@@ -2272,39 +2344,32 @@ impl AccessEngine {
                     .labelled_by(label);
                 self.draft.elevenlabs_model = model;
 
-                wide_slider(ui, "Stability:", &mut self.draft.elevenlabs_stability, 0.0..=1.0);
-                ui.label(
-                    RichText::new("Lower is more expressive; higher is more consistent.")
-                        .weak()
-                        .small(),
-                );
                 wide_slider(
                     ui,
-                    "Similarity:",
+                    &t!("settings.stability"),
+                    &mut self.draft.elevenlabs_stability,
+                    0.0..=1.0,
+                );
+                ui.label(RichText::new(t!("settings.stability_hint")).weak().small());
+                wide_slider(
+                    ui,
+                    &t!("settings.similarity"),
                     &mut self.draft.elevenlabs_similarity,
                     0.0..=1.0,
                 );
-                ui.label(
-                    RichText::new("How closely the output tracks the original recording.")
-                        .weak()
-                        .small(),
-                );
-                wide_slider(ui, "Volume:", &mut self.draft.volume, 0.0..=1.0);
+                ui.label(RichText::new(t!("settings.similarity_hint")).weak().small());
+                wide_slider(ui, &t!("settings.volume"), &mut self.draft.volume, 0.0..=1.0);
 
                 ui.add_space(8.0);
-                if wide_button(ui, "🔊  Test this voice")
-                    .on_hover_text("Speaks a sample with the settings as they are here")
+                if wide_button(ui, &t!("settings.test_voice"))
+                    .on_hover_text(t!("settings.test_voice_hint"))
                     .clicked()
                 {
                     self.test_elevenlabs_voice();
                 }
             }
         }
-        ui.label(
-            RichText::new("A test uses the settings above, applied or not.")
-                .weak()
-                .small(),
-        );
+        ui.label(RichText::new(t!("settings.test_note")).weak().small());
     }
 
     /// Speak a sample with the form's settings rather than the applied ones:
@@ -2313,17 +2378,17 @@ impl AccessEngine {
         let (rate, pitch, volume) = (self.draft.rate, self.draft.pitch, self.draft.volume);
         if let Ok(system) = &mut self.system {
             system.apply_settings(rate, pitch, volume);
-            if let Err(e) = system.speak("The quick brown fox jumps over the lazy dog.") {
-                self.error(format!("Could not speak: {e:#}"));
+            if let Err(e) = system.speak(&t!("settings.sample_text")) {
+                self.error(t!("error.could_not_speak", reason = format!("{e:#}")));
             }
         } else {
-            self.error("No system speech engine is available.");
+            self.error(t!("error.no_engine"));
         }
     }
 
     fn test_elevenlabs_voice(&mut self) {
         if self.cfg.elevenlabs_voice_id.is_empty() {
-            self.error("Choose a voice on the General tab first.");
+            self.error(t!("error.choose_voice_general"));
             return;
         }
         // The sample supersedes the document at the worker either way, so stop
@@ -2332,7 +2397,7 @@ impl AccessEngine {
         if self.state.is_active() {
             self.stop();
         }
-        self.info("Playing a sample…");
+        self.info(t!("status.playing_sample"));
         let request = VoiceRequest {
             api_key: self.cfg.effective_api_key(),
             voice_id: self.cfg.elevenlabs_voice_id.clone(),
@@ -2341,7 +2406,7 @@ impl AccessEngine {
             similarity: self.draft.elevenlabs_similarity,
         };
         self.eleven.send(ElCommand::Play {
-            texts: vec!["The quick brown fox jumps over the lazy dog.".to_string()],
+            texts: vec![t!("settings.sample_text")],
             start: 0,
             request,
             gain: self.draft.volume,
@@ -2351,30 +2416,28 @@ impl AccessEngine {
 
     fn reading_settings(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        ui.label(RichText::new("Reading").strong());
+        ui.label(RichText::new(t!("settings.reading_heading")).strong());
 
         let modes = labelled_options(&ChunkMode::ALL, |m: ChunkMode| m.label());
-        if let Some(mode) = setting_choice(ui, "chunk-mode", "Read in:", self.draft.chunk_mode, &modes)
-        {
+        if let Some(mode) = setting_choice(
+            ui,
+            "chunk-mode",
+            &t!("settings.chunk"),
+            self.draft.chunk_mode,
+            &modes,
+        ) {
             self.draft.chunk_mode = mode;
         }
-        ui.label(
-            RichText::new(
-                "Sentences give tighter highlighting and faster skipping. Paragraphs sound \
-                 more natural and, on ElevenLabs, cost fewer requests.",
-            )
-            .weak()
-            .small(),
-        );
+        ui.label(RichText::new(t!("settings.chunk_hint")).weak().small());
 
         if let Some(sounds) = setting_choice(
             ui,
             "sounds",
-            "Sound cues:",
+            &t!("settings.sounds"),
             self.draft.sounds_enabled,
             &[
-                (true, "Play a sound on finishing, and on errors"),
-                (false, "Stay silent"),
+                (true, t!("settings.sounds_on")),
+                (false, t!("settings.sounds_off")),
             ],
         ) {
             self.draft.sounds_enabled = sounds;
@@ -2382,21 +2445,17 @@ impl AccessEngine {
 
         let (smallest, largest) = config::TEXT_SCALE_RANGE;
         let mut scale = self.draft.text_scale;
-        if wide_slider(ui, "Text size:", &mut scale, smallest..=largest).changed() {
+        if wide_slider(ui, &t!("settings.text_size"), &mut scale, smallest..=largest).changed() {
             self.draft.text_scale = scale;
         }
-        ui.label(
-            RichText::new("Also Ctrl/Cmd + plus and minus, anywhere in the app.")
-                .weak()
-                .small(),
-        );
+        ui.label(RichText::new(t!("settings.text_size_hint")).weak().small());
     }
 
     fn log_settings(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        ui.label(RichText::new("Logs").strong());
+        ui.label(RichText::new(t!("settings.logs_heading")).strong());
 
-        let label = field_label(ui, "Log folder:");
+        let label = field_label(ui, &t!("settings.log_folder"));
         if ui
             .add(
                 egui::TextEdit::singleline(&mut self.log_dir_field)
@@ -2417,16 +2476,26 @@ impl AccessEngine {
         // Asked for each frame rather than remembered from startup: a session
         // left running overnight has moved on to the next day's file.
         ui.label(
-            RichText::new(format!("Today: {}", logging::log_path().display()))
-                .monospace()
-                .small(),
+            RichText::new(t!(
+                "settings.log_today",
+                path = logging::log_path().display()
+            ))
+            .monospace()
+            .small(),
         );
 
         ui.add_space(6.0);
-        match button_row(ui, &["Choose…", "Open folder", "Clear"]) {
+        match button_row(
+            ui,
+            &[
+                t!("common.choose"),
+                t!("common.open_folder"),
+                t!("common.clear"),
+            ],
+        ) {
             Some(0) => {
                 if let Some(dir) = rfd::FileDialog::new()
-                    .set_title("Where should the logs be written?")
+                    .set_title(t!("pick.log_folder_title"))
                     .pick_folder()
                 {
                     self.log_dir_field = dir.display().to_string();
@@ -2437,34 +2506,26 @@ impl AccessEngine {
             Some(_) => self.clear_logs(),
             None => {}
         }
-        ui.label(
-            RichText::new(
-                "One file per day, kept for a fortnight. Clear deletes them now, including \
-                 today's. Set ACCESSENGINE_DEBUG=1 for debug logging, or ACCESSENGINE_LOG=trace \
-                 for everything; restart the app to apply.",
-            )
-            .weak()
-            .small(),
-        );
+        ui.label(RichText::new(t!("settings.logs_note")).weak().small());
     }
 
     /// Delete the logs. Not part of the form: it is an action on files, and
     /// there is nothing about it to undo with Reset.
     fn clear_logs(&mut self) {
         match logging::clear_logs() {
-            Ok(0) => self.info("There were no log files to clear."),
-            Ok(count) => self.info(format!("Cleared {count} log file(s).")),
-            Err(e) => self.error(format!("Could not clear the logs: {e}")),
+            Ok(0) => self.info(t!("status.no_logs")),
+            Ok(count) => self.info(tn!("status.logs_cleared", count)),
+            Err(e) => self.error(t!("error.clear_logs", reason = e)),
         }
     }
 
     fn description_settings(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        ui.label(RichText::new("Image descriptions").strong());
+        ui.label(RichText::new(t!("settings.vision_heading")).strong());
 
         // Editing this changes nothing until Apply: the model list below is
         // still the one fetched from the address in use.
-        let label = field_label(ui, "Ollama address:");
+        let label = field_label(ui, &t!("settings.ollama_url"));
         ui.add(
             egui::TextEdit::singleline(&mut self.draft.ollama_url).desired_width(f32::INFINITY),
         )
@@ -2472,31 +2533,23 @@ impl AccessEngine {
         // The promise holds only while Ollama is on this machine, and the
         // address above is editable, so it is stated conditionally.
         if vision::is_local(&self.draft.ollama_url) {
-            ui.label(
-                RichText::new("On this computer: the picture never leaves the machine.")
-                    .weak()
-                    .small(),
-            );
+            ui.label(RichText::new(t!("settings.ollama_local")).weak().small());
         } else {
+            let url = self.draft.ollama_url.trim().to_string();
             ui.colored_label(
                 theme::palette(ui.visuals()).warn,
-                format!(
-                    "That is not this computer. Images and their descriptions will be sent to \
-                     {}{}.",
-                    self.draft.ollama_url.trim(),
-                    if self.draft.ollama_url.trim_start().starts_with("https://") {
-                        ""
-                    } else {
-                        ", unencrypted"
-                    }
-                ),
+                if self.draft.ollama_url.trim_start().starts_with("https://") {
+                    t!("settings.ollama_remote", url = url)
+                } else {
+                    t!("settings.ollama_remote_plain", url = url)
+                },
             );
         }
 
-        let label = field_label(ui, "Model:");
+        let label = field_label(ui, &t!("settings.model"));
         let mut model = self.draft.ollama_model.clone();
         let shown = if model.is_empty() {
-            "None selected".to_string()
+            t!("settings.model_none")
         } else {
             model.clone()
         };
@@ -2507,7 +2560,7 @@ impl AccessEngine {
             .show_ui(ui, |ui| {
                 for info in &self.models {
                     let name = if info.vision_capable {
-                        format!("{}  · reads images", info.name)
+                        t!("settings.model_vision", name = info.name)
                     } else {
                         info.name.clone()
                     };
@@ -2520,10 +2573,9 @@ impl AccessEngine {
 
         if self.models.is_empty() {
             let hint = if self.vision.is_busy() {
-                "Looking for models…"
+                t!("settings.models_looking")
             } else {
-                "No models found. Ollama has to be running, with a model that can read images \
-                 pulled — for example `ollama pull llava`."
+                t!("settings.models_none")
             };
             ui.label(RichText::new(hint).weak().small());
         } else if !self.draft.ollama_model.is_empty()
@@ -2532,20 +2584,17 @@ impl AccessEngine {
                 .iter()
                 .any(|m| m.name == self.draft.ollama_model && m.vision_capable)
         {
-            ui.colored_label(
-                ui.visuals().warn_fg_color,
-                "That model may not accept images.",
-            );
+            ui.colored_label(ui.visuals().warn_fg_color, t!("settings.model_maybe_blind"));
         }
         ui.add_space(6.0);
-        if wide_button(ui, "↻  Find installed models")
-            .on_hover_text("Ask Ollama, at the address in use, what it has")
+        if wide_button(ui, &t!("settings.find_models"))
+            .on_hover_text(t!("settings.find_models_hint"))
             .clicked()
         {
             self.list_models(ui.ctx());
         }
 
-        let label = field_label(ui, "Prompt for image descriptions:");
+        let label = field_label(ui, &t!("settings.prompt"));
         ui.add(
             egui::TextEdit::multiline(&mut self.draft.ollama_prompt)
                 .desired_rows(5)
@@ -2553,7 +2602,7 @@ impl AccessEngine {
         )
         .labelled_by(label);
         ui.add_space(6.0);
-        if wide_button(ui, "Restore the default wording").clicked() {
+        if wide_button(ui, &t!("settings.prompt_reset")).clicked() {
             self.draft.ollama_prompt = config::DEFAULT_VISION_PROMPT.to_string();
         }
     }
@@ -2582,18 +2631,22 @@ impl AccessEngine {
             .unwrap_or_else(logging::default_log_dir)
             .display()
             .to_string();
-        self.info("Settings put back to the ones in use.");
+        self.info(t!("status.settings_reset"));
     }
 
     /// Commit the form, and make each change take effect now rather than at
     /// the next launch.
     fn apply_settings(&mut self, ctx: &egui::Context) {
         let engine_changed = self.draft.engine != self.cfg.engine;
+        let language_changed = self.draft.language != self.cfg.language;
         let chunk_changed = self.draft.chunk_mode != self.cfg.chunk_mode;
         let log_dir_changed = self.draft.log_dir != self.cfg.log_dir;
 
         transfer_settings(&self.draft, &mut self.cfg);
 
+        if language_changed {
+            i18n::apply_setting(&self.cfg.language);
+        }
         theme::apply_appearance(ctx, self.cfg.appearance);
         ctx.set_zoom_factor(self.cfg.text_scale);
         self.sounds.enabled = self.cfg.sounds_enabled;
@@ -2608,10 +2661,12 @@ impl AccessEngine {
             self.rebuild_plan();
         }
 
-        let mut message = "Settings applied.".to_string();
+        let mut message = t!("status.settings_applied");
         if log_dir_changed {
             match logging::set_dir(self.cfg.log_dir.clone()) {
-                Ok(dir) => message = format!("Settings applied; logging to {}.", dir.display()),
+                Ok(dir) => {
+                    message = t!("status.settings_applied_log", path = dir.display());
+                }
                 Err(e) => {
                     // A log folder that cannot be written to is worse than the
                     // default one, so the rest of the settings still land and
@@ -2619,9 +2674,7 @@ impl AccessEngine {
                     self.cfg.log_dir = None;
                     self.draft.log_dir = None;
                     self.log_dir_field = logging::default_log_dir().display().to_string();
-                    self.error(format!(
-                        "Settings applied, but that log folder could not be used: {e}"
-                    ));
+                    self.error(t!("error.log_folder", reason = e));
                     self.save_settings_now();
                     return;
                 }
@@ -2636,86 +2689,84 @@ impl AccessEngine {
     /// How the app is set up, and what it has been doing. Folded away under
     /// the settings it explains: it is for the times something is wrong.
     fn diagnostics(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Keyboard").strong());
+        ui.label(RichText::new(t!("diag.keyboard")).strong());
         egui::Grid::new("shortcuts")
             .num_columns(2)
             .spacing([16.0, 4.0])
             .show(ui, |ui| {
-                for (keys, what) in Self::SHORTCUTS {
-                    ui.label(RichText::new(*keys).monospace().small());
-                    ui.label(RichText::new(*what).small());
+                for (keys, what) in Self::shortcuts() {
+                    ui.label(RichText::new(keys).monospace().small());
+                    ui.label(RichText::new(what).small());
                     ui.end_row();
                 }
             });
-        ui.label(
-            RichText::new(
-                "The unmodified keys act on whichever control has focus, so the chorded \
-                 forms are the ones that always work.",
-            )
-            .weak()
-            .small(),
-        );
+        ui.label(RichText::new(t!("diag.keyboard_note")).weak().small());
 
         ui.add_space(10.0);
-        ui.label(RichText::new("Speech engine").strong());
+        ui.label(RichText::new(t!("diag.engine")).strong());
         match &self.system {
             Ok(system) => {
                 ui.label(
-                    RichText::new(format!(
-                        "System: {} voices · progress tracking {} · rate {} · pitch {} · volume {}",
-                        system.voices.len(),
-                        yes_no(system.tracks_progress()),
-                        yes_no(system.supports_rate()),
-                        yes_no(system.supports_pitch()),
-                        yes_no(system.supports_volume()),
+                    RichText::new(t!(
+                        "diag.system",
+                        voices = system.voices.len(),
+                        progress = yes_no(system.tracks_progress()),
+                        rate = yes_no(system.supports_rate()),
+                        pitch = yes_no(system.supports_pitch()),
+                        volume = yes_no(system.supports_volume()),
                     ))
                     .small(),
                 );
             }
             Err(reason) => {
-                ui.colored_label(ui.visuals().error_fg_color, format!("System: {reason}"));
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    t!("diag.system_error", reason = reason),
+                );
             }
         }
         ui.label(
-            RichText::new(format!(
-                "Document: {} chunks · {} to speak · {} skipped · {} substitutions",
-                self.doc.chunks.len(),
-                self.plan.len(),
-                self.skipped_chunks,
-                self.hits.len()
+            RichText::new(t!(
+                "diag.document",
+                chunks = self.doc.chunks.len(),
+                spoken = self.plan.len(),
+                skipped = self.skipped_chunks,
+                changes = self.hits.len()
             ))
             .small(),
         );
 
         if let Some(dir) = config::config_dir() {
             ui.add_space(6.0);
-            ui.label(RichText::new("Settings folder").strong());
+            ui.label(RichText::new(t!("diag.settings_folder")).strong());
             ui.label(RichText::new(dir.display().to_string()).monospace().small());
         }
 
         ui.add_space(10.0);
-        ui.label(RichText::new("Updates").strong());
+        ui.label(RichText::new(t!("diag.updates")).strong());
         let checking = self.update_checker.is_some();
-        if wide_button_enabled(ui, !checking, "Check for a new version now").clicked() {
+        if wide_button_enabled(ui, !checking, &t!("diag.check_now")).clicked() {
             let ctx = ui.ctx().clone();
             self.update_checker = Some(UpdateChecker::start(move || ctx.request_repaint()));
         }
         ui.horizontal(|ui| {
             if checking {
                 ui.add(egui::Spinner::new().size(12.0));
-                ui.label(RichText::new("Checking…").weak());
+                ui.label(RichText::new(t!("diag.checking")).weak());
             } else if let Some(info) = &self.update_info {
-                ui.label(format!("v{} available", info.version));
-                if !self.show_update_dialog && ui.small_button("Show dialog").clicked() {
+                ui.label(t!("diag.update_available", version = info.version));
+                if !self.show_update_dialog && ui.small_button(t!("diag.show_dialog")).clicked() {
                     self.show_update_dialog = true;
                 }
             } else {
-                ui.label(RichText::new(format!("Running v{}", env!("CARGO_PKG_VERSION"))).weak());
+                ui.label(
+                    RichText::new(t!("diag.running", version = env!("CARGO_PKG_VERSION"))).weak(),
+                );
             }
         });
 
         ui.add_space(10.0);
-        ui.label(RichText::new("Recent log lines").strong());
+        ui.label(RichText::new(t!("diag.log_lines")).strong());
         let lines = logging::tail(200);
         egui::ScrollArea::vertical()
             .id_salt("log-tail")
@@ -2723,7 +2774,7 @@ impl AccessEngine {
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 if lines.is_empty() {
-                    ui.label(RichText::new("Nothing logged yet.").weak());
+                    ui.label(RichText::new(t!("diag.no_log")).weak());
                 }
                 for line in &lines {
                     let colour = if line.contains(" ERROR ") {
@@ -2757,11 +2808,7 @@ impl AccessEngine {
         if self.doc.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label(
-                    RichText::new(
-                        "Open a file to read it aloud.\n\nCtrl/Cmd + O, or the button on the \
-                         General tab. An image opens here too, to be described.",
-                    )
-                    .size(16.0)
+                    RichText::new(t!("doc.empty")).size(16.0)
                     .weak(),
                 );
             });
@@ -2800,10 +2847,10 @@ impl AccessEngine {
                 ui.add_space(8.0);
                 if virtualise {
                     ui.label(
-                        RichText::new(format!(
-                            "Large document: showing the text around sentence {} of {}.",
-                            self.plan_pos + 1,
-                            self.plan.len()
+                        RichText::new(t!(
+                            "doc.virtualised",
+                            position = self.plan_pos + 1,
+                            total = self.plan.len()
                         ))
                         .weak()
                         .small(),
@@ -2904,6 +2951,7 @@ fn centred<'a>(text: &'a str) -> (egui::Atom<'a>, egui::Atom<'a>, egui::Atom<'a>
 /// Only these: the voice on General and the wordlist rules on Wordlists are
 /// edited live, and pressing Apply must not quietly undo one of those.
 fn transfer_settings(from: &Config, to: &mut Config) {
+    to.language = from.language.clone();
     to.show_preview = from.show_preview;
     to.engine = from.engine;
     to.check_for_updates = from.check_for_updates;
@@ -2951,7 +2999,7 @@ fn wide_button_enabled(ui: &mut egui::Ui, enabled: bool, text: &str) -> egui::Re
 /// Buttons sharing one line: equal widths, labels centred, so the row reads as
 /// one strip rather than as words of different lengths. Returns the index of
 /// whichever was pressed.
-fn button_row(ui: &mut egui::Ui, labels: &[&str]) -> Option<usize> {
+fn button_row(ui: &mut egui::Ui, labels: &[String]) -> Option<usize> {
     let mut pressed = None;
     ui.horizontal(|ui| {
         let gaps = ui.spacing().item_spacing.x * labels.len().saturating_sub(1) as f32;
@@ -2973,13 +3021,13 @@ fn setting_choice<T: Copy + PartialEq>(
     id_salt: &str,
     caption_text: &str,
     current: T,
-    options: &[(T, &str)],
+    options: &[(T, String)],
 ) -> Option<T> {
     let label = field_label(ui, caption_text);
     let shown = options
         .iter()
         .find(|(value, _)| *value == current)
-        .map(|(_, text)| *text)
+        .map(|(_, text)| text.as_str())
         .unwrap_or_default();
     let mut chosen = current;
     let width = ui.available_width();
@@ -2988,7 +3036,7 @@ fn setting_choice<T: Copy + PartialEq>(
         .width(width)
         .show_ui(ui, |ui| {
             for (value, text) in options {
-                ui.selectable_value(&mut chosen, *value, *text);
+                ui.selectable_value(&mut chosen, *value, text);
             }
         })
         .response
@@ -2997,7 +3045,7 @@ fn setting_choice<T: Copy + PartialEq>(
 }
 
 /// The options for [`setting_choice`] over an enum that knows its own labels.
-fn labelled_options<T: Copy>(all: &[T], label: impl Fn(T) -> &'static str) -> Vec<(T, &'static str)> {
+fn labelled_options<T: Copy>(all: &[T], label: impl Fn(T) -> String) -> Vec<(T, String)> {
     all.iter().map(|value| (*value, label(*value))).collect()
 }
 
@@ -3048,6 +3096,15 @@ fn pane_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
     ui.add_space(8.0);
 }
 
+/// Why a file in the languages folder never became a language.
+fn file_reason(reason: &i18n::FileReason) -> String {
+    match reason {
+        i18n::FileReason::Unreadable => t!("settings.language.unreadable"),
+        i18n::FileReason::NoCode => t!("settings.language.no_code"),
+        i18n::FileReason::WouldReplaceEnglish => t!("settings.language.is_english"),
+    }
+}
+
 /// Whether a path looks like something the app can describe rather than read.
 fn is_image(path: &std::path::Path) -> bool {
     path.extension()
@@ -3055,11 +3112,11 @@ fn is_image(path: &std::path::Path) -> bool {
         .is_some_and(|ext| IMAGE_EXTENSIONS.iter().any(|i| ext.eq_ignore_ascii_case(i)))
 }
 
-fn yes_no(value: bool) -> &'static str {
+fn yes_no(value: bool) -> String {
     if value {
-        "yes"
+        t!("common.yes")
     } else {
-        "no"
+        t!("common.no")
     }
 }
 

@@ -17,6 +17,8 @@ pub mod system;
 
 use serde::{Deserialize, Serialize};
 
+use crate::t;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EngineKind {
     System,
@@ -26,10 +28,10 @@ pub enum EngineKind {
 impl EngineKind {
     pub const ALL: [EngineKind; 2] = [EngineKind::System, EngineKind::ElevenLabs];
 
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            EngineKind::System => "System voices",
-            EngineKind::ElevenLabs => "ElevenLabs",
+            EngineKind::System => t!("engine.system"),
+            EngineKind::ElevenLabs => t!("engine.elevenlabs"),
         }
     }
 }
