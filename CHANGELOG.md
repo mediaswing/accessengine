@@ -7,6 +7,20 @@ Each released version needs a section here: the release workflow refuses to
 build a tag that has none, and copies the matching section onto the release
 page.
 
+## [Unreleased]
+
+### Removed
+
+- HTML is no longer read. `.html`, `.htm`, `.xhtml` and `.xml` have gone from
+  the file picker, and a page handed to the app another way — on the command
+  line, or through the dialog's "All files" — is turned away by name rather
+  than read out tag by tag. The stripper it went through was a few hundred
+  lines of guesswork about a format that has no small correct subset: it
+  understood a handful of block elements and six entities, and everything else
+  in a real page — tables, `<template>` bodies, `<svg>` text, character
+  references beyond those six — was read aloud or silently dropped. Save the
+  page as plain text or markdown instead.
+
 ## [1.5.0] - 2026-09-02
 
 ### Changed

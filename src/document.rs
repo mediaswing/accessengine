@@ -45,9 +45,16 @@ pub struct Document {
     pub chunks: Vec<Chunk>,
 }
 
-pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "txt", "text", "md", "markdown", "csv", "log", "json", "html", "htm", "xml", "rst", "org",
-];
+pub const SUPPORTED_EXTENSIONS: &[&str] =
+    &["txt", "text", "md", "markdown", "csv", "log", "json", "rst", "org"];
+
+/// Markup this reader used to strip and no longer does.
+///
+/// Turned away by name rather than left to the plain-text path: a page opened
+/// from the command line, or through the dialog's "All files", would otherwise
+/// be read out tag by tag — `less than div class equals` — which is a worse
+/// answer than saying the file is not one this app opens.
+const UNSUPPORTED_MARKUP: &[&str] = &["html", "htm", "xhtml", "xml"];
 
 impl Document {
     pub fn from_path(path: &Path, mode: ChunkMode) -> Result<Self> {
@@ -70,9 +77,15 @@ impl Document {
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
+        if UNSUPPORTED_MARKUP.contains(&ext.as_str()) {
+            bail!(
+                "{} is {ext}, which this reader no longer opens. Save it as plain text or \
+                 markdown first.",
+                path.display()
+            );
+        }
         let text = match ext.as_str() {
             "md" | "markdown" | "rst" => strip_markdown(&text),
-            "html" | "htm" | "xml" => strip_html(&text),
             _ => text,
         };
 
@@ -479,74 +492,6 @@ fn parse_link(chars: &[char], open: usize) -> Option<(String, usize)> {
     Some((label, paren + 1))
 }
 
-/// Index just past the `-->` that closes a comment opened before `from`.
-fn find_comment_end(chars: &[char], from: usize) -> Option<usize> {
-    (from..chars.len().saturating_sub(2))
-        .find(|&j| chars[j] == '-' && chars[j + 1] == '-' && chars[j + 2] == '>')
-        .map(|j| j + 3)
-}
-
-/// Very small HTML-to-text pass: drop tags and script/style bodies, decode the
-/// handful of entities that actually turn up in prose.
-fn strip_html(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let bytes: Vec<char> = html.chars().collect();
-    let mut i = 0;
-    let mut skip_depth: Option<&str> = None;
-
-    while i < bytes.len() {
-        if bytes[i] == '<' {
-            // A comment ends at `-->`, not at the first `>`: `<!-- a > b -->`
-            // would otherwise leave " b -->" behind to be read aloud.
-            if bytes[i..].starts_with(&['<', '!', '-', '-']) {
-                match find_comment_end(&bytes, i + 4) {
-                    Some(close) => {
-                        i = close;
-                        continue;
-                    }
-                    None => break,
-                }
-            }
-            let end = (i + 1..bytes.len()).find(|&j| bytes[j] == '>');
-            let Some(end) = end else { break };
-            let tag: String = bytes[i + 1..end].iter().collect::<String>();
-            let name = tag
-                .trim_start_matches('/')
-                .split(|c: char| c.is_whitespace() || c == '>')
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-
-            if let Some(skipping) = skip_depth {
-                if tag.starts_with('/') && name == skipping {
-                    skip_depth = None;
-                }
-            } else if name == "script" || name == "style" {
-                skip_depth = Some(if name == "script" { "script" } else { "style" });
-            } else if matches!(
-                name.as_str(),
-                "p" | "br" | "div" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr"
-            ) {
-                out.push('\n');
-            }
-            i = end + 1;
-            continue;
-        }
-        if skip_depth.is_none() {
-            out.push(bytes[i]);
-        }
-        i += 1;
-    }
-
-    out.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&apos;", "'")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,25 +595,6 @@ mod tests {
         assert!(strip_markdown("![a red bus](bus.png)").contains("Image: a red bus"));
     }
 
-    #[test]
-    fn html_tags_and_scripts_are_dropped() {
-        let out = strip_html("<p>Hello &amp; welcome</p><script>evil()</script>");
-        assert!(out.contains("Hello & welcome"));
-        assert!(!out.contains("evil"));
-    }
-
-    /// A comment carrying a `>` must be dropped whole, tail included.
-    #[test]
-    fn html_comments_are_dropped_entirely() {
-        let out = strip_html("<p>Before<!-- a > b --></p>After");
-        assert!(out.contains("Before"), "{out:?}");
-        assert!(out.contains("After"), "{out:?}");
-        assert!(!out.contains('b'), "{out:?}");
-        assert!(!out.contains("--"), "{out:?}");
-        // An unterminated comment swallows the rest rather than leaking markup.
-        assert_eq!(strip_html("Text<!-- never closed").trim(), "Text");
-    }
-
     /// Splitting a long unbroken paragraph must stay linear. The old code
     /// counted the whole remaining text once per chunk, so an 8 MB paragraph
     /// took nearly two seconds on the UI thread.
@@ -685,6 +611,29 @@ mod tests {
             "took {:?}",
             started.elapsed()
         );
+    }
+
+    /// HTML is not read as prose any more, and must not be read as markup
+    /// either: a page opened from the command line or through the dialog's
+    /// "All files" is turned away by name.
+    #[test]
+    fn markup_files_are_turned_away_rather_than_read_as_tags() {
+        let dir = std::env::temp_dir().join(format!("accessengine-doc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let page = dir.join("page.html");
+        std::fs::write(&page, "<p>Hello</p>").expect("writes");
+        let refusal = Document::from_path(&page, ChunkMode::Sentence)
+            .expect_err("html is no longer opened")
+            .to_string();
+        assert!(refusal.contains("plain text"), "{refusal}");
+
+        // The plain-text formats it still opens are unaffected.
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, "Hello.").expect("writes");
+        assert!(Document::from_path(&notes, ChunkMode::Sentence).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

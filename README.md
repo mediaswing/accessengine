@@ -14,10 +14,10 @@ Windows and Linux. The binary is `accessengine`.
 
 ## What it does
 
-**Reads files aloud.** Open a `.txt`, `.md`, `.html`, `.csv`, `.json`, `.log`,
-`.rst` or `.org` file. Markdown and HTML are stripped down to prose first, so
-you hear the words rather than the asterisks — code blocks are skipped, links
-read as their text, and images are announced by their alt text. The document is
+**Reads files aloud.** Open a `.txt`, `.md`, `.csv`, `.json`, `.log`, `.rst` or
+`.org` file. Markdown is stripped down to prose first, so you hear the words
+rather than the asterisks — code blocks are skipped, links read as their text,
+and images are announced by their alt text. The document is
 cut into sentences (or paragraphs, your choice); the one being spoken is
 highlighted, and clicking any sentence starts reading from there.
 
