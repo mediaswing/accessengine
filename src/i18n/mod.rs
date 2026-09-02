@@ -15,7 +15,7 @@
 //! useful from its first line rather than only its last. Nobody has to finish
 //! before they can test.
 //!
-//! **Lookups work from any thread.** The ElevenLabs worker and the Ollama
+//! **Lookups work from any thread.** The cloud speech worker and the Ollama
 //! request each build their own failure messages away from the UI thread, so
 //! the active language has to be reachable from them as well.
 //!

@@ -10,9 +10,9 @@ use crate::config::{self, Config};
 use crate::document::{ChunkMode, Document, SUPPORTED_EXTENSIONS};
 use crate::export::{self, Export};
 use crate::logging;
-use crate::speech::elevenlabs::{self, Command as ElCommand, ElevenLabs, RemoteVoice, VoiceRequest};
+use crate::speech::cloud::{self, CloudEngine, Command as CloudCommand, RemoteVoice};
 use crate::speech::system::SystemEngine;
-use crate::speech::{EngineKind, PlanItem, PlayState};
+use crate::speech::{deepgram, elevenlabs, google, openai, polly, EngineKind, PlanItem, PlayState};
 use crate::theme;
 use crate::update::{UpdateChecker, UpdateInfo};
 use crate::vision::{self, ModelInfo, Vision, VisionResult, IMAGE_EXTENSIONS};
@@ -89,13 +89,18 @@ pub struct AccessEngine {
 
     /// The system engine, or the reason there isn't one.
     system: Result<SystemEngine, String>,
-    eleven: ElevenLabs,
-    el_voices: Vec<RemoteVoice>,
-    el_synthesising: Option<usize>,
+    /// The one worker every hosted provider runs on.
+    cloud: CloudEngine,
+    /// The voices last fetched, and which provider they came from. The pair is
+    /// kept together because switching engine leaves the old list in hand, and
+    /// a menu of the wrong provider's voices is worse than an empty one.
+    cloud_voices: Vec<RemoteVoice>,
+    cloud_voices_engine: Option<EngineKind>,
+    cloud_synthesising: Option<usize>,
     /// Whether the worker's paused plan still matches ours. Cleared whenever
     /// the plan is rebuilt, so a wordlist change while paused restarts with the
     /// new text instead of resuming the old.
-    el_can_resume: bool,
+    cloud_can_resume: bool,
 
     wordlists: WordlistSet,
     voice_filter: String,
@@ -111,7 +116,7 @@ pub struct AccessEngine {
     pending_describe: bool,
     /// Whether the finished description is on screen.
     show_description: bool,
-    /// When the current ElevenLabs sentence was sent, for that estimate.
+    /// When the current cloud sentence was sent, for that estimate.
     synthesis_began: Option<Instant>,
 
     vision: Vision,
@@ -135,12 +140,15 @@ pub struct AccessEngine {
     /// draft each frame, so deleting the last character of a path does not
     /// refill the box with the default one.
     log_dir_field: String,
-    /// Set when ElevenLabs turns down the key we hold, so the button to enter
-    /// one comes back for a key that has expired or been revoked.
+    /// Set when a provider turns down the credential we hold, so the button to
+    /// enter one comes back for a key that has expired or been revoked.
     api_key_rejected: bool,
     show_key_dialog: bool,
     /// The key dialog's own copy, so cancelling leaves the saved key alone.
     key_draft: String,
+    /// The second half of an AWS credential, which is the one provider whose
+    /// credential is a pair rather than a single string.
+    secret_draft: String,
     status: Option<Status>,
     settings_dirty: Option<Instant>,
 
@@ -200,10 +208,11 @@ impl AccessEngine {
             state: PlayState::Idle,
             follow_cursor: false,
             system,
-            eleven: ElevenLabs::new(move || ctx2.request_repaint()),
-            el_voices: Vec::new(),
-            el_synthesising: None,
-            el_can_resume: false,
+            cloud: CloudEngine::new(move || ctx2.request_repaint()),
+            cloud_voices: Vec::new(),
+            cloud_voices_engine: None,
+            cloud_synthesising: None,
+            cloud_can_resume: false,
             wordlists,
             voice_filter: String::new(),
             export: Export::default(),
@@ -230,6 +239,7 @@ impl AccessEngine {
             api_key_rejected: false,
             show_key_dialog: false,
             key_draft: String::new(),
+            secret_draft: String::new(),
             status: None,
             settings_dirty: None,
             update_checker,
@@ -400,7 +410,10 @@ impl AccessEngine {
                 self.sounds.success();
                 self.info(t!(
                     "status.saved",
-                    name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
+                    name = path
+                        .file_name()
+                        .unwrap_or(path.as_os_str())
+                        .to_string_lossy()
                 ));
             }
             Err(e) => self.error(t!("error.save_description", reason = e)),
@@ -450,13 +463,13 @@ impl AccessEngine {
         if self.plan.is_empty() {
             return Some(t!("block.no_file"));
         }
-        if self.cfg.engine != EngineKind::ElevenLabs {
-            return Some(t!("block.needs_elevenlabs"));
+        if !self.cfg.engine.is_cloud() {
+            return Some(t!("block.needs_cloud"));
         }
-        if self.cfg.effective_api_key().is_empty() {
+        if !self.cfg.has_credentials(self.cfg.engine) {
             return Some(t!("block.needs_key"));
         }
-        if self.cfg.elevenlabs_voice_id.is_empty() {
+        if self.cfg.cloud_voice(self.cfg.engine).0.is_empty() {
             return Some(t!("block.needs_voice"));
         }
         None
@@ -502,18 +515,23 @@ impl AccessEngine {
         // read aloud, wordlists and all.
         let texts: Vec<String> = self.plan.iter().map(|p| p.text.clone()).collect();
         let sentences = texts.len();
+        // `export_blocker` has already refused a system engine, which is the
+        // only one with no request to make.
+        let Some(request) = self.cfg.voice_request() else {
+            self.error(t!("block.needs_cloud"));
+            return;
+        };
         let ctx = ctx.clone();
-        self.export.start(
-            path.clone(),
-            texts,
-            self.voice_request(),
-            move || ctx.request_repaint(),
-        );
+        self.export
+            .start(path.clone(), texts, request, move || ctx.request_repaint());
         if self.export.is_running() {
             self.info(tn!(
                 "status.saving_mp3",
                 sentences,
-                name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
+                name = path
+                    .file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy()
             ));
         } else {
             self.error(t!("error.export_start"));
@@ -554,8 +572,8 @@ impl AccessEngine {
 
     /// Rebuild the plan when the document may be playing. The wordlists decide
     /// what is safe to say out loud, so a change to them has to reach the
-    /// listener immediately: the ElevenLabs worker holds its own copy of the
-    /// whole plan and would otherwise read the old text to the end.
+    /// listener immediately: the cloud worker holds its own copy of the whole
+    /// plan and would otherwise read the old text to the end.
     fn rebuild_plan_live(&mut self) {
         let anchor = self.plan.get(self.plan_pos).map(|p| p.chunk_index);
         let was_playing = self.state == PlayState::Playing;
@@ -574,7 +592,7 @@ impl AccessEngine {
     /// Run the wordlists over the document and work out what will be spoken.
     fn rebuild_plan(&mut self) {
         // Whatever the worker is holding is now out of date.
-        self.el_can_resume = false;
+        self.cloud_can_resume = false;
         self.plan.clear();
         self.hits.clear();
         self.skipped_chunks = 0;
@@ -628,18 +646,8 @@ impl AccessEngine {
         if let Ok(system) = &mut self.system {
             system.apply_settings(rate, pitch, volume);
         }
-        if self.cfg.engine == EngineKind::ElevenLabs {
-            self.eleven.send(ElCommand::SetGain(volume));
-        }
-    }
-
-    fn voice_request(&self) -> VoiceRequest {
-        VoiceRequest {
-            api_key: self.cfg.effective_api_key(),
-            voice_id: self.cfg.elevenlabs_voice_id.clone(),
-            model: self.cfg.elevenlabs_model.clone(),
-            stability: self.cfg.elevenlabs_stability,
-            similarity: self.cfg.elevenlabs_similarity,
+        if self.cfg.engine.is_cloud() {
+            self.cloud.send(CloudCommand::SetGain(volume));
         }
     }
 
@@ -648,13 +656,10 @@ impl AccessEngine {
             self.error(t!("error.nothing_to_read"));
             return;
         }
-        // Resuming ElevenLabs is a real resume; the system engine has no pause,
-        // so it restarts the current sentence instead.
-        if self.state == PlayState::Paused
-            && self.cfg.engine == EngineKind::ElevenLabs
-            && self.el_can_resume
-        {
-            self.eleven.send(ElCommand::Resume);
+        // Resuming a cloud voice is a real resume; the system engine has no
+        // pause, so it restarts the current sentence instead.
+        if self.state == PlayState::Paused && self.cfg.engine.is_cloud() && self.cloud_can_resume {
+            self.cloud.send(CloudCommand::Resume);
             self.state = PlayState::Playing;
             return;
         }
@@ -682,8 +687,10 @@ impl AccessEngine {
                 } else {
                     // Cannot follow along, so hand over the whole document and
                     // let the OS queue it.
-                    let texts: Vec<String> =
-                        self.plan[position..].iter().map(|p| p.text.clone()).collect();
+                    let texts: Vec<String> = self.plan[position..]
+                        .iter()
+                        .map(|p| p.text.clone())
+                        .collect();
                     system.speak_all(&texts)
                 };
                 match result {
@@ -691,20 +698,23 @@ impl AccessEngine {
                     Err(e) => self.error(t!("error.could_not_speak", reason = format!("{e:#}"))),
                 }
             }
-            EngineKind::ElevenLabs => {
-                if self.cfg.effective_api_key().is_empty() {
+            engine => {
+                if !self.cfg.has_credentials(engine) {
                     self.error(t!("error.needs_key_or_system"));
                     return;
                 }
-                if self.cfg.elevenlabs_voice_id.is_empty() {
+                if self.cfg.cloud_voice(engine).0.is_empty() {
                     self.error(t!("error.needs_voice"));
                     return;
                 }
+                let Some(request) = self.cfg.voice_request() else {
+                    return;
+                };
                 let texts: Vec<String> = self.plan.iter().map(|p| p.text.clone()).collect();
-                self.eleven.send(ElCommand::Play {
+                self.cloud.send(CloudCommand::Play {
                     texts,
                     start: position,
-                    request: self.voice_request(),
+                    request,
                     gain: self.cfg.volume,
                     preview: false,
                 });
@@ -720,9 +730,9 @@ impl AccessEngine {
                     system.stop();
                 }
             }
-            EngineKind::ElevenLabs => {
-                self.eleven.send(ElCommand::Pause);
-                self.el_can_resume = true;
+            _ => {
+                self.cloud.send(CloudCommand::Pause);
+                self.cloud_can_resume = true;
             }
         }
         self.state = PlayState::Paused;
@@ -732,11 +742,11 @@ impl AccessEngine {
         if let Ok(system) = &mut self.system {
             system.stop();
         }
-        self.eleven.send(ElCommand::Stop);
-        self.el_can_resume = false;
+        self.cloud.send(CloudCommand::Stop);
+        self.cloud_can_resume = false;
         self.state = PlayState::Idle;
         self.plan_pos = 0;
-        self.el_synthesising = None;
+        self.cloud_synthesising = None;
     }
 
     fn skip(&mut self, delta: isize) {
@@ -783,17 +793,17 @@ impl AccessEngine {
             }
         }
 
-        // ElevenLabs worker events.
-        while let Some(event) = self.eleven.try_recv() {
+        // Cloud worker events.
+        while let Some(event) = self.cloud.try_recv() {
             match event {
-                elevenlabs::Event::Started(index) => {
-                    self.el_synthesising = None;
+                cloud::Event::Started(index) => {
+                    self.cloud_synthesising = None;
                     // Something was synthesised, so whatever key we hold works.
                     self.api_key_rejected = false;
                     if let Some(began) = self.synthesis_began.take() {
                         self.export_estimate.record(began.elapsed());
                     }
-                    if self.cfg.engine == EngineKind::ElevenLabs {
+                    if self.cfg.engine.is_cloud() {
                         self.plan_pos = index.min(self.plan.len().saturating_sub(1));
                         self.follow_cursor = true;
                         if self.state == PlayState::Idle {
@@ -801,39 +811,43 @@ impl AccessEngine {
                         }
                     }
                 }
-                elevenlabs::Event::Synthesising(index) => {
-                    self.el_synthesising = Some(index);
+                cloud::Event::Synthesising(index) => {
+                    self.cloud_synthesising = Some(index);
                     // A sentence the app is actually waiting on: the same round
                     // trip an export makes, so it is worth timing.
                     self.synthesis_began = Some(Instant::now());
                 }
-                elevenlabs::Event::Finished => {
-                    self.el_synthesising = None;
-                    if self.cfg.engine == EngineKind::ElevenLabs {
+                cloud::Event::Finished => {
+                    self.cloud_synthesising = None;
+                    if self.cfg.engine.is_cloud() {
                         self.state = PlayState::Idle;
                         self.plan_pos = 0;
                         self.sounds.success();
-                self.info(t!("status.finished"));
+                        self.info(t!("status.finished"));
                     }
                 }
-                elevenlabs::Event::Stopped => {
-                    self.el_synthesising = None;
+                cloud::Event::Stopped => {
+                    self.cloud_synthesising = None;
                 }
-                elevenlabs::Event::Error(message) => {
-                    self.el_synthesising = None;
-                    if self.cfg.engine == EngineKind::ElevenLabs {
+                cloud::Event::Error(message) => {
+                    self.cloud_synthesising = None;
+                    if self.cfg.engine.is_cloud() {
                         self.state = PlayState::Idle;
                     }
                     // A key that has expired or been revoked brings the button
                     // for entering one back, on both tabs that offer it.
-                    self.api_key_rejected = elevenlabs::is_key_rejection(&message);
+                    self.api_key_rejected = cloud::is_key_rejection(&message);
                     self.error(message);
                 }
-                elevenlabs::Event::Voices(voices) => {
+                cloud::Event::Voices { engine, voices } => {
                     self.api_key_rejected = false;
                     self.sounds.success();
                     self.info(tn!("status.voices_found", voices.len()));
-                    self.el_voices = voices;
+                    // Remembered with the provider that sent them, so a list
+                    // that arrives after the engine has been switched is not
+                    // offered as though it were the new one's.
+                    self.cloud_voices_engine = Some(engine);
+                    self.cloud_voices = voices;
                 }
             }
         }
@@ -851,14 +865,17 @@ impl AccessEngine {
                     self.sounds.success();
                     self.info(t!(
                         "status.saved_mp3",
-                        name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy(),
+                        name = path
+                            .file_name()
+                            .unwrap_or(path.as_os_str())
+                            .to_string_lossy(),
                         size = format!("{:.1}", bytes as f64 / 1_048_576.0),
                         duration = export::approximate_duration(elapsed)
                     ));
                 }
                 export::Event::Cancelled => self.info(t!("status.export_cancelled")),
                 export::Event::Failed(message) => {
-                    if elevenlabs::is_key_rejection(&message) {
+                    if cloud::is_key_rejection(&message) {
                         self.api_key_rejected = true;
                     }
                     self.error(t!("error.export_failed", reason = message));
@@ -987,8 +1004,7 @@ impl eframe::App for AccessEngine {
         self.description_dialog(ui.ctx());
         self.api_key_dialog(ui.ctx());
 
-        egui::Panel::top("tabs")
-            .show(ui, |ui| self.tab_bar(ui));
+        egui::Panel::top("tabs").show(ui, |ui| self.tab_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         // Tabs and their controls live on the left; the document — the thing
         // the user is actually following along with — takes the main area on
@@ -1221,7 +1237,9 @@ impl AccessEngine {
                 .show(ui, |ui| {
                     // Selectable, so it can still be copied by hand now that
                     // there is no Copy button under a text box.
-                    ui.add(egui::Label::new(RichText::new(&description).size(15.0)).selectable(true));
+                    ui.add(
+                        egui::Label::new(RichText::new(&description).size(15.0)).selectable(true),
+                    );
                 });
 
             ui.add_space(12.0);
@@ -1348,16 +1366,20 @@ impl AccessEngine {
         self.open_file_line(ui);
 
         let outputs = labelled_options(&config::Output::ALL, config::Output::label);
-        if let Some(output) =
-            setting_choice(ui, "output", &t!("general.do_this"), self.cfg.output, &outputs)
-        {
+        if let Some(output) = setting_choice(
+            ui,
+            "output",
+            &t!("general.do_this"),
+            self.cfg.output,
+            &outputs,
+        ) {
             self.cfg.output = output;
             self.mark_settings_dirty();
         }
 
         match self.cfg.engine {
             EngineKind::System => self.system_voice_picker(ui),
-            EngineKind::ElevenLabs => self.elevenlabs_voice_picker(ui),
+            engine => self.cloud_voice_picker(ui, engine),
         }
 
         ui.add_space(14.0);
@@ -1454,77 +1476,123 @@ impl AccessEngine {
 
     // --------------------------------------------------------- the API key
 
-    /// Whether the button for entering a key belongs on screen: the cloud
-    /// engine is chosen and there is either no key at all, or one ElevenLabs
-    /// has since turned down.
+    /// Whether the button for entering a credential belongs on screen: a cloud
+    /// engine is chosen and there is either nothing to send at all, or
+    /// something the provider has since turned down.
     fn needs_api_key_for(&self, engine: EngineKind) -> bool {
-        engine == EngineKind::ElevenLabs
-            && !self.cfg.api_key_from_env()
-            && (self.cfg.effective_api_key().is_empty() || self.api_key_rejected)
+        engine.is_cloud()
+            && !self.cfg.api_key_from_env(engine)
+            && (!self.cfg.has_credentials(engine) || self.api_key_rejected)
     }
 
     fn api_key_button(&mut self, ui: &mut egui::Ui) {
+        // The engine the button is *about* is the one being set up, which on
+        // the Settings tab is the form's choice rather than the applied one.
+        let engine = self.key_engine();
         let text = if self.api_key_rejected {
             t!("key.button_refused")
         } else {
-            t!("key.button")
+            t!("key.button", provider = engine.provider_name())
         };
         if wide_button(ui, &text).clicked() {
-            self.key_draft = self.cfg.elevenlabs_api_key.clone();
+            self.key_draft = match engine {
+                EngineKind::Polly => self.cfg.polly_access_key_id.clone(),
+                _ => self.cfg.effective_api_key(engine),
+            };
+            self.secret_draft = self.cfg.polly_secret_access_key.clone();
             self.show_key_dialog = true;
         }
     }
 
-    /// Entering the key, on its own, rather than as a field among the voice
-    /// settings: it is the one thing standing between the user and the engine
-    /// they just chose.
+    /// Which provider the key dialog is for.
+    ///
+    /// The Settings tab offers the button beside the engine picker, where the
+    /// engine being chosen has not been applied yet — and asking for an
+    /// ElevenLabs key because that is what is still running, when OpenAI is
+    /// what was just selected, would be nonsense.
+    fn key_engine(&self) -> EngineKind {
+        if self.tab == Tab::Settings && self.draft.engine.is_cloud() {
+            self.draft.engine
+        } else {
+            self.cfg.engine
+        }
+    }
+
+    /// Entering the credential, on its own, rather than as a field among the
+    /// voice settings: it is the one thing standing between the user and the
+    /// engine they just chose.
     fn api_key_dialog(&mut self, ctx: &egui::Context) {
         if !self.show_key_dialog {
             return;
         }
+        let engine = self.key_engine();
+        let provider = engine.provider_name().to_string();
+        let (sign_up_url, keys_url) = provider_links(engine);
+        // AWS is the one credential that is a pair rather than a string.
+        let paired = engine == EngineKind::Polly;
         let mut save = false;
         let mut close = false;
 
         let response = egui::Modal::new(egui::Id::new("api-key")).show(ctx, |ui| {
             ui.set_max_width(460.0);
-            ui.heading(t!("key.title"));
+            ui.heading(t!("key.title", provider = provider.clone()));
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.label(RichText::new(t!("key.needs_account")).weak().small());
-                ui.hyperlink_to(
-                    RichText::new(t!("key.sign_up")).small(),
-                    "https://elevenlabs.io/sign-up",
-                );
+                ui.hyperlink_to(RichText::new(t!("key.sign_up")).small(), sign_up_url);
                 ui.label(RichText::new(t!("key.then")).weak().small());
-                ui.hyperlink_to(
-                    RichText::new(t!("key.find_key")).small(),
-                    "https://elevenlabs.io/app/settings/api-keys",
-                );
-                ui.label(RichText::new(t!("key.under_settings")).weak().small());
+                ui.hyperlink_to(RichText::new(t!("key.find_key")).small(), keys_url);
             });
+            // What that second link actually leads to, which differs enough
+            // between five providers that "under Settings" would be wrong for
+            // four of them.
+            ui.label(RichText::new(key_hint(engine)).weak().small());
 
             ui.add_space(8.0);
-            let label = field_label(ui, &t!("key.field"));
+            let label = field_label(
+                ui,
+                &if paired {
+                    t!("key.field_access_key")
+                } else {
+                    t!("key.field")
+                },
+            );
             ui.add(
                 egui::TextEdit::singleline(&mut self.key_draft)
-                    .password(true)
-                    .hint_text("sk_…")
+                    // The AWS access key id is not a secret — it is in the
+                    // Authorization header of every request — and being able
+                    // to read it back is how somebody checks they pasted the
+                    // right one of the pair.
+                    .password(!paired)
+                    .hint_text(key_placeholder(engine))
                     .desired_width(f32::INFINITY),
             )
             .labelled_by(label);
 
+            if paired {
+                let label = field_label(ui, &t!("key.field_secret_key"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.secret_draft)
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                )
+                .labelled_by(label);
+                ui.label(RichText::new(t!("key.aws_note")).weak().small());
+            }
+
             ui.add_space(6.0);
             let mut remember = self.cfg.save_api_key;
-            if ui
-                .checkbox(&mut remember, t!("key.remember"))
-                .changed()
-            {
+            if ui.checkbox(&mut remember, t!("key.remember")).changed() {
                 self.cfg.save_api_key = remember;
             }
             // On screen rather than in a tooltip: what happens to a credential
             // is not something to hide behind a pointer nobody may be using.
-            ui.label(RichText::new(t!("key.warning")).weak().small());
+            ui.label(
+                RichText::new(t!("key.warning", variable = key_variable_name(engine)))
+                    .weak()
+                    .small(),
+            );
 
             ui.add_space(12.0);
             match button_row(ui, &[t!("common.cancel"), t!("common.save")]) {
@@ -1538,20 +1606,32 @@ impl AccessEngine {
             close = true;
         }
         if save {
-            self.cfg.elevenlabs_api_key = self.key_draft.trim().to_string();
+            if paired {
+                self.cfg.polly_access_key_id = self.key_draft.trim().to_string();
+                self.cfg.polly_secret_access_key = self.secret_draft.trim().to_string();
+            } else {
+                let key = self.key_draft.clone();
+                self.cfg.set_api_key(engine, &key);
+            }
             self.api_key_rejected = false;
             self.mark_settings_dirty();
-            self.show_key_dialog = false;
-            self.key_draft.clear();
-            if self.cfg.effective_api_key().is_empty() {
-                self.error(t!("error.no_key"));
-            } else {
+            self.close_key_dialog();
+            if self.cfg.has_credentials(engine) {
                 self.info(t!("status.key_saved"));
+            } else {
+                self.error(t!("error.no_key"));
             }
         } else if close {
-            self.show_key_dialog = false;
-            self.key_draft.clear();
+            self.close_key_dialog();
         }
+    }
+
+    /// Put the dialog away, taking the typed credential with it: a draft left
+    /// in memory after Cancel is a secret nobody asked this app to hold.
+    fn close_key_dialog(&mut self) {
+        self.show_key_dialog = false;
+        self.key_draft.clear();
+        self.secret_draft.clear();
     }
 
     // ------------------------------------------------------ voice pickers
@@ -1570,7 +1650,7 @@ impl AccessEngine {
                 );
                 #[cfg(all(unix, not(target_os = "macos")))]
                 ui.label(RichText::new(t!("voice.linux_hint")).weak().small());
-                ui.label(RichText::new(t!("voice.use_elevenlabs")).weak().small());
+                ui.label(RichText::new(t!("voice.use_cloud")).weak().small());
                 return;
             }
         };
@@ -1631,14 +1711,20 @@ impl AccessEngine {
         }
     }
 
-    fn elevenlabs_voice_picker(&mut self, ui: &mut egui::Ui) {
-        if self.needs_api_key_for(self.cfg.engine) {
+    /// The voice for whichever hosted provider is chosen.
+    ///
+    /// One picker for all five: they differ in what they call a voice and in
+    /// how the list is come by, but the choice a user is making is the same
+    /// one, and five near-identical pickers would drift apart within a
+    /// release.
+    fn cloud_voice_picker(&mut self, ui: &mut egui::Ui, engine: EngineKind) {
+        if self.needs_api_key_for(engine) {
             ui.add_space(8.0);
             ui.label(
                 RichText::new(if self.api_key_rejected {
-                    t!("voice.key_refused")
+                    t!("voice.key_refused", provider = engine.provider_name())
                 } else {
-                    t!("voice.key_needed")
+                    t!("voice.key_needed", provider = engine.provider_name())
                 })
                 .weak()
                 .small(),
@@ -1646,62 +1732,122 @@ impl AccessEngine {
             self.api_key_button(ui);
             return;
         }
-        if self.api_key_rejected && self.cfg.api_key_from_env() {
+        if self.api_key_rejected && self.cfg.api_key_from_env(engine) {
             ui.add_space(8.0);
-            ui.colored_label(ui.visuals().error_fg_color, t!("voice.env_key_refused"));
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                t!(
+                    "voice.env_key_refused",
+                    variable = key_variable_name(engine)
+                ),
+            );
         }
 
         ui.add_space(8.0);
         if wide_button(ui, &t!("voice.fetch")).clicked() {
-            let key = self.cfg.effective_api_key();
-            if key.is_empty() {
-                self.error(t!("error.enter_key_first"));
-            } else {
-                self.info(t!("status.fetching_voices"));
-                self.eleven.send(ElCommand::FetchVoices { api_key: key });
-            }
+            self.fetch_cloud_voices(engine);
         }
 
-        let selected = if self.cfg.elevenlabs_voice_name.is_empty() {
+        // A list belonging to another provider is not this provider's list.
+        let voices: Vec<RemoteVoice> = if self.cloud_voices_engine == Some(engine) {
+            self.cloud_voices.clone()
+        } else if engine == EngineKind::OpenAi {
+            // The one provider with no endpoint to ask: its voices are a
+            // published, fixed set, so the menu can be full before any request
+            // has been made. See `speech::openai`.
+            openai::built_in_voices()
+        } else {
+            Vec::new()
+        };
+
+        // Google offers well over a thousand voices, so the same filter the
+        // system picker has earns its place here too. A list short enough not
+        // to need one is not filtered either — the box is shared with the
+        // system picker, and a word left in it from another engine must not
+        // silently empty a menu that has nothing on screen to clear it with.
+        let filtering = voices.len() > 20;
+        if filtering {
+            let filter_label = field_label(ui, &t!("voice.filter"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.voice_filter)
+                    .hint_text(t!("voice.filter_hint"))
+                    .desired_width(f32::INFINITY),
+            )
+            .labelled_by(filter_label);
+        }
+        let needle = if filtering {
+            self.voice_filter.to_lowercase()
+        } else {
+            String::new()
+        };
+
+        let (saved_id, saved_name) = self.cfg.cloud_voice(engine);
+        let (saved_id, saved_name) = (saved_id.to_string(), saved_name.to_string());
+        // A voice that has been taken off the account, or renamed, still has a
+        // name saved here — so the box says what was chosen rather than going
+        // blank and looking as though nothing had been.
+        let selected = if saved_name.is_empty() {
             t!("voice.none_selected")
         } else {
-            self.cfg.elevenlabs_voice_name.clone()
+            saved_name
         };
+
         let mut chosen: Option<RemoteVoice> = None;
         let voice_label = field_label(ui, &t!("voice.voice"));
         let width = ui.available_width();
-        egui::ComboBox::from_id_salt("el-voice")
+        egui::ComboBox::from_id_salt("cloud-voice")
             .selected_text(selected)
             .width(width)
             .show_ui(ui, |ui| {
-                for voice in &self.el_voices {
-                    let label = if voice.description.is_empty() {
-                        voice.name.clone()
-                    } else {
-                        format!("{} — {}", voice.name, voice.description)
-                    };
-                    let is_selected = self.cfg.elevenlabs_voice_id == voice.id;
-                    if ui.selectable_label(is_selected, label).clicked() {
+                for voice in voices.iter().filter(|v| v.matches(&needle)) {
+                    let is_selected = saved_id == voice.id;
+                    if ui.selectable_label(is_selected, voice.label()).clicked() {
                         chosen = Some(voice.clone());
                     }
                 }
             })
             .response
             .labelled_by(voice_label);
+
         ui.label(
-            RichText::new(if self.el_voices.is_empty() {
+            RichText::new(if voices.is_empty() {
                 t!("voice.none_fetched")
             } else {
-                tn!("voice.account_count", self.el_voices.len())
+                tn!("voice.account_count", voices.len())
             })
             .weak()
             .small(),
         );
+        // Said in words rather than by the selected voice merely being absent
+        // from the list, which nobody scrolling a menu of a thousand names
+        // would ever notice.
+        if !saved_id.is_empty() && !voices.is_empty() && !voices.iter().any(|v| v.id == saved_id) {
+            ui.colored_label(ui.visuals().warn_fg_color, t!("voice.gone"));
+        }
+
         if let Some(voice) = chosen {
-            self.cfg.elevenlabs_voice_id = voice.id;
-            self.cfg.elevenlabs_voice_name = voice.name;
+            self.cfg.set_cloud_voice(engine, &voice);
             self.mark_settings_dirty();
         }
+    }
+
+    /// Ask the provider what voices this account can use.
+    fn fetch_cloud_voices(&mut self, engine: EngineKind) {
+        if !self.cfg.has_credentials(engine) {
+            self.error(t!("error.enter_key_first"));
+            return;
+        }
+        // Built from a copy set to the engine being asked about: the Settings
+        // tab can fetch for an engine that has not been applied yet.
+        let mut probe = self.cfg.clone();
+        probe.engine = engine;
+        let Some(request) = probe.voice_request() else {
+            return;
+        };
+        self.info(t!("status.fetching_voices"));
+        self.cloud.send(CloudCommand::FetchVoices {
+            request: Box::new(request),
+        });
     }
 
     // -------------------------------------------------------- wordlists tab
@@ -1872,13 +2018,12 @@ impl AccessEngine {
         // Never overwrite: an existing list is one the user may have spent an
         // afternoon on, and a silent replacement leaves nothing to undo.
         if destination.exists() {
-            self.error(t!(
-                "error.wordlist_exists",
-                name = name.to_string_lossy()
-            ));
+            self.error(t!("error.wordlist_exists", name = name.to_string_lossy()));
             return;
         }
-        if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::copy(&source, &destination).map(|_| ())) {
+        if let Err(e) = std::fs::create_dir_all(&dir)
+            .and_then(|_| std::fs::copy(&source, &destination).map(|_| ()))
+        {
             self.error(t!("error.wordlist_add", reason = e));
             return;
         }
@@ -1950,8 +2095,12 @@ impl AccessEngine {
                             wordlist::RuleKind::Pronounce => ui.visuals().weak_text_color(),
                             _ => ui.visuals().warn_fg_color,
                         };
-                        ui.label(RichText::new(&change.original).strikethrough().color(colour))
-                            .on_hover_text(&explanation);
+                        ui.label(
+                            RichText::new(&change.original)
+                                .strikethrough()
+                                .color(colour),
+                        )
+                        .on_hover_text(&explanation);
                         // "»" is announced as "right-pointing double angle
                         // quotation mark", which is not what it means here.
                         named_label(ui.label("»"), &t!("changes.becomes"));
@@ -1963,7 +2112,9 @@ impl AccessEngine {
                         ui.label(shown).on_hover_text(&explanation);
                         if change.count > 1 {
                             named_label(
-                                ui.label(RichText::new(format!("×{}", change.count)).weak().small()),
+                                ui.label(
+                                    RichText::new(format!("×{}", change.count)).weak().small(),
+                                ),
                                 &tn!("changes.times", change.count),
                             );
                         }
@@ -2012,14 +2163,15 @@ impl AccessEngine {
             let alt = if self.description.is_empty() {
                 t!(
                     "image.alt",
-                    name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
+                    name = path
+                        .file_name()
+                        .unwrap_or(path.as_os_str())
+                        .to_string_lossy()
                 )
             } else {
                 self.description.clone()
             };
-            picture.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &alt)
-            });
+            picture.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &alt));
         }
 
         ui.add_space(8.0);
@@ -2348,21 +2500,9 @@ impl AccessEngine {
                 }
             }
             EngineKind::ElevenLabs => {
-                let label = field_label(ui, &t!("settings.model"));
-                let mut model = self.draft.elevenlabs_model.clone();
-                let width = ui.available_width();
-                egui::ComboBox::from_id_salt("el-model")
-                    .selected_text(model.clone())
-                    .width(width)
-                    .show_ui(ui, |ui| {
-                        for (id, description) in elevenlabs::MODELS {
-                            ui.selectable_value(&mut model, id.to_string(), *description);
-                        }
-                    })
-                    .response
-                    .labelled_by(label);
-                self.draft.elevenlabs_model = model;
-
+                self.model_picker(ui, "el-model", elevenlabs::MODELS, |draft| {
+                    &mut draft.elevenlabs_model
+                });
                 wide_slider(
                     ui,
                     &t!("settings.stability"),
@@ -2377,18 +2517,193 @@ impl AccessEngine {
                     0.0..=1.0,
                 );
                 ui.label(RichText::new(t!("settings.similarity_hint")).weak().small());
-                wide_slider(ui, &t!("settings.volume"), &mut self.draft.volume, 0.0..=1.0);
+                self.cloud_volume_and_test(ui);
+            }
+            EngineKind::OpenAi => {
+                self.model_picker(ui, "openai-model", openai::MODELS, |draft| {
+                    &mut draft.openai_model
+                });
+                wide_slider(
+                    ui,
+                    &t!("settings.speed"),
+                    &mut self.draft.openai_speed,
+                    openai::SPEED_RANGE.0..=openai::SPEED_RANGE.1,
+                );
+                ui.label(
+                    RichText::new(t!("settings.openai_speed_hint"))
+                        .weak()
+                        .small(),
+                );
 
-                ui.add_space(8.0);
-                if wide_button(ui, &t!("settings.test_voice"))
-                    .on_hover_text(t!("settings.test_voice_hint"))
-                    .clicked()
-                {
-                    self.test_elevenlabs_voice();
-                }
+                let label = field_label(ui, &t!("settings.openai_instructions"));
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.draft.openai_instructions)
+                        .desired_rows(2)
+                        .hint_text(t!("settings.openai_instructions_hint"))
+                        .desired_width(f32::INFINITY),
+                )
+                .labelled_by(label);
+                ui.label(
+                    RichText::new(t!("settings.openai_instructions_note"))
+                        .weak()
+                        .small(),
+                );
+                self.cloud_volume_and_test(ui);
+            }
+            EngineKind::Deepgram => {
+                // Deliberately no model picker: for Aura the model *is* the
+                // voice, and it is chosen on the General tab. A second control
+                // meaning the same thing would be a way to get it wrong.
+                ui.label(RichText::new(t!("settings.deepgram_note")).weak().small());
+                self.cloud_volume_and_test(ui);
+            }
+            EngineKind::Google => {
+                wide_slider(
+                    ui,
+                    &t!("settings.speed"),
+                    &mut self.draft.google_speaking_rate,
+                    google::RATE_RANGE.0..=google::RATE_RANGE.1,
+                );
+                let label = field_label(ui, &t!("settings.pitch"));
+                let width = ui.available_width();
+                ui.scope(|ui| {
+                    ui.spacing_mut().slider_width = (width - 72.0).max(80.0);
+                    ui.add(
+                        egui::Slider::new(
+                            &mut self.draft.google_pitch,
+                            google::PITCH_RANGE.0..=google::PITCH_RANGE.1,
+                        )
+                        // Semitones, not a percentage: this is the one slider
+                        // in the app whose unit is a real one.
+                        .custom_formatter(|v, _| format!("{v:+.0}")),
+                    )
+                })
+                .inner
+                .labelled_by(label);
+                ui.label(
+                    RichText::new(t!("settings.google_pitch_hint"))
+                        .weak()
+                        .small(),
+                );
+                self.cloud_volume_and_test(ui);
+            }
+            EngineKind::Polly => {
+                self.polly_settings(ui);
+                self.cloud_volume_and_test(ui);
             }
         }
         ui.label(RichText::new(t!("settings.test_note")).weak().small());
+    }
+
+    /// A model dropdown over one provider's list, writing into the form.
+    fn model_picker(
+        &mut self,
+        ui: &mut egui::Ui,
+        id_salt: &str,
+        models: &[(&str, &str)],
+        field: impl Fn(&mut Config) -> &mut String,
+    ) {
+        let label = field_label(ui, &t!("settings.model"));
+        let mut model = field(&mut self.draft).clone();
+        let width = ui.available_width();
+        egui::ComboBox::from_id_salt(id_salt)
+            .selected_text(model.clone())
+            .width(width)
+            .show_ui(ui, |ui| {
+                for (id, description) in models {
+                    ui.selectable_value(&mut model, (*id).to_string(), *description);
+                }
+            })
+            .response
+            .labelled_by(label);
+        *field(&mut self.draft) = model;
+    }
+
+    /// The AWS region, profile and synthesis engine.
+    fn polly_settings(&mut self, ui: &mut egui::Ui) {
+        let label = field_label(ui, &t!("settings.polly_region"));
+        let mut region = self.draft.polly_region.clone();
+        let width = ui.available_width();
+        egui::ComboBox::from_id_salt("polly-region")
+            .selected_text(region.clone())
+            .width(width)
+            .show_ui(ui, |ui| {
+                for name in polly::REGIONS {
+                    ui.selectable_value(&mut region, (*name).to_string(), *name);
+                }
+            })
+            .response
+            .labelled_by(label);
+        self.draft.polly_region = region;
+
+        // Which engines to offer: the ones the chosen voice can actually be
+        // spoken by, when that is known, rather than all four and an error on
+        // the first sentence.
+        let supported: Vec<String> = self
+            .cloud_voices
+            .iter()
+            .find(|v| {
+                self.cloud_voices_engine == Some(EngineKind::Polly)
+                    && v.id == self.cfg.polly_voice_id
+            })
+            .map(|v| v.engines.clone())
+            .unwrap_or_default();
+        let offered: Vec<(String, String)> = polly::ENGINES
+            .iter()
+            .filter(|(id, _)| supported.is_empty() || supported.iter().any(|e| e == id))
+            .map(|(id, description)| ((*id).to_string(), (*description).to_string()))
+            .collect();
+
+        let label = field_label(ui, &t!("settings.polly_engine"));
+        let mut engine = self.draft.polly_engine.clone();
+        let shown = offered
+            .iter()
+            .find(|(id, _)| *id == engine)
+            .map(|(_, description)| description.clone())
+            .unwrap_or_else(|| engine.clone());
+        let width = ui.available_width();
+        egui::ComboBox::from_id_salt("polly-engine")
+            .selected_text(shown)
+            .width(width)
+            .show_ui(ui, |ui| {
+                for (id, description) in &offered {
+                    ui.selectable_value(&mut engine, id.clone(), description);
+                }
+            })
+            .response
+            .labelled_by(label);
+        self.draft.polly_engine = engine;
+
+        let label = field_label(ui, &t!("settings.polly_profile"));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.draft.polly_profile)
+                .hint_text(polly::DEFAULT_PROFILE)
+                .desired_width(f32::INFINITY),
+        )
+        .labelled_by(label);
+        ui.label(
+            RichText::new(t!("settings.polly_profile_hint"))
+                .weak()
+                .small(),
+        );
+    }
+
+    /// The volume slider and the Test button, which every hosted provider has
+    /// in common and which belong at the foot of whichever settings are above.
+    fn cloud_volume_and_test(&mut self, ui: &mut egui::Ui) {
+        wide_slider(
+            ui,
+            &t!("settings.volume"),
+            &mut self.draft.volume,
+            0.0..=1.0,
+        );
+        ui.add_space(8.0);
+        if wide_button(ui, &t!("settings.test_voice"))
+            .on_hover_text(t!("settings.test_voice_hint"))
+            .clicked()
+        {
+            self.test_cloud_voice();
+        }
     }
 
     /// Speak a sample with the form's settings rather than the applied ones:
@@ -2405,11 +2720,22 @@ impl AccessEngine {
         }
     }
 
-    fn test_elevenlabs_voice(&mut self) {
-        if self.cfg.elevenlabs_voice_id.is_empty() {
+    /// Speak a sample through the chosen provider, with the form's settings.
+    fn test_cloud_voice(&mut self) {
+        let engine = self.draft.engine;
+        if self.cfg.cloud_voice(engine).0.is_empty() {
             self.error(t!("error.choose_voice_general"));
             return;
         }
+        // The applied settings, with the form laid over them: the voice and
+        // the credential are edited live on General, the model and sliders are
+        // the form's, and a test that ignored the slider just moved would be
+        // no test at all.
+        let mut probe = self.cfg.clone();
+        transfer_settings(&self.draft, &mut probe);
+        let Some(request) = probe.voice_request() else {
+            return;
+        };
         // The sample supersedes the document at the worker either way, so stop
         // first and say so, rather than leaving the UI showing a read that is
         // no longer happening.
@@ -2417,14 +2743,7 @@ impl AccessEngine {
             self.stop();
         }
         self.info(t!("status.playing_sample"));
-        let request = VoiceRequest {
-            api_key: self.cfg.effective_api_key(),
-            voice_id: self.cfg.elevenlabs_voice_id.clone(),
-            model: self.draft.elevenlabs_model.clone(),
-            stability: self.draft.elevenlabs_stability,
-            similarity: self.draft.elevenlabs_similarity,
-        };
-        self.eleven.send(ElCommand::Play {
+        self.cloud.send(CloudCommand::Play {
             texts: vec![t!("settings.sample_text")],
             start: 0,
             request,
@@ -2464,7 +2783,14 @@ impl AccessEngine {
 
         let (smallest, largest) = config::TEXT_SCALE_RANGE;
         let mut scale = self.draft.text_scale;
-        if wide_slider(ui, &t!("settings.text_size"), &mut scale, smallest..=largest).changed() {
+        if wide_slider(
+            ui,
+            &t!("settings.text_size"),
+            &mut scale,
+            smallest..=largest,
+        )
+        .changed()
+        {
             self.draft.text_scale = scale;
         }
         ui.label(RichText::new(t!("settings.text_size_hint")).weak().small());
@@ -2545,10 +2871,8 @@ impl AccessEngine {
         // Editing this changes nothing until Apply: the model list below is
         // still the one fetched from the address in use.
         let label = field_label(ui, &t!("settings.ollama_url"));
-        ui.add(
-            egui::TextEdit::singleline(&mut self.draft.ollama_url).desired_width(f32::INFINITY),
-        )
-        .labelled_by(label);
+        ui.add(egui::TextEdit::singleline(&mut self.draft.ollama_url).desired_width(f32::INFINITY))
+            .labelled_by(label);
         // The promise holds only while Ollama is on this machine, and the
         // address above is editable, so it is stated conditionally.
         if vision::is_local(&self.draft.ollama_url) {
@@ -2673,7 +2997,7 @@ impl AccessEngine {
             self.stop();
         }
         self.apply_voice_settings();
-        self.eleven.send(ElCommand::SetGain(self.cfg.volume));
+        self.cloud.send(CloudCommand::SetGain(self.cfg.volume));
         if chunk_changed {
             self.stop();
             self.doc.rechunk(self.cfg.chunk_mode);
@@ -2744,6 +3068,36 @@ impl AccessEngine {
                 );
             }
         }
+        // Which cloud provider is set up, and where its credential came from.
+        // The two questions a support message about a cloud voice always turns
+        // out to be, and neither is answerable from the tabs above.
+        if self.cfg.engine.is_cloud() {
+            let engine = self.cfg.engine;
+            let source = if self.cfg.api_key_from_env(engine) {
+                t!("diag.credentials_environment")
+            } else if self.cfg.has_credentials(engine) {
+                t!("diag.credentials_settings")
+            } else {
+                t!("diag.credentials_none")
+            };
+            ui.label(
+                RichText::new(t!(
+                    "diag.cloud",
+                    provider = engine.provider_name(),
+                    voice = {
+                        let (id, name) = self.cfg.cloud_voice(engine);
+                        if name.is_empty() {
+                            t!("voice.none_selected")
+                        } else {
+                            format!("{name} ({id})")
+                        }
+                    },
+                    credentials = source
+                ))
+                .small(),
+            );
+        }
+
         ui.label(
             RichText::new(t!(
                 "diag.document",
@@ -2826,10 +3180,7 @@ impl AccessEngine {
         }
         if self.doc.is_empty() {
             ui.centered_and_justified(|ui| {
-                ui.label(
-                    RichText::new(t!("doc.empty")).size(16.0)
-                    .weak(),
-                );
+                ui.label(RichText::new(t!("doc.empty")).size(16.0).weak());
             });
             return;
         }
@@ -2985,6 +3336,14 @@ fn transfer_settings(from: &Config, to: &mut Config) {
     to.elevenlabs_model = from.elevenlabs_model.clone();
     to.elevenlabs_stability = from.elevenlabs_stability;
     to.elevenlabs_similarity = from.elevenlabs_similarity;
+    to.openai_model = from.openai_model.clone();
+    to.openai_speed = from.openai_speed;
+    to.openai_instructions = from.openai_instructions.clone();
+    to.google_speaking_rate = from.google_speaking_rate;
+    to.google_pitch = from.google_pitch;
+    to.polly_region = from.polly_region.clone();
+    to.polly_profile = from.polly_profile.clone();
+    to.polly_engine = from.polly_engine.clone();
     to.ollama_url = from.ollama_url.clone();
     to.ollama_model = from.ollama_model.clone();
     to.ollama_prompt = from.ollama_prompt.clone();
@@ -3108,8 +3467,7 @@ fn wide_slider(
         // Leave room for the value egui draws after the track.
         ui.spacing_mut().slider_width = (width - 72.0).max(80.0);
         ui.add(
-            egui::Slider::new(value, range)
-                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+            egui::Slider::new(value, range).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
         )
     })
     .inner
@@ -3171,6 +3529,65 @@ fn pane_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
     ui.add_space(8.0);
 }
 
+/// Where to sign up with a provider, and where its credential is once you have.
+///
+/// Kept next to the dialog that uses them rather than looked up per provider
+/// in five places: these are the two links that turn "you need an API key"
+/// into something a user can actually go and do.
+fn provider_links(engine: EngineKind) -> (&'static str, &'static str) {
+    match engine {
+        EngineKind::ElevenLabs => (elevenlabs::SIGN_UP_URL, elevenlabs::KEYS_URL),
+        EngineKind::OpenAi => (openai::SIGN_UP_URL, openai::KEYS_URL),
+        EngineKind::Deepgram => (deepgram::SIGN_UP_URL, deepgram::KEYS_URL),
+        EngineKind::Google => (google::SIGN_UP_URL, google::KEYS_URL),
+        EngineKind::Polly => (polly::SIGN_UP_URL, polly::KEYS_URL),
+        // Never shown: the system voices need no account at all.
+        EngineKind::System => (elevenlabs::SIGN_UP_URL, elevenlabs::KEYS_URL),
+    }
+}
+
+/// The sentence under the two links, saying where in that provider's console
+/// the credential actually is. Five different answers, so one wording would be
+/// wrong four times.
+fn key_hint(engine: EngineKind) -> String {
+    match engine {
+        EngineKind::ElevenLabs => t!("key.hint.elevenlabs"),
+        EngineKind::OpenAi => t!("key.hint.openai"),
+        EngineKind::Deepgram => t!("key.hint.deepgram"),
+        EngineKind::Google => t!("key.hint.google"),
+        EngineKind::Polly => t!("key.hint.polly"),
+        EngineKind::System => String::new(),
+    }
+}
+
+/// What a credential for this provider looks like, shown in the empty field so
+/// somebody can tell at a glance whether they have pasted the right thing.
+fn key_placeholder(engine: EngineKind) -> &'static str {
+    match engine {
+        EngineKind::ElevenLabs => "sk_…",
+        EngineKind::OpenAi => "sk-…",
+        EngineKind::Deepgram => "",
+        EngineKind::Google => "AIza…",
+        EngineKind::Polly => "AKIA…",
+        EngineKind::System => "",
+    }
+}
+
+/// The environment variable this provider's credential can arrive in, named so
+/// the warning about plain-text storage can point at the alternative.
+fn key_variable_name(engine: EngineKind) -> &'static str {
+    match engine {
+        EngineKind::ElevenLabs => "ELEVENLABS_API_KEY",
+        EngineKind::OpenAi => "OPENAI_API_KEY",
+        EngineKind::Deepgram => "DEEPGRAM_API_KEY",
+        EngineKind::Google => "GOOGLE_API_KEY",
+        // AWS credentials are a set rather than a single string, so the
+        // variable named here is the one somebody would set first.
+        EngineKind::Polly => "AWS_ACCESS_KEY_ID",
+        EngineKind::System => "",
+    }
+}
+
 /// Why a file in the languages folder never became a language.
 fn file_reason(reason: &i18n::FileReason) -> String {
     match reason {
@@ -3218,10 +3635,16 @@ mod tests {
     fn a_symbol_in_front_of_a_label_is_not_part_of_its_name() {
         crate::i18n::with_language("en", || {
             assert_eq!(spoken(&t!("general.open")), "Open a file…");
-            assert_eq!(spoken(&t!("key.button")), "Enter your ElevenLabs API key…");
+            assert_eq!(
+                spoken(&t!("key.button", provider = "ElevenLabs")),
+                "Enter your ElevenLabs credentials…"
+            );
             assert_eq!(spoken(&t!("voice.fetch")), "Fetch my voices");
             assert_eq!(spoken(&t!("wordlists.install")), "Install a wordlist…");
-            assert_eq!(spoken(&t!("dialog.description.save")), "Save as a text file…");
+            assert_eq!(
+                spoken(&t!("dialog.description.save")),
+                "Save as a text file…"
+            );
             // A label with no symbol is left exactly as it is.
             assert_eq!(spoken(&t!("common.cancel")), "Cancel");
             // And one that is nothing but a symbol keeps it, rather than
@@ -3236,7 +3659,9 @@ mod tests {
     /// fallback, which is what motivated `file_preview_uri` in the first
     /// place.
     fn loader_resolves_to(uri: &str) -> PathBuf {
-        let s = uri.strip_prefix("file://").expect("uri has the file:// scheme");
+        let s = uri
+            .strip_prefix("file://")
+            .expect("uri has the file:// scheme");
         if cfg!(target_os = "windows") {
             if let Some(stripped) = s.strip_prefix('/') {
                 return PathBuf::from(stripped);
@@ -3252,7 +3677,10 @@ mod tests {
         let uri = file_preview_uri(&path);
         assert_eq!(uri, "file:///C:/Users/test/image.png");
         if cfg!(target_os = "windows") {
-            assert_eq!(loader_resolves_to(&uri), PathBuf::from("C:/Users/test/image.png"));
+            assert_eq!(
+                loader_resolves_to(&uri),
+                PathBuf::from("C:/Users/test/image.png")
+            );
         }
     }
 

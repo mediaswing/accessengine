@@ -7,6 +7,80 @@ Each released version needs a section here: the release workflow refuses to
 build a tag that has none, and copies the matching section onto the release
 page.
 
+## [1.7.0] - 2026-09-02
+
+### Added
+
+- Four more speech engines, alongside the system voices and ElevenLabs:
+  **OpenAI**, **Deepgram**, **Google Cloud** and **Amazon Polly**. They are
+  chosen the same way ElevenLabs already was — a **Speech engine** dropdown on
+  Settings — and once chosen they behave the same way: the voice is picked on
+  the General tab, everything about how that voice is driven is on Settings,
+  the sentence being spoken is highlighted, play, pause, stop and the arrow
+  keys work, and the wordlists have had their say before a single word is sent
+  anywhere.
+
+  They also all save. **Save the reading as an MP3** used to be ElevenLabs
+  only, because that was the one engine that hands back a file rather than a
+  noise; every one of these does the same, so the export now works with any of
+  them. The system voices still cannot be recorded, and the button still says
+  so.
+
+  Each provider keeps its own voice, so trying Deepgram for an afternoon and
+  going back to ElevenLabs finds the ElevenLabs voice exactly where it was
+  left. A voice that has since been removed or renamed is named in the box and
+  said out loud above it, rather than the selection quietly emptying.
+
+- **Where the credentials go.** Each provider has its own key, entered in the
+  same dialog as before and stored under the same rule: nothing is written to
+  disk unless **Remember these on this computer** is ticked, the settings file
+  is owner-only on Unix, and an environment variable — `OPENAI_API_KEY`,
+  `DEEPGRAM_API_KEY`, `GOOGLE_API_KEY`, and `ELEVENLABS_API_KEY` as before —
+  takes precedence over the file and never touches it. The dialog says where in
+  each provider's own console the credential actually is, which is five
+  different answers.
+
+  Amazon Polly is the exception, because AWS credentials are a set rather than
+  a string. It uses the standard chain: the `AWS_*` environment variables, then
+  anything typed into this app, then the profile in `~/.aws/credentials` that
+  the AWS CLI writes — so a machine already set up for `aws` needs nothing
+  entered here at all. Requests are signed with Signature Version 4 in about
+  eighty lines rather than by pulling in the AWS SDK.
+
+  Google Cloud uses an API key rather than a service account, and the README
+  explains why: a service account would mean an RSA signer, a token cache, and
+  a secret on disk materially worse to lose than a key.
+
+### Changed
+
+- The ElevenLabs worker is now the worker for all five cloud engines. The
+  queue, the audio device, the one-sentence-ahead prefetch and the handling of
+  a fresh play arriving mid-sentence were never particular to ElevenLabs, so
+  they have moved to `speech::cloud` unchanged, and each provider's own module
+  is left holding the two requests it actually makes. ElevenLabs behaves
+  exactly as it did, down to the wording of its error messages, which a test
+  now holds it to.
+
+- Errors from a cloud provider say what to do rather than quoting a status
+  code. A refused key names the tab to enter another on, a rate limit says to
+  wait, and a provider having a bad day says so — for all five, from one place,
+  so a provider added later cannot forget to.
+
+- The **Diagnostics** section names the cloud engine in use, the voice, and
+  whether its credentials came from the environment or the settings file.
+
+- A settings file naming a speech engine this build has never heard of falls
+  back to the system voices instead of being discarded whole. That is what a
+  downgrade looks like — settings written by a newer version, opened by an
+  older one — and it used to cost every other setting in the file.
+
+### Note on cost
+
+Only the system voices are free, and they are the default. The four new
+engines are all paid services billed by the provider, not by this app. Some
+offer trial credit to a new account; none of them has a permanent free tier for
+text to speech. Every one of them receives the text of whatever is being read.
+
 ## [1.6.0] - 2026-09-02
 
 ### Added

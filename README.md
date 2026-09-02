@@ -1,7 +1,8 @@
 # The Accessibility Engine
 
 A cross-platform desktop reader that opens a text file and reads it aloud —
-with the system's own voices, or with ElevenLabs if you have an API key. It can
+with the system's own voices, or with one of five cloud voice services if you
+have an account with one. It can
 describe an image using a vision model running on your own machine, and it
 applies editable **wordlists** so a document can be made safe to play in a
 classroom or an open-plan office, and so names and jargon are pronounced
@@ -25,13 +26,19 @@ one in a file. The document is
 cut into sentences (or paragraphs, your choice); the one being spoken is
 highlighted, and clicking any sentence starts reading from there.
 
-**Two speech engines.**
+**Six speech engines.**
 
 - *System voices* — whatever the operating system provides. Free, offline, and
-  instant. macOS offers around 180 out of the box.
-- *ElevenLabs* — optional, needs an API key, and uses your account's quota.
-  Each sentence is fetched while the previous one plays, so it does not stutter
-  between sentences.
+  instant. macOS offers around 180 out of the box. This is the default, and
+  nothing you read with it leaves your computer.
+- *ElevenLabs*, *OpenAI*, *Deepgram*, *Google Cloud* and *Amazon Polly* —
+  optional, each needs an account and credentials of its own, and each is
+  billed by that provider. Each sentence is fetched while the previous one
+  plays, so none of them stutters between sentences.
+
+  All five behave the same way once chosen: the voice is picked on the General
+  tab, how it is driven is on Settings, and the reading can be saved as an MP3.
+  See **[Cloud voices](#cloud-voices)** below for what each one costs and needs.
 
 **Describes images.** Point it at a picture and a vision model running locally
 under [Ollama](https://ollama.com) writes a description you can read aloud,
@@ -183,7 +190,7 @@ the usual GUI development packages.
 ```sh
 cargo run --release              # open the app
 cargo run --release -- notes.md  # open a file straight away
-cargo test                       # 51 tests
+cargo test                       # 179 tests
 ```
 
 ## Keyboard
@@ -195,41 +202,121 @@ cargo test                       # 51 tests
 | `←` `→` | Previous / next sentence |
 | `Ctrl`/`Cmd` + `O` | Open a file |
 
-Pause behaves differently per engine, because the platforms do: ElevenLabs
-pauses the audio, while the system engines have no pause and so restart the
-current sentence when you resume.
+Pause behaves differently per engine, because the platforms do: the cloud
+engines pause the audio, while the system engines have no pause and so restart
+the current sentence when you resume.
 
 ---
 
-## ElevenLabs
+## Cloud voices
 
-[ElevenLabs](https://elevenlabs.io) is a separate, paid text-to-speech service
-known for more natural, expressive voices than most operating systems ship.
-It's entirely optional — the system voices work offline with no account —
-but if you want to try ElevenLabs's voices:
+The system voices are local, free, and need no account: they run on your own
+machine and nothing you read with them is sent anywhere. Everything in this
+section is optional, and only applies if you choose one of the other engines.
 
-1. [Sign up](https://elevenlabs.io/sign-up) for an ElevenLabs account.
-2. Generate an API key at
-   [elevenlabs.io/app/settings/api-keys](https://elevenlabs.io/app/settings/api-keys).
-3. Choose **ElevenLabs** as the speech engine on the Settings tab, then press
-   the key button that appears and paste it in (or set it as an environment
-   variable, below).
+> **What leaving your machine means.** When a cloud engine is chosen, the text
+> of whatever you are reading is sent to that provider — sentence by sentence,
+> as it is read — so that they can speak it. Wordlists are applied *before*
+> anything is sent, so a sentence a wordlist skips is never transmitted at all.
+> Nothing else goes anywhere: this app has no telemetry, no analytics, and no
+> remote logging, and it never contacts a provider you have not selected.
 
-Each request uses your account's ElevenLabs quota and is billed by them, not
-by this app — see their pricing page for current plans and limits.
+> **What they cost.** All five are paid services, billed by the provider and
+> not by this app, per character of text synthesised. Several of them give a
+> new account some trial credit — that is a trial, not a free tier. None of
+> them offers permanent free text to speech. Check the provider's own pricing
+> page before reading a long book to yourself.
 
-### Your API key
+| Engine | What you need | Where to get it |
+| --- | --- | --- |
+| **ElevenLabs** | An API key | [elevenlabs.io/app/settings/api-keys](https://elevenlabs.io/app/settings/api-keys) — under Settings |
+| **OpenAI** | An API key | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) — shown once, on creation |
+| **Deepgram** | An API key | Deepgram console → your project → Settings → API Keys |
+| **Google Cloud** | An API key, in a project with the Cloud Text-to-Speech API enabled | Google Cloud console → APIs & Services → Credentials |
+| **Amazon Polly** | AWS credentials and a region | See [Amazon Polly](#amazon-polly) below |
 
-The key is **not** saved to disk unless you tick "Remember this key on this
-computer". If you do, it goes into the settings file as plain text, readable by
+To set one up: choose the engine on the **Settings** tab, press the credentials
+button that appears, and paste yours in. Then go back to **General** and press
+**Fetch my voices**.
+
+### Your credentials
+
+Credentials are **not** saved to disk unless you tick "Remember these on this
+computer". If you do, they go into the settings file as plain text, readable by
 anything running as you, and the file is set to owner-only permissions on Unix.
+This app does not use the platform keychain.
 
 On a shared machine, set the environment variable instead — it takes precedence
-and never touches the config file:
+over the settings file and never touches it:
 
 ```sh
 export ELEVENLABS_API_KEY=sk_...
+export OPENAI_API_KEY=sk-...
+export DEEPGRAM_API_KEY=...
+export GOOGLE_API_KEY=AIza...
 ```
+
+Nothing is compiled into this app: there is no bundled key, no client secret,
+and no account of ours behind any of these. Credentials never appear in the log
+file — every one of them is redacted wherever it could be printed, and there
+are tests that hold it to that.
+
+### Google Cloud
+
+Google's own preferred credential is a *service account*: a JSON file holding
+an RSA private key, which a client signs a JWT with and exchanges for an access
+token every hour. This app uses the other mechanism Google supports on the same
+REST endpoints — an ordinary **API key** — because a service account would mean
+an RSA signer, a token cache, and a file on disk materially worse to lose than
+a key, all for one provider out of five.
+
+So what you need is:
+
+1. A Google Cloud project with the **Cloud Text-to-Speech API** enabled.
+2. An API key from **APIs & Services → Credentials** in that project.
+3. **Restrict that key to the Cloud Text-to-Speech API.** An unrestricted Cloud
+   API key is a key to the whole project; this one only ever needs to speak.
+
+Google offers well over a thousand voices, so the voice picker gains a filter
+box. Each is labelled with its language, its gender where stated, and its
+family — Standard, WaveNet, Neural2, Chirp — which is the biggest difference in
+both how it sounds and what it costs.
+
+### Amazon Polly
+
+Polly is the one provider whose credential is a set rather than a single
+string, so it uses the standard AWS chain rather than anything invented here:
+
+1. `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and optionally
+   `AWS_SESSION_TOKEN` from the environment;
+2. an access key ID and secret access key typed into this app;
+3. the profile in `~/.aws/credentials` — the file the AWS CLI writes, so a
+   machine already set up for `aws` needs nothing entered here at all. Which
+   profile is a setting; the region comes from the setting, then `AWS_REGION`,
+   then `~/.aws/config`.
+
+The credentials want the **AmazonPollyReadOnlyAccess** policy, which is enough
+to list voices and speak, and nothing else.
+
+Polly is also the one provider that offers a choice of synthesis engine —
+generative, neural, long-form or standard — and not every voice supports every
+one. The Settings tab narrows that list to the engines the chosen voice can
+actually be spoken by, and choosing a voice that cannot use the current engine
+moves the engine rather than leaving the pair broken.
+
+Polly will not read more than 3000 characters in one request. Reading in
+sentences never comes close; reading in paragraphs occasionally can, and the
+app says so and names the setting rather than failing obscurely.
+
+### Saving to MP3
+
+**Save the reading as an MP3** works with any of the five, because every one of
+them is asked for MP3 and the segments are simply appended. It does not work
+with the system voices: the platform engines speak to the sound card and offer
+no way to capture what they produce, so there is nothing to write.
+
+An export is one paid request per sentence, so a long document is confirmed
+first with an estimate of how long it will take.
 
 ---
 
@@ -278,9 +365,18 @@ things on screen. Skipped sentences are shown struck through, so it is visible
 what the listener will not hear.
 
 **Threading.** System speech must run on the main thread — AVSpeechSynthesizer
-and SAPI both insist — so it is pumped once per frame. ElevenLabs is
-network-bound and owns a worker thread. Ollama requests get their own
+and SAPI both insist — so it is pumped once per frame. The cloud engines are
+network-bound and share one worker thread. Ollama requests get their own
 short-lived thread. Playback continues while the window is hidden.
+
+**One cloud worker, five providers.** The queue, the audio device, the
+one-sentence-ahead prefetch and the handling of a fresh play arriving
+mid-sentence are the same work whoever is being asked, so they live in
+`speech::cloud` and each provider's module holds only the two requests it
+actually makes — synthesise a chunk, list the voices. Adding a sixth provider
+is one file. Provider-specific settings are kept provider-specific rather than
+flattened into a common denominator: Polly really does have an engine choice
+that OpenAI does not, and pretending otherwise would lose it.
 
 ## Licence
 

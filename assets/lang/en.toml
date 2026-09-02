@@ -90,16 +90,20 @@ output.save_audio = "Save the reading as an MP3"
 block.no_document      = "Open a document first, or an image to be described."
 block.no_file          = "Open a file first."
 block.already_saving   = "Already saving. Cancel that first."
-block.needs_elevenlabs = "Saving audio needs the ElevenLabs engine — the system voices "
+block.needs_cloud      = "Saving audio needs one of the cloud engines — the system voices "
                          "cannot be recorded to a file. Switch engine on the Settings tab."
-block.needs_key        = "Add your ElevenLabs API key on the General tab."
-block.needs_voice      = "Choose an ElevenLabs voice on the General tab first."
+block.needs_key        = "Add the credentials for this engine on the General tab."
+block.needs_voice      = "Choose a voice on the General tab first."
 
 
 # --------------------------------------------------------------- the voices
 
 engine.system     = "System voices"
 engine.elevenlabs = "ElevenLabs"
+engine.openai     = "OpenAI"
+engine.deepgram   = "Deepgram"
+engine.google     = "Google Cloud"
+engine.polly      = "Amazon Polly"
 
 voice.voice           = "Voice:"
 voice.filter          = "Filter the voices:"
@@ -110,35 +114,54 @@ voice.local_count.other = "{n} voices, all running on this computer."
 
 voice.linux_hint = "On Linux this usually means speech-dispatcher is not installed. "
                    "Try: sudo apt install speech-dispatcher"
-voice.use_elevenlabs = "You can still use ElevenLabs — switch engine on the Settings tab."
+voice.use_cloud = "You can still use one of the cloud engines — switch engine on the "
+                  "Settings tab."
 
 voice.fetch             = "↻  Fetch my voices"
 voice.none_selected     = "No voice selected"
 voice.none_fetched      = "No voices fetched yet."
 voice.account_count.one   = "{n} voice on this account."
 voice.account_count.other = "{n} voices on this account."
-voice.key_needed        = "ElevenLabs needs an API key before it can list any voices."
-voice.key_refused       = "ElevenLabs would not accept the key it was given."
-voice.env_key_refused   = "ELEVENLABS_API_KEY was refused. That variable takes precedence, "
+voice.key_needed        = "{provider} needs credentials before it can list any voices."
+voice.key_refused       = "{provider} would not accept the credentials it was given."
+voice.env_key_refused   = "{variable} was refused. That variable takes precedence, "
                           "so it has to be corrected outside the app."
+voice.gone              = "The voice you chose is not in this list any more. It may have been "
+                          "removed or renamed; pick another before reading."
 
 
 # ------------------------------------------------------------- the API key
 
-key.button         = "🔑  Enter your ElevenLabs API key…"
-key.button_refused = "🔑  That key was refused — enter another…"
+key.button         = "🔑  Enter your {provider} credentials…"
+key.button_refused = "🔑  Those credentials were refused — enter others…"
 
-key.title          = "Your ElevenLabs API key"
+key.title          = "Your {provider} credentials"
 key.needs_account  = "Needs an account —"
 key.sign_up        = "sign up"
 key.then           = ", then"
 key.find_key       = "find your key"
-key.under_settings = "under Settings."
 key.field          = "API key:"
-key.remember       = "Remember this key on this computer"
+key.remember       = "Remember these on this computer"
 key.warning        = "Stored as plain text in the settings file, readable by anything "
-                     "running as you. On a shared machine, prefer the ELEVENLABS_API_KEY "
+                     "running as you. On a shared machine, prefer the {variable} "
                      "variable."
+
+# Where in each provider's own console the credential actually is. One wording
+# would be wrong four times out of five, so there is one line each.
+key.hint.elevenlabs = "Under Settings, in the ElevenLabs app."
+key.hint.openai     = "Create a secret key on the API keys page. It is shown once."
+key.hint.deepgram   = "Under your project's Settings, then API Keys."
+key.hint.google     = "Create an API key under Credentials, in a project with the "
+                      "Cloud Text-to-Speech API enabled. Restrict the key to that API."
+key.hint.polly      = "Create an access key under Security credentials, for a user with "
+                      "the AmazonPollyReadOnlyAccess policy. Or leave this blank and let "
+                      "the app read ~/.aws/credentials, which the AWS CLI writes."
+
+# Amazon Polly is the one provider whose credential is a pair.
+key.field_access_key = "Access key ID:"
+key.field_secret_key = "Secret access key:"
+key.aws_note         = "Leave both blank to use AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, "
+                       "or the profile in ~/.aws/credentials named on the Settings tab."
 
 
 # ---------------------------------------------------------- the Wordlists tab
@@ -266,6 +289,24 @@ settings.test_voice       = "🔊  Test this voice"
 settings.test_voice_hint  = "Speaks a sample with the settings as they are here"
 settings.test_note        = "A test uses the settings above, applied or not."
 
+settings.openai_speed_hint         = "1.0 is the voice as recorded."
+settings.openai_instructions       = "How to read it:"
+settings.openai_instructions_hint  = "for example: read slowly and clearly, as if to a class"
+settings.openai_instructions_note  = "Only the GPT-4o mini TTS model listens to this; the "
+                                     "others ignore it."
+
+settings.deepgram_note = "Deepgram has no separate model setting: for Aura the model is the "
+                         "voice, and it is chosen on the General tab."
+
+settings.google_pitch_hint = "In semitones, either side of the voice's own pitch."
+
+settings.polly_region       = "AWS region:"
+settings.polly_engine       = "Polly engine:"
+settings.polly_profile      = "AWS profile:"
+settings.polly_profile_hint = "Which profile to read from ~/.aws/credentials, when the "
+                              "credentials are coming from there rather than from this app "
+                              "or the environment."
+
 # Spoken by the test buttons. A sentence with every letter of the alphabet in
 # it, so the voice is heard on all of them — replace it with whichever sentence
 # does that job in your language rather than translating this one word for word.
@@ -349,6 +390,10 @@ diag.engine       = "Speech engine"
 diag.system       = "System: {voices} voices · progress tracking {progress} · rate {rate} "
                     "· pitch {pitch} · volume {volume}"
 diag.system_error = "System: {reason}"
+diag.cloud        = "{provider}: voice {voice} · credentials {credentials}"
+diag.credentials_environment = "from the environment"
+diag.credentials_settings    = "from the settings file"
+diag.credentials_none        = "not set"
 diag.document     = "Document: {chunks} chunks · {spoken} to speak · {skipped} skipped · "
                     "{changes} substitutions"
 

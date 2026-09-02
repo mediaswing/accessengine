@@ -9,7 +9,7 @@
 //! perfectly good reader. So every failure in here is swallowed after being
 //! logged once.
 //!
-//! Note this is a *separate* output from the one the ElevenLabs worker holds.
+//! Note this is a *separate* output from the one the cloud speech worker holds.
 //! Sharing a device sink across threads would mean a cue could not sound while
 //! a sentence was playing, and the failure cue is at its most useful precisely
 //! when playback has just gone wrong.

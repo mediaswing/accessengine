@@ -1,8 +1,8 @@
 [package]
 name = "accessengine"
-version = "1.6.0"
+version = "1.7.0"
 edition = "2021"
-description = "Cross-platform graphical text-to-speech reader with system voices, ElevenLabs, local vision models, and safety/pronunciation wordlists"
+description = "Cross-platform graphical text-to-speech reader with system voices, five cloud voice services, local vision models, and safety/pronunciation wordlists"
 license = "GPL-3.0-or-later"
 
 [dependencies]
@@ -14,14 +14,14 @@ rfd = "0.17.2"
 
 # Speech
 tts = "0.26.3"
-# "mp3" decodes what ElevenLabs returns; "wav" decodes the two UI cues.
+# "mp3" decodes what every cloud provider is asked for; "wav" the two UI cues.
 rodio = { version = "0.22.2", default-features = false, features = [
     "playback",
     "mp3",
     "wav",
 ] }
 
-# Networking (ElevenLabs + Ollama)
+# Networking (the cloud voices + Ollama)
 reqwest = { version = "0.13.4", default-features = false, features = [
     "blocking",
     "json",
@@ -32,6 +32,15 @@ reqwest = { version = "0.13.4", default-features = false, features = [
 # has ever written one with, and the rest of the crate's formats would be dead
 # weight. The legacy `.ppt` container is read by `src/powerpoint.rs` itself.
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+# Amazon Polly signs its requests with AWS Signature Version 4, which is a
+# chain of HMAC-SHA256 over strings this app builds itself — about eighty lines
+# in `speech/polly.rs`. These two crates are the hash and the MAC, and nothing
+# else. The alternative is `aws-sdk-polly`, which brings tokio, hyper and some
+# fifty crates besides, for one provider out of five in an app whose HTTP is
+# otherwise blocking `reqwest`.
+sha2 = "0.10.9"
+hmac = "0.12.1"
 
 # The language the computer is set to, for `i18n` to pick a language file by.
 sys-locale = "0.3.2"

@@ -1,11 +1,12 @@
 //! Saving a document as an MP3 file.
 //!
-//! Only the ElevenLabs engine can do this, and the reason is not a shortcut:
-//! that API hands back MP3 frames, so an export is the same requests playback
-//! already makes, written to a file rather than to the sound card. The system
-//! voices cannot be recorded at all — the `tts` crate speaks to the audio
-//! device and offers no way to render into a buffer on any of its back ends —
-//! so the UI says so plainly rather than silently producing something else.
+//! Only a cloud engine can do this, and the reason is not a shortcut: every
+//! provider here is asked for MP3 frames, so an export is the same requests
+//! playback already makes, written to a file rather than to the sound card.
+//! The system voices cannot be recorded at all — the `tts` crate speaks to the
+//! audio device and offers no way to render into a buffer on any of its back
+//! ends — so the UI says so plainly rather than silently producing something
+//! else.
 //!
 //! Consecutive segments are simply appended. MP3 is a sequence of independent
 //! frames and every segment is requested at the same rate and bitrate, so the
@@ -22,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::speech::elevenlabs::{self, VoiceRequest};
+use crate::speech::cloud::{self, VoiceRequest};
 
 #[derive(Debug)]
 pub enum Event {
@@ -154,18 +155,18 @@ impl Drop for Export {
     }
 }
 
-/// A first guess at how long one sentence takes: the round trip to ElevenLabs
-/// dominates, and it is much the same whether the sentence is six words or
-/// twenty. Deliberately a little pessimistic — an export that finishes sooner
-/// than promised is a good surprise — and replaced by a real measurement as
-/// soon as there is one.
+/// A first guess at how long one sentence takes: the round trip to the
+/// provider dominates, and it is much the same whether the sentence is six
+/// words or twenty. Deliberately a little pessimistic — an export that finishes
+/// sooner than promised is a good surprise — and replaced by a real measurement
+/// as soon as there is one.
 const ASSUMED_PER_SENTENCE: Duration = Duration::from_millis(1500);
 
 /// How long an export is likely to take.
 ///
-/// Seeded with a guess and corrected by measurement: every ElevenLabs sentence
-/// the app waits on, whether played or saved, is a timing of exactly the work
-/// an export is made of.
+/// Seeded with a guess and corrected by measurement: every cloud sentence the
+/// app waits on, whether played or saved, is a timing of exactly the work an
+/// export is made of.
 #[derive(Clone, Copy, Debug)]
 pub struct Estimate {
     per_sentence: Duration,
@@ -251,8 +252,8 @@ fn write_mp3(
     cancel: &AtomicBool,
     progress: &dyn Fn(usize),
 ) -> Result<Option<u64>> {
-    let http = elevenlabs::client()?;
-    let synthesise = |text: &str| elevenlabs::synthesise(&http, request, text);
+    let http = cloud::client()?;
+    let synthesise = |text: &str| request.synthesise(&http, text);
     write_with(destination, texts, &synthesise, cancel, progress)
 }
 
@@ -300,8 +301,7 @@ fn stream_segments(
     cancel: &AtomicBool,
     progress: &dyn Fn(usize),
 ) -> Result<Option<u64>> {
-    let file = File::create(partial)
-        .with_context(|| format!("creating {}", partial.display()))?;
+    let file = File::create(partial).with_context(|| format!("creating {}", partial.display()))?;
     let mut writer = BufWriter::new(file);
     let mut written = 0u64;
 
@@ -415,7 +415,10 @@ mod tests {
             std::fs::read_to_string(&destination).expect("reads"),
             "sentence 0sentence 1sentence 2"
         );
-        assert!(!partial_path(&destination).exists(), "scratch file left behind");
+        assert!(
+            !partial_path(&destination).exists(),
+            "scratch file left behind"
+        );
         let _ = std::fs::remove_dir_all(destination.parent().unwrap());
     }
 
@@ -441,7 +444,10 @@ mod tests {
 
         assert!(outcome.is_none(), "cancelling must not report a size");
         assert!(!destination.exists(), "a cancelled export wrote a file");
-        assert!(!partial_path(&destination).exists(), "scratch file left behind");
+        assert!(
+            !partial_path(&destination).exists(),
+            "scratch file left behind"
+        );
         assert_eq!(synthesised.get(), 1, "it should stop at the next sentence");
         let _ = std::fs::remove_dir_all(destination.parent().unwrap());
     }
@@ -468,7 +474,10 @@ mod tests {
         .expect_err("the failure should surface");
 
         assert!(format!("{error:#}").contains("quota"), "{error:#}");
-        assert!(format!("{error:#}").contains("sentence 3 of 4"), "{error:#}");
+        assert!(
+            format!("{error:#}").contains("sentence 3 of 4"),
+            "{error:#}"
+        );
         assert!(!destination.exists());
         assert!(!partial_path(&destination).exists());
         let _ = std::fs::remove_dir_all(destination.parent().unwrap());
@@ -528,9 +537,15 @@ mod tests {
 
     #[test]
     fn the_suggested_name_drops_the_old_extension() {
-        assert_eq!(suggested_filename("chapter one.txt", "mp3"), "chapter one.mp3");
+        assert_eq!(
+            suggested_filename("chapter one.txt", "mp3"),
+            "chapter one.mp3"
+        );
         assert_eq!(suggested_filename("notes", "mp3"), "notes.mp3");
-        assert_eq!(suggested_filename("report.final.md", "mp3"), "report.final.mp3");
+        assert_eq!(
+            suggested_filename("report.final.md", "mp3"),
+            "report.final.mp3"
+        );
         assert_eq!(suggested_filename("holiday.jpg", "txt"), "holiday.txt");
     }
 
