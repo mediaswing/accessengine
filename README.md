@@ -17,7 +17,9 @@ Windows and Linux. The binary is `accessengine`.
 **Reads files aloud.** Open a `.txt`, `.md`, `.csv`, `.json`, `.log`, `.rst` or
 `.org` file. Markdown is stripped down to prose first, so you hear the words
 rather than the asterisks — code blocks are skipped, links read as their text,
-and images are announced by their alt text. The document is
+and images are announced by their alt text. A CSV is read as a table: each
+value arrives under the name of its column, so nothing depends on remembering
+a header line from four rows back. The document is
 cut into sentences (or paragraphs, your choice); the one being spoken is
 highlighted, and clicking any sentence starts reading from there.
 

@@ -9,6 +9,23 @@ page.
 
 ## [Unreleased]
 
+### Changed
+
+- A CSV is read as a table rather than as lines of text. Each row is announced
+  by number, and every value is spoken under the name of its column — the way
+  a screen reader reads a table, and for the same reason: by the fourth row
+  nobody is still holding the header line in their head. `Alice,30,Leeds`
+  becomes "Row 1. Name: Alice. Age: 30. City: Leeds." rather than "Alice
+  thirty Leeds".
+
+  The delimiter is sniffed rather than assumed, so a `.csv` saved by a
+  spreadsheet where the comma is the decimal point — semicolons — or dumped
+  out of a database — tabs — reads correctly; the judgement is which
+  delimiter gives every row the same number of fields, so a prose column full
+  of commas cannot outvote the real one. Quoted fields keep the delimiters,
+  line breaks and doubled quotes inside them. A first row that is all numbers
+  is taken as data rather than as column names. Empty cells are left out.
+
 ### Removed
 
 - HTML is no longer read. `.html`, `.htm`, `.xhtml` and `.xml` have gone from

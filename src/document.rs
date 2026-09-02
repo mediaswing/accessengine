@@ -86,6 +86,7 @@ impl Document {
         }
         let text = match ext.as_str() {
             "md" | "markdown" | "rst" => strip_markdown(&text),
+            "csv" => table_to_prose(&text),
             _ => text,
         };
 
@@ -370,6 +371,218 @@ fn push_chunk(chunks: &mut Vec<Chunk>, text: &str, start: usize, end: usize) {
     }
 }
 
+// ------------------------------------------------------------------- tables
+
+/// Delimiters worth trying, in the order they win ties.
+const DELIMITERS: [char; 4] = [',', ';', '\t', '|'];
+
+/// How much of the file [`sniff_delimiter`] judges by, and how many records it
+/// looks at within that.
+const SNIFF_BYTES: usize = 64 * 1024;
+const SNIFF_RECORDS: usize = 20;
+
+/// Which delimiter this file uses.
+///
+/// Sniffed rather than assumed. A `.csv` exported by a spreadsheet in a country
+/// where the comma is the decimal separator is semicolon-separated, and one
+/// dumped out of a database is as often tab-separated; both are called `.csv`
+/// by the program that wrote them.
+///
+/// The judgement is consistency rather than raw count: a table with one prose
+/// column would otherwise be declared comma-separated on the strength of the
+/// commas inside that column's sentences. A real delimiter gives every record
+/// the same number of fields, and a stray one does not.
+fn sniff_delimiter(text: &str) -> char {
+    let limit = text.len().min(SNIFF_BYTES);
+    let head = &text[..(0..=limit)
+        .rev()
+        .find(|i| text.is_char_boundary(*i))
+        .unwrap_or(0)];
+
+    let mut best = (0usize, 0usize, ',');
+    for delimiter in DELIMITERS {
+        let records = parse_records(head, delimiter);
+        let widths: Vec<usize> = records.iter().take(SNIFF_RECORDS).map(Vec::len).collect();
+        // The width most records agree on, and how many of them agree.
+        let Some(&width) = widths
+            .iter()
+            .max_by_key(|w| widths.iter().filter(|other| other == w).count())
+        else {
+            continue;
+        };
+        if width < 2 {
+            continue;
+        }
+        let agreeing = widths.iter().filter(|w| **w == width).count();
+        if (agreeing, width) > (best.0, best.1) {
+            best = (agreeing, width, delimiter);
+        }
+    }
+    best.2
+}
+
+/// Split a delimited file into records and fields, following RFC 4180: a field
+/// wrapped in double quotes may hold the delimiter, a line break, or a doubled
+/// `""` standing for one quote.
+///
+/// Never fails. A file that breaks the rules — an unclosed quote, a stray one
+/// mid-field — is still cut into something, because the alternative is
+/// refusing to read a spreadsheet somebody has already been handed.
+fn parse_records(text: &str, delimiter: char) -> Vec<Vec<String>> {
+    let mut records: Vec<Vec<String>> = Vec::new();
+    let mut record: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if quoted {
+            match c {
+                '"' if chars.peek() == Some(&'"') => {
+                    chars.next();
+                    field.push('"');
+                }
+                '"' => quoted = false,
+                _ => field.push(c),
+            }
+            continue;
+        }
+        match c {
+            // Only a quote that opens the field quotes it; one appearing
+            // partway through is a character somebody typed.
+            '"' if field.is_empty() => quoted = true,
+            _ if c == delimiter => record.push(std::mem::take(&mut field)),
+            '\n' => {
+                record.push(std::mem::take(&mut field));
+                records.push(std::mem::take(&mut record));
+            }
+            _ => field.push(c),
+        }
+    }
+    if !field.is_empty() || !record.is_empty() {
+        record.push(field);
+        records.push(record);
+    }
+
+    for record in &mut records {
+        for field in record.iter_mut() {
+            let trimmed = field.trim();
+            if trimmed.len() != field.len() {
+                *field = trimmed.to_string();
+            }
+        }
+    }
+    // A trailing newline leaves one empty record behind it, and a file may end
+    // in several; none of them is a row of the table.
+    records.retain(|record| record.iter().any(|field| !field.is_empty()));
+    records
+}
+
+/// Read a table out the way a person reads one aloud: which row, then each
+/// column's name with the cell under it.
+///
+/// The alternative is what the reader used to do — speak the file as lines of
+/// text — which turns `Alice,30,Leeds` into "Alice thirty Leeds" and leaves the
+/// listener to remember, from a header line half a screen back, which number
+/// was the age. Naming the column beside every value is how a screen reader
+/// reads a table, and for the same reason: by the fourth row nobody is still
+/// holding the header in their head.
+///
+/// An empty cell is left out rather than announced. The document pane shows
+/// exactly what will be spoken, so a cell that says nothing is visibly absent
+/// rather than silently dropped.
+fn table_to_prose(text: &str) -> String {
+    let delimiter = sniff_delimiter(text);
+    let mut records = parse_records(text, delimiter);
+    if records.is_empty() {
+        return String::new();
+    }
+
+    // One record is not a table, whatever it is: read it as the list it is.
+    if records.len() == 1 {
+        return sentence(&records[0].join(", "));
+    }
+
+    // A first row that is all numbers is data that happens to be first, not a
+    // header: naming a column "42" for the rest of the file helps nobody.
+    let has_header = !records[0].iter().all(|cell| looks_numeric(cell));
+    let headings = if has_header {
+        column_names(&records.remove(0))
+    } else {
+        let width = records.iter().map(Vec::len).max().unwrap_or(0);
+        (1..=width).map(|n| format!("Column {n}")).collect()
+    };
+
+    let mut out = String::new();
+    out.push_str(&sentence(&format!(
+        "A table of {} rows and {} columns{}",
+        records.len(),
+        headings.len(),
+        if has_header {
+            format!(": {}", headings.join(", "))
+        } else {
+            String::new()
+        }
+    )));
+
+    for (index, record) in records.iter().enumerate() {
+        out.push_str("\n\n");
+        out.push_str(&sentence(&format!("Row {}", index + 1)));
+        for (column, cell) in record.iter().enumerate() {
+            if cell.is_empty() {
+                continue;
+            }
+            let heading = headings
+                .get(column)
+                .cloned()
+                // A row with more cells than the header has columns still says
+                // where each one sits.
+                .unwrap_or_else(|| format!("Column {}", column + 1));
+            out.push(' ');
+            out.push_str(&sentence(&format!("{heading}: {cell}")));
+        }
+    }
+    out
+}
+
+/// The name to read before each cell of a column.
+fn column_names(first: &[String]) -> Vec<String> {
+    first
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let name = name.trim().trim_end_matches(':').trim();
+            if name.is_empty() {
+                format!("Column {}", index + 1)
+            } else {
+                name.to_string()
+            }
+        })
+        .collect()
+}
+
+/// Whether a cell is a bare number, give or take the punctuation a spreadsheet
+/// puts in one.
+fn looks_numeric(cell: &str) -> bool {
+    let trimmed = cell.trim_matches(|c: char| !c.is_alphanumeric());
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '_'))
+}
+
+/// End a fragment with a full stop, unless it already ends with something that
+/// closes a sentence — the reader splits on those, and a doubled stop is an
+/// audible pause in the wrong place.
+fn sentence(text: &str) -> String {
+    let text = text.trim_end();
+    if text.ends_with(['.', '!', '?']) {
+        text.to_string()
+    } else {
+        format!("{text}.")
+    }
+}
+
 /// Turn markdown into something worth listening to: drop the syntax, keep the
 /// words, and announce images by their alt text.
 fn strip_markdown(md: &str) -> String {
@@ -611,6 +824,119 @@ mod tests {
             "took {:?}",
             started.elapsed()
         );
+    }
+
+    // ----------------------------------------------------------------- tables
+
+    #[test]
+    fn a_table_reads_each_cell_under_its_column() {
+        let out = table_to_prose("Name,Age,City\nAlice,30,Leeds\nBo,41,Hull\n");
+        assert_eq!(
+            out,
+            "A table of 2 rows and 3 columns: Name, Age, City.\n\n\
+             Row 1. Name: Alice. Age: 30. City: Leeds.\n\n\
+             Row 2. Name: Bo. Age: 41. City: Hull."
+        );
+    }
+
+    /// The point of the whole thing: every value arrives with the name of the
+    /// column it came from, so nothing depends on remembering a header line
+    /// that was read out four rows ago.
+    #[test]
+    fn no_value_is_spoken_without_its_column() {
+        let out = table_to_prose("Name,Age\nAlice,30\nBo,41\n");
+        for (heading, value) in [("Name", "Alice"), ("Age", "30"), ("Name", "Bo"), ("Age", "41")] {
+            assert!(out.contains(&format!("{heading}: {value}")), "{out:?}");
+        }
+    }
+
+    /// A quoted field may hold the delimiter, a line break and doubled quotes,
+    /// none of which may reach the listener as structure.
+    #[test]
+    fn quoted_fields_keep_what_is_inside_them() {
+        let out = table_to_prose(
+            "Name,Note\n\
+             Alice,\"Leeds, then York\"\n\
+             Bo,\"She said \"\"no\"\"\"\n\
+             Cai,\"two\nlines\"\n",
+        );
+        assert!(out.contains("Note: Leeds, then York."), "{out:?}");
+        assert!(out.contains("Note: She said \"no\"."), "{out:?}");
+        assert!(out.contains("Note: two\nlines."), "{out:?}");
+        assert!(out.contains("A table of 3 rows"), "{out:?}");
+    }
+
+    /// A spreadsheet saved where the comma is the decimal point separates with
+    /// semicolons, and still calls the file `.csv`.
+    #[test]
+    fn the_delimiter_is_sniffed_rather_than_assumed() {
+        for (text, cell) in [
+            ("Name;Cost\nAlice;1,50\nBo;2,75\n", "Cost: 1,50"),
+            ("Name\tCost\nAlice\t150\nBo\t275\n", "Cost: 150"),
+            ("Name|Cost\nAlice|150\nBo|275\n", "Cost: 150"),
+        ] {
+            assert!(table_to_prose(text).contains(cell), "{text:?}");
+        }
+    }
+
+    /// One prose column full of commas must not be mistaken for the separator.
+    #[test]
+    fn commas_inside_a_column_do_not_outvote_the_real_delimiter() {
+        let out = table_to_prose(
+            "Name;Note\n\
+             Alice;one, two, three, four\n\
+             Bo;five, six, seven, eight\n",
+        );
+        assert!(out.contains("Note: one, two, three, four."), "{out:?}");
+    }
+
+    /// A file that is all numbers has no header to name the columns with, and
+    /// must not end up with a column called "42".
+    #[test]
+    fn a_numeric_first_row_is_data_rather_than_a_header() {
+        let out = table_to_prose("1,2\n3,4\n");
+        assert!(out.starts_with("A table of 2 rows and 2 columns."), "{out:?}");
+        assert!(out.contains("Row 1. Column 1: 1. Column 2: 2."), "{out:?}");
+    }
+
+    /// Empty cells are left out — the document pane shows what will be spoken,
+    /// so an absent cell is visibly absent — and a row with more cells than
+    /// the header has columns still says where the extras sit.
+    #[test]
+    fn blank_cells_are_left_out_and_extra_ones_are_placed() {
+        let out = table_to_prose("Name,Age,City\nAlice,,Leeds\nBo,41,Hull,spare\n");
+        assert!(out.contains("Row 1. Name: Alice. City: Leeds."), "{out:?}");
+        assert!(out.contains("Column 4: spare."), "{out:?}");
+    }
+
+    /// A value that already ends a sentence must not gain a second full stop:
+    /// the splitter would hear the pair as an empty sentence between two
+    /// cells.
+    #[test]
+    fn a_cell_that_ends_in_a_stop_does_not_gain_another() {
+        let out = table_to_prose("Name,Note\nAlice,Ready.\nBo,Waiting?\n");
+        assert!(out.contains("Note: Ready."), "{out:?}");
+        assert!(!out.contains("Ready.."), "{out:?}");
+        assert!(!out.contains("Waiting?."), "{out:?}");
+    }
+
+    /// One line is a list, not a table, and reads as one.
+    #[test]
+    fn a_single_line_is_read_as_the_list_it_is() {
+        assert_eq!(table_to_prose("Alice,30,Leeds\n"), "Alice, 30, Leeds.");
+        assert_eq!(table_to_prose(""), "");
+    }
+
+    /// Each row is its own paragraph, so the reader can be sent from row to
+    /// row, and every cell is its own sentence within it.
+    #[test]
+    fn rows_are_paragraphs_and_cells_are_sentences() {
+        let prose = table_to_prose("Name,Age\nAlice,30\nBo,41\n");
+        let rows = split_chunks(&prose, ChunkMode::Paragraph);
+        assert_eq!(rows.len(), 3, "summary and two rows: {rows:?}");
+        let cells = sentences(&prose);
+        assert!(cells.contains(&"Name: Alice.".to_string()), "{cells:?}");
+        assert!(cells.contains(&"Age: 41.".to_string()), "{cells:?}");
     }
 
     /// HTML is not read as prose any more, and must not be read as markup
