@@ -23,12 +23,16 @@
 
 mod app;
 mod audio;
+mod cli;
 mod config;
 mod document;
 mod export;
 mod i18n;
 mod logging;
+mod player;
+mod playlist;
 mod powerpoint;
+mod shell;
 mod speech;
 mod theme;
 mod update;
@@ -42,9 +46,37 @@ fn main() -> eframe::Result {
     logging::init();
     install_panic_hook();
 
-    // `accessengine <file>` opens that file straight away, which is also what
-    // makes the app usable as a "read this to me" handler from a file manager.
-    let initial_file = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    // `accessengine <file>` opens that file straight away, which is what makes
+    // the app usable as a "read this to me" handler from a file manager.
+    // `--convert` is the other way round: it does the work and never opens a
+    // window, which is what the right-click entry needs. See `cli`.
+    let initial_file = match cli::parse(std::env::args_os().skip(1)) {
+        cli::Invocation::Window(path) => path,
+        cli::Invocation::Help => {
+            report(&cli::usage());
+            return Ok(());
+        }
+        cli::Invocation::Version => {
+            report(&format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")));
+            return Ok(());
+        }
+        cli::Invocation::Convert { input, output } => {
+            std::process::exit(match cli::convert(&input, output) {
+                Ok(written) => {
+                    report(&format!("Saved {}", written.display()));
+                    0
+                }
+                Err(e) => {
+                    // To the log as well as the console: on Windows a release
+                    // build has no console to print to, and the log is then
+                    // the only account of why nothing happened.
+                    log::error!("converting {}: {e:#}", input.display());
+                    report(&format!("Could not convert {}: {e:#}", input.display()));
+                    1
+                }
+            });
+        }
+    };
     if let Some(path) = &initial_file {
         log::info!("opening {} from the command line", path.display());
     }
@@ -63,6 +95,17 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| Ok(Box::new(app::AccessEngine::new(cc, initial_file)))),
     )
+}
+
+/// Say something on the way out of a run that never opens a window.
+///
+/// Nothing but `println!` on the platforms that have a console. A Windows
+/// release build is linked as a GUI subsystem binary and has none, so the same
+/// words go to the log, which is where the script that called us tells the
+/// user to look.
+fn report(message: &str) {
+    println!("{message}");
+    log::info!("{message}");
 }
 
 /// Route panics into the log file. Without this a crash in a worker thread

@@ -135,6 +135,51 @@ pub struct PlanItem {
     pub text: String,
 }
 
+/// A speech plan, and what the wordlists did to make it.
+#[derive(Debug, Default)]
+pub struct Plan {
+    pub items: Vec<PlanItem>,
+    pub hits: Vec<crate::wordlist::Hit>,
+    /// Chunks dropped entirely by a `skip sentence` rule.
+    pub skipped: usize,
+}
+
+/// Work out what will actually be spoken.
+///
+/// Here rather than in the interface because the command line has to reach the
+/// same answer: a wordlist that keeps a word out of a reading must keep it out
+/// of a file converted without the window ever opening, and two copies of this
+/// loop would eventually disagree about that.
+pub fn build_plan(
+    document: &crate::document::Document,
+    wordlists: &crate::wordlist::WordlistSet,
+    filtering: bool,
+) -> Plan {
+    let mut plan = Plan::default();
+    for (index, chunk) in document.chunks.iter().enumerate() {
+        let text = if filtering {
+            let applied = wordlists.apply(&chunk.display);
+            plan.hits.extend(applied.hits);
+            if applied.skipped {
+                plan.skipped += 1;
+                continue;
+            }
+            applied.text
+        } else {
+            chunk.display.clone()
+        };
+
+        if text.trim().is_empty() {
+            continue;
+        }
+        plan.items.push(PlanItem {
+            chunk_index: index,
+            text,
+        });
+    }
+    plan
+}
+
 /// Map a 0..=1 slider position onto a back end's own parameter range.
 pub fn map_pos(pos: f32, min: f32, max: f32) -> f32 {
     min + (max - min) * pos.clamp(0.0, 1.0)

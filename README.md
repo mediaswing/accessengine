@@ -40,6 +40,19 @@ highlighted, and clicking any sentence starts reading from there.
   tab, how it is driven is on Settings, and the reading can be saved as an MP3.
   See **[Cloud voices](#cloud-voices)** below for what each one costs and needs.
 
+**Plays it back.** An **Audio Player** tab with the buttons anyone expects —
+play, pause, stop, previous, next, a position you can drag — so a reading you
+have just saved can be listened to without leaving the app or going to find the
+file. It plays MP3 and WAV.
+
+**Reads playlists.** A zip holding a `media.xml` opens as a running order. See
+**[Playlists](#playlists)** below; the short of it is that music following
+speech fades up under the end of it, the way a radio bulletin does.
+
+**Converts from the file manager.** A right-click entry — *Save as MP3 with
+AccessEngine* — added from the Settings tab, using the voice and wordlists you
+have already set. See **[The right-click entry](#the-right-click-entry)**.
+
 **Describes images.** Point it at a picture and a vision model running locally
 under [Ollama](https://ollama.com) writes a description you can read aloud,
 append to the document, or copy. If the photo is geotagged, where it was
@@ -190,7 +203,7 @@ the usual GUI development packages.
 ```sh
 cargo run --release              # open the app
 cargo run --release -- notes.md  # open a file straight away
-cargo test                       # 179 tests
+cargo test                       # 208 tests
 ```
 
 ## Keyboard
@@ -317,6 +330,89 @@ no way to capture what they produce, so there is nothing to write.
 
 An export is one paid request per sentence, so a long document is confirmed
 first with an estimate of how long it will take.
+
+---
+
+## Playlists
+
+A zip containing a `media.xml` opens as a running order rather than as an
+archive. The manifest is small:
+
+```xml
+<media version="1.2">
+    <content pos="1" type="M">bed.mp3</content>
+    <content pos="2" type="B">bulletin.mp3</content>
+    <content pos="3" type="M">outro.mp3</content>
+</media>
+```
+
+- **`pos`** is the running order. It is read from the attribute, not from the
+  order the elements happen to appear in — the two are not promised to agree,
+  and this is the one that says what it means.
+- **`type`** is `M` for music or `B` for spoken word.
+- The audio files live in the same zip. They may sit in a folder; the manifest
+  need not repeat the path, and a difference in capitalisation is forgiven.
+
+**Where music follows speech, it fades up under the end of the speech** over
+about three seconds, rather than starting flat afterwards. That is the one join
+treated specially, and it is what a bulletin sounds like on the radio. Every
+other join is a straight cut, on purpose: a voice fading in loses its first
+words, and two spoken items should never overlap at all.
+
+A track named in the running order but missing from the zip costs that track
+and no others — the rest still plays. A zip with no manifest in it is not a
+playlist and is not opened as one.
+
+Only MP3 and WAV can be played, which are the formats this app itself writes.
+
+---
+
+## The right-click entry
+
+The Settings tab can add **Save as MP3 with AccessEngine** to the menu you get
+when you right-click a document. It converts using the settings already in the
+app, without opening the window.
+
+Two things go on disk:
+
+1. **A script**, in the same folder as your settings — `%APPDATA%` on Windows,
+   `~/Library/Application Support` on macOS, `~/.config` on Linux. It is three
+   lines and all it does is call this app with `--convert`.
+2. **A registration**, which differs by platform:
+
+| | Where it appears |
+| --- | --- |
+| Windows | File Explorer's right-click menu, on the document types this app reads |
+| macOS | A Finder Quick Action, under **Quick Actions** or **Services** |
+| Linux | A Nautilus script, under **Scripts**. Other file managers are not covered |
+
+**The script holds no settings and no credentials.** It calls the app, and the
+app reads its own `config.json` — so the engine, the voice, your wordlists and
+the chunking are whatever you last set in the window, and changing them there
+changes what the entry does with nothing to reinstall.
+
+Converting needs one of the cloud engines, for the same reason saving audio
+does. With the system voices chosen, the entry says so rather than quietly
+writing nothing.
+
+The app's location is baked into the script when you install it, since that is
+the one thing the script cannot look up. **Move or reinstall the app and you
+will need to add the entry again**; the Settings tab says so too.
+
+### The command line
+
+The entry runs the same thing you can run yourself:
+
+```sh
+accessengine --convert notes.md            # writes notes.mp3 beside it
+accessengine --convert notes.md -o out.mp3 # somewhere else
+accessengine --help
+```
+
+One verb, deliberately, and it does exactly what pressing Apply with **Save the
+reading as an MP3** does — the same reader, the same voice, and the same
+wordlists. That last part is the one that matters: a word a safety list keeps
+out of a reading stays out of a file converted this way.
 
 ---
 

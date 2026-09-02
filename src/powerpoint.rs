@@ -279,7 +279,7 @@ fn flush(current: &mut String, paragraphs: &mut Vec<String>) {
 /// Anything else is left as it stands: an undefined entity is not this app's
 /// to guess at, and `&` on its own is far more likely to be a typo in
 /// somebody's slide than a reference to anything.
-fn decode_entities(text: &str) -> String {
+pub(crate) fn decode_entities(text: &str) -> String {
     if !text.contains('&') {
         return text.to_string();
     }

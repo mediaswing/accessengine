@@ -41,6 +41,7 @@ plural = "one_other"
 # ------------------------------------------------ the tab strip, across the top
 
 tab.general   = "General"
+tab.player    = "Audio Player"
 tab.wordlists = "Wordlists"
 tab.settings  = "Settings"
 
@@ -128,6 +129,42 @@ voice.env_key_refused   = "{variable} was refused. That variable takes precedenc
                           "so it has to be corrected outside the app."
 voice.gone              = "The voice you chose is not in this list any more. It may have been "
                           "removed or renamed; pick another before reading."
+
+
+# ------------------------------------------------------- the Audio Player tab
+
+# The name of the entry this app adds to the file manager's menu. It is shown
+# by the operating system rather than by this app, so keep it short.
+shell.menu_label = "Save as MP3 with AccessEngine"
+
+player.title    = "Audio Player"
+player.subtitle = "Listen back to what you have saved, or open a playlist."
+
+player.open          = "🎵  Open an audio file…"
+player.open_playlist = "📃  Open a playlist…"
+player.play_last     = "▶  Play {name}"
+player.nothing_loaded = "Nothing loaded. Open an audio file or a playlist above."
+
+# The two kinds of thing a playlist can hold. Said in the track list in words,
+# because it is the only difference between two rows that otherwise look alike.
+player.kind_music  = "Music"
+player.kind_spoken = "Speech"
+
+player.position         = "{elapsed} of {total}"
+# Some files do not say how long they are; a position is still worth showing.
+player.position_unknown = "{elapsed} — length unknown"
+player.position_label   = "Position:"
+
+player.play     = "▶  Play"
+player.pause    = "⏸  Pause"
+player.stop     = "⏹  Stop"
+player.previous = "⏮  Previous"
+player.next     = "⏭  Next"
+player.volume   = "Volume:"
+
+player.track_count.one   = "{n} track"
+player.track_count.other = "{n} tracks"
+player.now_playing       = "playing now"
 
 
 # ------------------------------------------------------------- the API key
@@ -333,6 +370,32 @@ settings.text_size_hint = "Also Ctrl/Cmd + plus and minus, anywhere in the app."
 
 # ------------------------------------------------------------------- logs
 
+# ------------------------------------------- the right-click menu entry
+
+settings.shell_heading  = "Right-click menu"
+settings.shell_explains = "Adds \"Save as MP3 with AccessEngine\" to the menu you get when "
+                          "you right-click a document, so a file can be converted without "
+                          "opening this window. It uses the settings above — the engine, the "
+                          "voice and your wordlists — so changing them here changes what it "
+                          "does."
+# Which menu, exactly. Different on each platform, so the app picks the line
+# rather than promising "your file manager" and being wrong on two of three.
+settings.shell_where.windows = "On Windows this goes in File Explorer's menu, for the "
+                               "document types this app can read."
+settings.shell_where.macos   = "On macOS this becomes a Quick Action, under Quick Actions "
+                               "or Services in Finder's right-click menu."
+settings.shell_where.linux   = "On Linux this installs a Nautilus script, under Scripts in "
+                               "the right-click menu of the Files app. Other file managers "
+                               "are not covered."
+
+settings.shell_install  = "Add it to the right-click menu"
+settings.shell_remove   = "Take it off the right-click menu"
+settings.shell_script   = "The script it runs is at {path}"
+settings.shell_moved    = "Move or reinstall this app and you will need to add it again, "
+                          "because the entry points at where the app is now."
+settings.shell_needs_cloud = "Converting needs one of the cloud engines. With the system "
+                             "voices chosen, the entry will say so rather than write a file."
+
 settings.logs_heading = "Logs"
 settings.log_folder   = "Log folder:"
 settings.log_today    = "Today: {path}"
@@ -440,6 +503,10 @@ pick.open_title             = "Choose a file to read aloud or an image to descri
 pick.filter_everything      = "Documents and images"
 pick.filter_documents       = "Documents and presentations"
 pick.filter_images          = "Images"
+pick.open_audio_title    = "Open an audio file"
+pick.open_playlist_title = "Open a playlist"
+pick.filter_audio        = "Audio"
+pick.filter_playlist     = "Playlist (zip)"
 pick.filter_all             = "All files"
 pick.save_description_title = "Save the description"
 pick.filter_text            = "Text"
@@ -512,6 +579,11 @@ status.error_prefix = "Error: {message}"
 status.opened_image    = "Opened {name}."
 status.opened_document = "Opened {title} — {words} words in {chunks} chunks"
 status.loaded          = "Loaded {title}"
+status.playlist_opened.one   = "Playlist opened: {n} track."
+status.playlist_opened.other = "Playlist opened: {n} tracks."
+status.playback_finished     = "Reached the end of the playlist."
+status.shell_installed       = "Added to the right-click menu."
+status.shell_removed         = "Taken off the right-click menu."
 status.finished        = "Finished reading."
 status.stopping        = "Stopping…"
 status.image_described = "Image described."
@@ -577,6 +649,20 @@ error.presentation_locked  = "this presentation is password-protected, so its te
                              "be read"
 
 error.could_not_speak     = "Could not speak: {reason}"
+# The Audio Player and playlists.
+error.playlist        = "That playlist could not be opened: {reason}"
+error.not_a_playlist  = "There is no media.xml inside that zip, so it is not a playlist."
+error.empty_playlist  = "That playlist has nothing playable in it."
+error.playlist_files_missing = "None of the files the playlist names are inside the zip: {files}"
+error.track_too_large = "That audio file is too large to open."
+error.track_missing   = "That track is no longer in the playlist."
+error.cannot_decode   = "{name} is not audio this app can play. It reads MP3 and WAV."
+error.cannot_seek     = "This file cannot be moved through; play it from the start."
+error.no_audio_device = "There is no audio output to play through: {reason}"
+
+error.shell_install = "The right-click entry could not be added: {reason}"
+error.shell_remove  = "The right-click entry could not be removed: {reason}"
+
 error.no_engine           = "No system speech engine is available."
 error.no_engine_reason    = "No system speech engine is available: {reason}"
 error.no_system_voice     = "No system voice available: {reason}"

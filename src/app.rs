@@ -10,9 +10,14 @@ use crate::config::{self, Config};
 use crate::document::{ChunkMode, Document, SUPPORTED_EXTENSIONS};
 use crate::export::{self, Export};
 use crate::logging;
+use crate::player::{self, Command as PlayerCommand, Player};
+use crate::playlist::{self, Track};
+use crate::shell;
 use crate::speech::cloud::{self, CloudEngine, Command as CloudCommand, RemoteVoice};
 use crate::speech::system::SystemEngine;
-use crate::speech::{deepgram, elevenlabs, google, openai, polly, EngineKind, PlanItem, PlayState};
+use crate::speech::{
+    self, deepgram, elevenlabs, google, openai, polly, EngineKind, PlanItem, PlayState,
+};
 use crate::theme;
 use crate::update::{UpdateChecker, UpdateInfo};
 use crate::vision::{self, ModelInfo, Vision, VisionResult, IMAGE_EXTENSIONS};
@@ -34,16 +39,18 @@ const VIRTUAL_WINDOW: usize = 200;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     General,
+    Player,
     Wordlists,
     Settings,
 }
 
 impl Tab {
-    const ALL: [Self; 3] = [Self::General, Self::Wordlists, Self::Settings];
+    const ALL: [Self; 4] = [Self::General, Self::Player, Self::Wordlists, Self::Settings];
 
     fn title(self) -> String {
         match self {
             Self::General => t!("tab.general"),
+            Self::Player => t!("tab.player"),
             Self::Wordlists => t!("tab.wordlists"),
             Self::Settings => t!("tab.settings"),
         }
@@ -105,8 +112,24 @@ pub struct AccessEngine {
     wordlists: WordlistSet,
     voice_filter: String,
 
+    /// The Audio Player tab: its worker, and the running order it holds.
+    audio: Player,
+    /// What is loaded in the player. Empty until something is opened there.
+    tracks: Vec<Track>,
+    /// Which track the worker last said it had started. Not derived from the
+    /// status, because a fade means the next track begins before this one ends
+    /// and the highlight should follow what is being listened to.
+    track_index: usize,
+    player_state: PlayState,
+    /// 0..=1, kept apart from the reading volume: someone listening back to a
+    /// recording is not necessarily setting the level for the next reading.
+    player_volume: f32,
+
     /// A document being written to an MP3 file, if one is.
     export: Export,
+    /// The last MP3 this app wrote, so the player can offer it rather than
+    /// making somebody go and find the file they have just made.
+    last_export: Option<PathBuf>,
     /// How long a sentence takes, learned from the sentences already sent.
     export_estimate: export::Estimate,
     /// Set while the confirmation for a long export is on screen.
@@ -132,6 +155,10 @@ pub struct AccessEngine {
     tab: Tab,
     /// What the preview pane is showing.
     preview: Preview,
+    /// Whether the right-click entry is installed. Cached rather than asked
+    /// each frame: on Windows the answer costs a `reg.exe` process, and this
+    /// is drawn sixty times a second.
+    shell_installed: bool,
     /// The Settings form's working copy. Nothing typed there reaches the
     /// running app until Apply, so a half-typed Ollama address or a theme
     /// being tried on for size cannot take effect by itself.
@@ -176,6 +203,7 @@ impl AccessEngine {
         let ctx = cc.egui_ctx.clone();
         let repaint = move || ctx.request_repaint();
         let ctx2 = cc.egui_ctx.clone();
+        let ctx3 = cc.egui_ctx.clone();
 
         let system = SystemEngine::new(repaint.clone()).map_err(|e| {
             log::error!("system speech unavailable: {e:#}");
@@ -215,7 +243,13 @@ impl AccessEngine {
             cloud_can_resume: false,
             wordlists,
             voice_filter: String::new(),
+            audio: Player::new(move || ctx3.request_repaint()),
+            tracks: Vec::new(),
+            track_index: 0,
+            player_state: PlayState::Idle,
+            player_volume: 1.0,
             export: Export::default(),
+            last_export: None,
             export_estimate: export::Estimate::default(),
             confirm_export: false,
             pending_describe: false,
@@ -236,6 +270,7 @@ impl AccessEngine {
                 .unwrap_or_else(logging::default_log_dir)
                 .display()
                 .to_string(),
+            shell_installed: shell::is_installed(),
             api_key_rejected: false,
             show_key_dialog: false,
             key_draft: String::new(),
@@ -303,6 +338,8 @@ impl AccessEngine {
         let everything: Vec<&str> = SUPPORTED_EXTENSIONS
             .iter()
             .chain(IMAGE_EXTENSIONS)
+            .chain(playlist::AUDIO_EXTENSIONS)
+            .chain(&["zip"])
             .copied()
             .collect();
         let picked = rfd::FileDialog::new()
@@ -310,6 +347,8 @@ impl AccessEngine {
             .add_filter(t!("pick.filter_everything"), &everything)
             .add_filter(t!("pick.filter_documents"), SUPPORTED_EXTENSIONS)
             .add_filter(t!("pick.filter_images"), IMAGE_EXTENSIONS)
+            .add_filter(t!("pick.filter_audio"), playlist::AUDIO_EXTENSIONS)
+            .add_filter(t!("pick.filter_playlist"), &["zip"])
             .add_filter(t!("pick.filter_all"), &["*"])
             .pick_file();
         if let Some(path) = picked {
@@ -317,10 +356,20 @@ impl AccessEngine {
         }
     }
 
-    /// Route a file to whichever half of the app knows what to do with it.
+    /// Route a file to whichever part of the app knows what to do with it.
     fn open_path(&mut self, path: &std::path::Path, ctx: &egui::Context) {
         if is_image(path) {
             self.load_image(path.to_path_buf(), ctx);
+        } else if is_audio(path) {
+            self.load_tracks(vec![Track {
+                kind: playlist::Kind::Spoken,
+                origin: playlist::Origin::File(path.to_path_buf()),
+            }]);
+        // A zip is only a playlist if there is a running order inside it, so
+        // this asks the file rather than its name — a `.zip` of holiday
+        // photographs is not one, and should still say so as a document would.
+        } else if playlist::is_playlist(path) {
+            self.load_playlist(path);
         } else {
             self.load_document(path);
         }
@@ -597,28 +646,10 @@ impl AccessEngine {
         self.hits.clear();
         self.skipped_chunks = 0;
 
-        let filtering = self.cfg.wordlists_enabled;
-        for (index, chunk) in self.doc.chunks.iter().enumerate() {
-            let text = if filtering {
-                let applied = self.wordlists.apply(&chunk.display);
-                self.hits.extend(applied.hits);
-                if applied.skipped {
-                    self.skipped_chunks += 1;
-                    continue;
-                }
-                applied.text
-            } else {
-                chunk.display.clone()
-            };
-
-            if text.trim().is_empty() {
-                continue;
-            }
-            self.plan.push(PlanItem {
-                chunk_index: index,
-                text,
-            });
-        }
+        let plan = speech::build_plan(&self.doc, &self.wordlists, self.cfg.wordlists_enabled);
+        self.plan = plan.items;
+        self.hits = plan.hits;
+        self.skipped_chunks = plan.skipped;
 
         self.paragraphs = group_paragraphs(&self.doc, self.cfg.chunk_mode);
         self.plan_pos = self.plan_pos.min(self.plan.len().saturating_sub(1));
@@ -852,6 +883,32 @@ impl AccessEngine {
             }
         }
 
+        // The audio player.
+        while let Some(event) = self.audio.try_recv() {
+            match event {
+                player::Event::Started(index) => {
+                    self.track_index = index.min(self.tracks.len().saturating_sub(1));
+                    self.player_state = PlayState::Playing;
+                }
+                player::Event::Finished => {
+                    self.player_state = PlayState::Idle;
+                    self.track_index = 0;
+                    self.sounds.success();
+                    self.info(t!("status.playback_finished"));
+                }
+                player::Event::Error(message) => {
+                    self.player_state = PlayState::Idle;
+                    self.error(message);
+                }
+            }
+        }
+        // A moving position readout has to be drawn even when nothing has
+        // happened, which is the one place in this app that wants a clock
+        // rather than an event.
+        if self.player_state == PlayState::Playing {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
+
         // Saving to MP3.
         if let Some(event) = self.export.poll() {
             match event {
@@ -860,6 +917,7 @@ impl AccessEngine {
                     bytes,
                     elapsed,
                 } => {
+                    self.last_export = Some(path.clone());
                     let sentences = self.plan.len().max(1) as u32;
                     self.export_estimate.record(elapsed / sentences);
                     self.sounds.success();
@@ -1343,6 +1401,7 @@ impl AccessEngine {
             .auto_shrink([false, false])
             .show(ui, |ui| match self.tab {
                 Tab::General => self.general_tab(ui),
+                Tab::Player => self.player_tab(ui),
                 Tab::Wordlists => self.wordlists_tab(ui),
                 Tab::Settings => self.settings_tab(ui),
             });
@@ -1850,6 +1909,252 @@ impl AccessEngine {
         });
     }
 
+    // ----------------------------------------------------- audio player tab
+
+    /// Listening back to what the app has made.
+    ///
+    /// Deliberately a plain transport rather than a second reader: the file is
+    /// finished audio by the time it arrives here, so there is no plan, no
+    /// highlighting and no wordlist — only the running order, a position, and
+    /// the buttons anyone expects to find on a player.
+    fn player_tab(&mut self, ui: &mut egui::Ui) {
+        pane_header(ui, &t!("player.title"), &t!("player.subtitle"));
+
+        match button_row(ui, &[t!("player.open"), t!("player.open_playlist")]) {
+            Some(0) => self.open_audio_dialog(),
+            Some(_) => self.open_playlist_dialog(),
+            None => {}
+        }
+
+        // The reading that was just saved, offered rather than hunted for: it
+        // is the file somebody came to this tab to hear.
+        if let Some(path) = self.last_export.clone() {
+            if !self
+                .tracks
+                .iter()
+                .any(|t| t.origin == playlist::Origin::File(path.clone()))
+            {
+                ui.add_space(6.0);
+                let name = path
+                    .file_name()
+                    .unwrap_or(path.as_os_str())
+                    .to_string_lossy()
+                    .into_owned();
+                if wide_button(ui, &t!("player.play_last", name = name)).clicked() {
+                    self.load_tracks(vec![Track {
+                        kind: playlist::Kind::Spoken,
+                        origin: playlist::Origin::File(path),
+                    }]);
+                }
+            }
+        }
+
+        if self.tracks.is_empty() {
+            ui.add_space(8.0);
+            ui.label(RichText::new(t!("player.nothing_loaded")).weak());
+            return;
+        }
+
+        let status = self.audio.status();
+        ui.add_space(10.0);
+        self.transport(ui, &status);
+        ui.add_space(10.0);
+        self.track_list(ui);
+    }
+
+    /// The buttons and the position, which is the whole of the player.
+    fn transport(&mut self, ui: &mut egui::Ui, status: &player::Status) {
+        let now_playing = self
+            .tracks
+            .get(self.track_index)
+            .map(|track| format!("{} · {}", track.name(), track.kind.label()))
+            .unwrap_or_else(|| t!("player.nothing_loaded"));
+        ui.label(RichText::new(now_playing).strong());
+
+        // Elapsed against total, in words as well as on the bar: a bar alone
+        // says nothing to a listener reading the window by ear.
+        let position = match status.total {
+            Some(total) => t!(
+                "player.position",
+                elapsed = player::clock(status.elapsed),
+                total = player::clock(total)
+            ),
+            None => t!(
+                "player.position_unknown",
+                elapsed = player::clock(status.elapsed)
+            ),
+        };
+        ui.label(RichText::new(position).weak().small());
+
+        // A seek bar only where seeking means something. A decoder that cannot
+        // say how long the track is would otherwise get a bar that lies about
+        // where in it you are.
+        if let Some(total) = status.total.filter(|t| !t.is_zero()) {
+            let mut at = status.elapsed.as_secs_f32();
+            let label = field_label(ui, &t!("player.position_label"));
+            let width = ui.available_width();
+            let response = ui
+                .scope(|ui| {
+                    ui.spacing_mut().slider_width = (width - 84.0).max(80.0);
+                    ui.add(
+                        egui::Slider::new(&mut at, 0.0..=total.as_secs_f32()).custom_formatter(
+                            |v, _| player::clock(Duration::from_secs_f64(v.max(0.0))),
+                        ),
+                    )
+                })
+                .inner
+                .labelled_by(label);
+            if response.drag_stopped() || response.lost_focus() {
+                self.audio
+                    .send(PlayerCommand::Seek(Duration::from_secs_f32(at)));
+            }
+        }
+
+        ui.add_space(8.0);
+        let playing = status.state == PlayState::Playing;
+        let play_pause = if playing {
+            t!("player.pause")
+        } else {
+            t!("player.play")
+        };
+        match button_row(
+            ui,
+            &[
+                t!("player.previous"),
+                play_pause,
+                t!("player.stop"),
+                t!("player.next"),
+            ],
+        ) {
+            Some(0) => self.audio.send(PlayerCommand::Skip(-1)),
+            Some(1) => self.toggle_playback(playing),
+            Some(2) => {
+                self.audio.send(PlayerCommand::Stop);
+                self.player_state = PlayState::Idle;
+            }
+            Some(_) => self.audio.send(PlayerCommand::Skip(1)),
+            None => {}
+        }
+
+        let mut volume = self.player_volume;
+        if wide_slider(ui, &t!("player.volume"), &mut volume, 0.0..=1.0).changed() {
+            self.player_volume = volume;
+            self.audio.send(PlayerCommand::SetVolume(volume));
+        }
+    }
+
+    fn toggle_playback(&mut self, playing: bool) {
+        if playing {
+            self.audio.send(PlayerCommand::Pause);
+            self.player_state = PlayState::Paused;
+            return;
+        }
+        // Nothing has been started yet, or it was stopped: begin the running
+        // order rather than resuming a track the worker no longer holds.
+        if self.player_state == PlayState::Idle {
+            let tracks = self.tracks.clone();
+            let start = self.track_index.min(tracks.len().saturating_sub(1));
+            self.audio.send(PlayerCommand::Load { tracks, start });
+        } else {
+            self.audio.send(PlayerCommand::Resume);
+        }
+        self.player_state = PlayState::Playing;
+    }
+
+    /// The running order, in order, with the one being heard marked.
+    fn track_list(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new(tn!("player.track_count", self.tracks.len())).strong());
+        ui.add_space(4.0);
+
+        let mut chosen: Option<usize> = None;
+        for (index, track) in self.tracks.iter().enumerate() {
+            let current = index == self.track_index && self.player_state.is_active();
+            // The number, the name and what kind of thing it is. The marker is
+            // a word rather than only a colour or a highlight, so the row being
+            // played is announced as such rather than merely looking different.
+            let line = format!(
+                "{}. {} · {}{}",
+                index + 1,
+                track.name(),
+                track.kind.label(),
+                if current {
+                    format!(" — {}", t!("player.now_playing"))
+                } else {
+                    String::new()
+                }
+            );
+            if ui.selectable_label(current, line).clicked() {
+                chosen = Some(index);
+            }
+        }
+
+        if let Some(index) = chosen {
+            let tracks = self.tracks.clone();
+            self.audio.send(PlayerCommand::Load {
+                tracks,
+                start: index,
+            });
+            self.track_index = index;
+            self.player_state = PlayState::Playing;
+        }
+    }
+
+    fn open_audio_dialog(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(t!("pick.open_audio_title"))
+            .add_filter(t!("pick.filter_audio"), playlist::AUDIO_EXTENSIONS)
+            .add_filter(t!("pick.filter_all"), &["*"])
+            .pick_file()
+        else {
+            return;
+        };
+        self.load_tracks(vec![Track {
+            kind: playlist::Kind::Spoken,
+            origin: playlist::Origin::File(path),
+        }]);
+    }
+
+    fn open_playlist_dialog(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(t!("pick.open_playlist_title"))
+            .add_filter(t!("pick.filter_playlist"), &["zip"])
+            .pick_file()
+        else {
+            return;
+        };
+        self.load_playlist(&path);
+    }
+
+    /// Open a zip as a running order.
+    fn load_playlist(&mut self, path: &std::path::Path) {
+        match playlist::from_zip(path) {
+            Ok(tracks) => {
+                self.info(tn!("status.playlist_opened", tracks.len()));
+                self.load_tracks(tracks);
+            }
+            Err(e) => self.error(t!("error.playlist", reason = format!("{e:#}"))),
+        }
+    }
+
+    /// Hand a running order to the player and start it.
+    fn load_tracks(&mut self, tracks: Vec<Track>) {
+        if tracks.is_empty() {
+            return;
+        }
+        // The reading and the player are two things to listen to, and both at
+        // once is neither.
+        if self.state.is_active() {
+            self.stop();
+        }
+        self.tracks = tracks.clone();
+        self.track_index = 0;
+        self.player_state = PlayState::Playing;
+        self.tab = Tab::Player;
+        self.audio
+            .send(PlayerCommand::SetVolume(self.player_volume));
+        self.audio.send(PlayerCommand::Load { tracks, start: 0 });
+    }
+
     // -------------------------------------------------------- wordlists tab
 
     fn wordlists_tab(&mut self, ui: &mut egui::Ui) {
@@ -2300,6 +2605,10 @@ impl AccessEngine {
         ui.add_space(14.0);
         ui.separator();
         self.reading_settings(ui);
+
+        ui.add_space(14.0);
+        ui.separator();
+        self.shell_settings(ui);
 
         ui.add_space(14.0);
         ui.separator();
@@ -2786,6 +3095,73 @@ impl AccessEngine {
             self.draft.text_scale = scale;
         }
         ui.label(RichText::new(t!("settings.text_size_hint")).weak().small());
+    }
+
+    /// The right-click entry in the file manager.
+    ///
+    /// Applied straight away rather than on Apply, like the API key and unlike
+    /// everything else on this tab: it writes files outside the app and asks
+    /// the operating system to change, which is not a thing to do quietly on
+    /// the way past because somebody pressed Apply for another reason.
+    fn shell_settings(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.label(RichText::new(t!("settings.shell_heading")).strong());
+        ui.label(RichText::new(t!("settings.shell_explains")).weak().small());
+        // Which file manager, in words, because the answer differs per
+        // platform and a promise of "your file manager" would be wrong on two
+        // of the three.
+        ui.label(RichText::new(shell_platform_note()).weak().small());
+
+        let installed = self.shell_installed;
+        ui.add_space(8.0);
+        let label = if installed {
+            t!("settings.shell_remove")
+        } else {
+            t!("settings.shell_install")
+        };
+        if wide_button(ui, &label).clicked() {
+            self.toggle_shell_entry();
+        }
+
+        // What is on disk right now, so somebody who has moved the app can see
+        // that the entry still points at where it used to be.
+        if installed {
+            if let Some(script) = shell::script_path() {
+                ui.label(
+                    RichText::new(t!("settings.shell_script", path = script.display()))
+                        .weak()
+                        .small(),
+                );
+            }
+            ui.label(RichText::new(t!("settings.shell_moved")).weak().small());
+        }
+        // The entry converts, and converting needs a cloud engine. Said here
+        // rather than discovered when a file silently fails to become an MP3.
+        if !self.cfg.engine.is_cloud() {
+            ui.colored_label(ui.visuals().warn_fg_color, t!("settings.shell_needs_cloud"));
+        }
+    }
+
+    fn toggle_shell_entry(&mut self) {
+        if self.shell_installed {
+            match shell::remove() {
+                Ok(()) => {
+                    self.shell_installed = false;
+                    self.sounds.success();
+                    self.info(t!("status.shell_removed"));
+                }
+                Err(e) => self.error(t!("error.shell_remove", reason = format!("{e:#}"))),
+            }
+            return;
+        }
+        match shell::install() {
+            Ok(_) => {
+                self.shell_installed = true;
+                self.sounds.success();
+                self.info(t!("status.shell_installed"));
+            }
+            Err(e) => self.error(t!("error.shell_install", reason = format!("{e:#}"))),
+        }
     }
 
     fn log_settings(&mut self, ui: &mut egui::Ui) {
@@ -3621,6 +3997,28 @@ fn file_reason(reason: &i18n::FileReason) -> String {
         i18n::FileReason::NoCode => t!("settings.language.no_code"),
         i18n::FileReason::WouldReplaceEnglish => t!("settings.language.is_english"),
     }
+}
+
+/// Which menu the entry actually lands in, which is a different sentence on
+/// each platform.
+fn shell_platform_note() -> String {
+    #[cfg(windows)]
+    return t!("settings.shell_where.windows");
+    #[cfg(target_os = "macos")]
+    return t!("settings.shell_where.macos");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    return t!("settings.shell_where.linux");
+}
+
+/// Whether a path looks like something the player can play rather than read.
+fn is_audio(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            playlist::AUDIO_EXTENSIONS
+                .iter()
+                .any(|a| ext.eq_ignore_ascii_case(a))
+        })
 }
 
 /// Whether a path looks like something the app can describe rather than read.

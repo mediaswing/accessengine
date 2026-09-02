@@ -7,9 +7,58 @@ Each released version needs a section here: the release workflow refuses to
 build a tag that has none, and copies the matching section onto the release
 page.
 
-## [1.7.0] - 2026-09-02
+## [1.9.0] - 2026-09-02
 
 ### Added
+
+- **An Audio Player tab.** A plain transport for listening back to what the app
+  has just made: play, pause, stop, previous and next, a position you can drag,
+  and a volume of its own. A reading that has just been saved is offered by
+  name rather than having to be gone and found. It is deliberately not a second
+  reader — the audio is finished by the time it arrives here, so there is no
+  plan, no highlighting and no wordlist, only a running order and a playhead.
+
+  It plays MP3 and WAV, which are the two formats this app itself produces and
+  the two its decoder is built with. Anything else is refused by name in the
+  file dialog rather than opened and then failing.
+
+- **Playlists.** A zip with a `media.xml` inside it opens as a running order.
+  Each `<content>` names a file, `pos` gives the order — read from the
+  attribute rather than from the order the elements happen to appear in, since
+  the two are not promised to agree — and `type` says whether it is music (`M`)
+  or spoken word (`B`).
+
+  That last distinction earns its keep at one join: **where music follows
+  speech it fades up under the end of the speech** rather than starting flat
+  after it, which is what a bulletin sounds like on the radio. Every other join
+  is a straight cut, deliberately — a voice fading in loses its first words,
+  and two spoken items must never overlap at all. A track the running order
+  names but the zip does not contain costs that track and no others.
+
+  A zip is only treated as a playlist if there is a manifest inside it, so a
+  zip of holiday photographs is still just a zip.
+
+- **A right-click menu entry**, added from the Settings tab: *Save as MP3 with
+  AccessEngine*, on the documents this app can read. It writes a three-line
+  script into the app's own settings folder — `%APPDATA%` on Windows,
+  `~/Library/Application Support` on macOS, `~/.config` on Linux — and
+  registers it: File Explorer's menu on Windows, a Finder Quick Action on
+  macOS, a Nautilus script on Linux. Other Linux file managers are not covered,
+  and the tab says so.
+
+  The script carries no settings and no credentials. It calls the app, and the
+  app reads its own `config.json` — so the engine, the voice, the wordlists and
+  the chunking are whatever the window was last set to, and changing them
+  changes what the entry does with nothing to reinstall.
+
+- **A command line for that entry to use.** `accessengine --convert FILE`
+  writes an MP3 beside the file and never opens a window; `--out` puts it
+  somewhere else. It is one verb rather than a general interface, and it does
+  exactly what pressing Apply with **Save the reading as an MP3** does — the
+  same reader, the same voice, and the same wordlists, which is the part that
+  matters: a word a safety list keeps out of a reading stays out of a file
+  converted without the window ever opening. It needs a cloud engine, and says
+  so plainly when there is not one, or no credentials, or no voice chosen.
 
 - Four more speech engines, alongside the system voices and ElevenLabs:
   **OpenAI**, **Deepgram**, **Google Cloud** and **Amazon Polly**. They are
@@ -52,6 +101,11 @@ page.
   a secret on disk materially worse to lose than a key.
 
 ### Changed
+
+- Building the speech plan — running the wordlists over a document to work out
+  what will actually be spoken — has moved out of the interface, because the
+  command line has to reach the same answer and two copies of that loop would
+  eventually disagree about which words get said out loud.
 
 - The ElevenLabs worker is now the worker for all five cloud engines. The
   queue, the audio device, the one-sentence-ahead prefetch and the handling of

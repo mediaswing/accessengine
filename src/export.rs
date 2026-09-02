@@ -243,6 +243,20 @@ pub fn approximate_duration(d: Duration) -> String {
     }
 }
 
+/// Write every sentence to `destination` and wait for it, for a caller with no
+/// window to report progress into.
+///
+/// The same work [`Export::start`] does on a thread — same requests, same
+/// scratch file, same refusal to leave half a document under the finished
+/// name — run to completion on the calling thread. Used by the command line,
+/// which has nothing to do while it waits.
+pub fn write_blocking(destination: &Path, texts: &[String], request: &VoiceRequest) -> Result<u64> {
+    let never = AtomicBool::new(false);
+    let bytes = write_mp3(destination, texts, request, &never, &|_| {})?;
+    // `None` means cancelled, and nothing here can cancel it.
+    bytes.context("the export stopped without being asked to")
+}
+
 /// Write every sentence to `destination`, returning the size on success and
 /// `None` if the user cancelled.
 fn write_mp3(
