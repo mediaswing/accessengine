@@ -7,6 +7,19 @@ Each released version needs a section here: the release workflow refuses to
 build a tag that has none, and copies the matching section onto the release
 page.
 
+## [1.5.0] - 2026-09-02
+
+### Changed
+
+- The top toolbar — "Open file", Play/Pause, Stop, previous/next sentence, and
+  the progress bar beneath it — has been removed. Opening a file and starting
+  playback were already duplicated on the General tab's "Open a file…" and
+  Apply buttons; pause, stop and skip remain reachable via Space/Ctrl+P,
+  Escape, and the arrow keys.
+- The General/Wordlists/Settings tab strip now runs the full width of the
+  window at the very top, directly under the title bar, rather than sitting
+  above just the side panel.
+
 ## [1.3.0] - 2026-09-02
 
 ### Added
@@ -163,6 +176,7 @@ page.
 - Release workflow building Linux, macOS and Windows binaries, publishing them
   with checksums, and submitting them to VirusTotal.
 
+[1.5.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.5.0
 [1.3.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.3.0
 [1.2.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.2.0
 [1.1.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.1.0
