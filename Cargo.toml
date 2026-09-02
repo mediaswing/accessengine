@@ -1,6 +1,6 @@
 [package]
 name = "accessengine"
-version = "1.5.0"
+version = "1.6.0"
 edition = "2021"
 description = "Cross-platform graphical text-to-speech reader with system voices, ElevenLabs, local vision models, and safety/pronunciation wordlists"
 license = "GPL-3.0-or-later"

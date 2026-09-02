@@ -7,7 +7,7 @@ Each released version needs a section here: the release workflow refuses to
 build a tag that has none, and copies the matching section onto the release
 page.
 
-## [Unreleased]
+## [1.6.0] - 2026-09-02
 
 ### Added
 - The interface can be read in another language. Every word it says is now
