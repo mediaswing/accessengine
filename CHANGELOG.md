@@ -7,7 +7,7 @@ Each released version needs a section here: the release workflow refuses to
 build a tag that has none, and copies the matching section onto the release
 page.
 
-## [1.9.0] - 2026-09-02
+## [1.9.0] - 2026-09-03
 
 ### Added
 
@@ -127,6 +127,23 @@ page.
   back to the system voices instead of being discarded whole. That is what a
   downgrade looks like — settings written by a newer version, opened by an
   older one — and it used to cost every other setting in the file.
+
+### Fixed
+
+- A settings file written before 1.3 spells its engine in snake_case
+  (`eleven_labs`), and nothing since has recognised that spelling: every launch
+  quietly reset the engine to the system voices and mentioned it only in the
+  log. The old spellings are read back as the engine they name, and the next
+  save rewrites them in the current form.
+
+- Apply is no longer a dead button with its reason hidden. Saving audio needs a
+  cloud engine, so the reset above left it permanently disabled — and the
+  explanation was hover text on a greyed-out button, which is nowhere a screen
+  reader lands. Whatever is blocking Apply is now written underneath it.
+
+- The list of local vision models failed to load whenever Ollama reported a
+  model carrying no family metadata, which it sends as `"families": null`
+  rather than as an empty list. One such model emptied the whole picker.
 
 ### Note on cost
 
@@ -420,6 +437,8 @@ text to speech. Every one of them receives the text of whatever is being read.
 - Release workflow building Linux, macOS and Windows binaries, publishing them
   with checksums, and submitting them to VirusTotal.
 
+[1.9.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.9.0
+[1.6.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.6.0
 [1.5.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.5.0
 [1.3.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.3.0
 [1.2.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.2.0
