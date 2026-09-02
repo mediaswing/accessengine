@@ -20,7 +20,8 @@ hear the words rather than the asterisks — code blocks are skipped, links read
 as their text, and images are announced by their alt text. A CSV is read as a
 table: each value arrives under the name of its column, so nothing depends on
 remembering a header line from four rows back. A presentation is read slide by
-slide, each announced by number. The document is
+slide, each announced by number, and a table on a slide is read the same way as
+one in a file. The document is
 cut into sentences (or paragraphs, your choice); the one being spoken is
 highlighted, and clicking any sentence starts reading from there.
 
@@ -43,9 +44,11 @@ Nothing is uploaded anywhere.
 `.ppt` that came before it, along with `.pptm`, `.pps` and `.ppsx`. Each slide
 is announced by its number, and a slide with nothing on it says so rather than
 being skipped, so following along by ear keeps the same count as the person at
-the front of the room. Master slides and layouts are left out — their
-placeholder text is "Click to edit Master title style", and hearing that
-between every slide would be worse than hearing nothing.
+the front of the room. A table on a slide is read as a table, the same way a
+CSV is — every figure under the name of its column, because four cells read as
+four unrelated words tell a listener nothing. Master slides and layouts are
+left out — their placeholder text is "Click to edit Master title style", and
+hearing that between every slide would be worse than hearing nothing.
 
 The file is identified by what is inside it rather than by its name, so a
 `.pptx` that arrived renamed to `.ppt` still opens. A presentation saved with a

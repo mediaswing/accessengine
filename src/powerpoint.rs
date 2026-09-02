@@ -75,10 +75,10 @@ fn lay_out(slides: &[Vec<String>]) -> String {
         }
         let number = index + 1;
         if paragraphs.is_empty() {
-            out.push_str(&format!("Slide {number}. No text on this slide."));
+            out.push_str(&t!("slide.empty", number = number));
             continue;
         }
-        out.push_str(&format!("Slide {number}."));
+        out.push_str(&t!("slide.heading", number = number));
         for paragraph in paragraphs {
             out.push_str("\n\n");
             out.push_str(paragraph);
@@ -147,13 +147,21 @@ fn slide_number(name: &str) -> Option<u32> {
 
 /// The paragraphs of one slide's XML.
 ///
-/// A deliberately small scanner rather than an XML parser. Everything wanted
-/// here is in two elements — `<a:p>` is a paragraph and `<a:t>` is a run of
-/// text inside one — and both a table cell and a text box put their words in
-/// exactly those, so the shape they sit in never has to be understood.
+/// A deliberately small scanner rather than an XML parser. Almost everything
+/// wanted here is in two elements — `<a:p>` is a paragraph and `<a:t>` is a run
+/// of text inside one — and a text box, a title and a table cell all put their
+/// words in exactly those, so the shape they sit in never has to be understood.
+///
+/// A table is the exception, and it has to be understood, because the shape is
+/// the meaning. `Region · Sales · North · 1,200` read as four paragraphs is
+/// four unrelated words; the same four cells read as a table say which figure
+/// belongs to which column. So `<a:tbl>` and the rows and cells inside it are
+/// tracked, and what comes out goes through the same prose builder a `.csv`
+/// does — see [`crate::document::records_to_prose`].
 fn slide_paragraphs(xml: &str) -> Vec<String> {
     let mut paragraphs = Vec::new();
     let mut current = String::new();
+    let mut table = Table::default();
     let mut rest = xml;
 
     while let Some(open) = rest.find('<') {
@@ -162,21 +170,47 @@ fn slide_paragraphs(xml: &str) -> Vec<String> {
         let tag = &rest[..close];
         rest = &rest[close + 1..];
 
+        let closing = tag.starts_with('/');
         let name = tag
             .trim_start_matches('/')
             .split([' ', '\t', '\n', '/'])
             .next()
             .unwrap_or("");
         match name {
-            // A paragraph ends where the next begins, so both edges flush: an
-            // unclosed one still reaches the listener.
-            "a:p" if !tag.starts_with('/') => flush(&mut current, &mut paragraphs),
+            // Nesting is counted rather than assumed away: DrawingML has no
+            // table inside a table, but this reads files written by anything.
+            "a:tbl" if !closing => {
+                if table.depth == 0 {
+                    flush(&mut current, &mut paragraphs);
+                    table = Table::default();
+                }
+                table.depth += 1;
+            }
+            "a:tbl" => {
+                table.depth = table.depth.saturating_sub(1);
+                if table.depth == 0 {
+                    paragraphs.extend(table.finish());
+                    current.clear();
+                }
+            }
+            "a:tr" if closing && table.depth > 0 => {
+                table.rows.push(std::mem::take(&mut table.row));
+            }
+            "a:tc" if closing && table.depth > 0 => {
+                table.row.push(current.trim().to_string());
+                current.clear();
+            }
+            // A paragraph ends where the next begins, so both edges act: an
+            // unclosed one still reaches the listener. Inside a cell there is
+            // nowhere for a paragraph to go on its own, so the several a cell
+            // may hold are run together instead.
+            "a:p" if table.depth > 0 => separate(&mut current),
             "a:p" => flush(&mut current, &mut paragraphs),
             // A soft line break inside a paragraph. Kept as a space, because a
             // newline mid-paragraph makes several speech back ends pause as
             // though at a full stop.
-            "a:br" => current.push(' '),
-            "a:t" if !tag.starts_with('/') => {
+            "a:br" => separate(&mut current),
+            "a:t" if !closing => {
                 let Some(end) = rest.find('<') else { break };
                 current.push_str(&decode_entities(&rest[..end]));
                 rest = &rest[end..];
@@ -184,8 +218,52 @@ fn slide_paragraphs(xml: &str) -> Vec<String> {
             _ => {}
         }
     }
-    flush(&mut current, &mut paragraphs);
+    // A table left unclosed by a truncated file still says what it had.
+    if table.depth > 0 {
+        table.row.push(current.trim().to_string());
+        table.rows.push(std::mem::take(&mut table.row));
+        paragraphs.extend(table.finish());
+    } else {
+        flush(&mut current, &mut paragraphs);
+    }
     paragraphs
+}
+
+/// A table being read out of a slide: the rows finished, the row in hand, and
+/// how deep inside `<a:tbl>` the scanner is.
+#[derive(Default)]
+struct Table {
+    rows: Vec<Vec<String>>,
+    row: Vec<String>,
+    depth: usize,
+}
+
+impl Table {
+    /// The table as paragraphs, through the same builder a spreadsheet uses.
+    fn finish(&mut self) -> Vec<String> {
+        // A last row the file never closed, and empty rows a deck uses for
+        // spacing, are neither of them rows of the table.
+        if !self.row.is_empty() {
+            self.rows.push(std::mem::take(&mut self.row));
+        }
+        self.rows
+            .retain(|row| row.iter().any(|cell| !cell.is_empty()));
+
+        let prose = crate::document::records_to_prose(std::mem::take(&mut self.rows));
+        prose
+            .split("\n\n")
+            .filter(|paragraph| !paragraph.trim().is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+/// End whatever came before without ending the paragraph — a line break, or
+/// the join between two paragraphs sharing one table cell.
+fn separate(current: &mut String) {
+    if !current.is_empty() && !current.ends_with(' ') {
+        current.push(' ');
+    }
 }
 
 fn flush(current: &mut String, paragraphs: &mut Vec<String>) {
@@ -599,6 +677,22 @@ mod cfb {
 mod tests {
     use super::*;
 
+    /// A presentation read in English.
+    ///
+    /// Pinned, because the words around the slides — their numbering, and the
+    /// way a table on one is read out — come from the language file now, and a
+    /// test switching the language beside this one would otherwise fail it.
+    fn read(raw: &[u8]) -> String {
+        crate::i18n::with_language("en", || text_from_bytes(raw)).expect("reads")
+    }
+
+    /// The same, for the files this reader turns away.
+    fn refuse(raw: &[u8]) -> String {
+        crate::i18n::with_language("en", || text_from_bytes(raw))
+            .expect_err("this file should not be read")
+            .to_string()
+    }
+
     #[test]
     fn the_extensions_it_claims_are_the_ones_it_reads() {
         assert!(handles("pptx"));
@@ -649,13 +743,129 @@ mod tests {
         assert_eq!(slide_paragraphs(xml), ["The title"]);
     }
 
+    /// The whole point of the change: a table on a slide is read the way a
+    /// spreadsheet is, every figure under the name of its column, rather than
+    /// as a handful of unrelated words.
+    #[test]
+    fn a_table_on_a_slide_is_read_as_a_table() {
+        let xml = table_xml(&[&["Region", "Sales"], &["North", "1,200"], &["South", "980"]]);
+        let read = |xml: &str| crate::i18n::with_language("en", || slide_paragraphs(xml));
+        assert_eq!(
+            read(&xml),
+            [
+                "A table of 2 rows and 2 columns: Region, Sales.",
+                "Row 1. Region: North. Sales: 1,200.",
+                "Row 2. Region: South. Sales: 980.",
+            ]
+        );
+    }
+
+    /// A two-row table — a header and one figure — is the ordinary shape on a
+    /// slide, and the one a bare cell-by-cell reading served worst.
+    #[test]
+    fn a_single_figure_still_arrives_under_its_heading() {
+        let xml = table_xml(&[&["Region", "Sales"], &["North", "1,200"]]);
+        let read = crate::i18n::with_language("en", || slide_paragraphs(&xml));
+        assert_eq!(
+            read,
+            [
+                "A table of 1 row and 2 columns: Region, Sales.",
+                "Row 1. Region: North. Sales: 1,200.",
+            ]
+        );
+    }
+
+    /// Text either side of a table on the same slide stays where it was, and
+    /// the table does not swallow it.
+    #[test]
+    fn a_table_does_not_disturb_the_words_around_it() {
+        let xml = format!(
+            "<a:p><a:r><a:t>Before the table</a:t></a:r></a:p>{}\
+             <a:p><a:r><a:t>After it</a:t></a:r></a:p>",
+            table_xml(&[&["Region", "Sales"], &["North", "1,200"]])
+        );
+        let read = crate::i18n::with_language("en", || slide_paragraphs(&xml));
+        assert_eq!(read.first().map(String::as_str), Some("Before the table"));
+        assert_eq!(read.last().map(String::as_str), Some("After it"));
+        assert!(read.iter().any(|p| p.contains("Sales: 1,200")), "{read:?}");
+    }
+
+    /// One cell may hold several paragraphs, and a cell may hold nothing. The
+    /// first must not become several cells, and the second must not shift every
+    /// value after it into the wrong column.
+    #[test]
+    fn a_cell_may_hold_several_paragraphs_or_none() {
+        let xml = "<a:tbl>\
+             <a:tr><a:tc><a:txBody><a:p><a:r><a:t>Region</a:t></a:r></a:p></a:txBody></a:tc>\
+                   <a:tc><a:txBody><a:p><a:r><a:t>Note</a:t></a:r></a:p></a:txBody></a:tc>\
+                   <a:tc><a:txBody><a:p><a:r><a:t>Sales</a:t></a:r></a:p></a:txBody></a:tc></a:tr>\
+             <a:tr><a:tc><a:txBody><a:p><a:r><a:t>North</a:t></a:r></a:p></a:txBody></a:tc>\
+                   <a:tc><a:txBody></a:txBody></a:tc>\
+                   <a:tc><a:txBody><a:p><a:r><a:t>1,200</a:t></a:r></a:p></a:txBody></a:tc></a:tr>\
+             <a:tr><a:tc><a:txBody><a:p><a:r><a:t>South</a:t></a:r></a:p></a:txBody></a:tc>\
+                   <a:tc><a:txBody><a:p><a:r><a:t>Up on</a:t></a:r></a:p>\
+                                   <a:p><a:r><a:t>last year</a:t></a:r></a:p></a:txBody></a:tc>\
+                   <a:tc><a:txBody><a:p><a:r><a:t>980</a:t></a:r></a:p></a:txBody></a:tc></a:tr>\
+             </a:tbl>";
+        let read = crate::i18n::with_language("en", || slide_paragraphs(xml));
+        // The empty note is left out, and Sales is still Sales.
+        assert_eq!(read[1], "Row 1. Region: North. Sales: 1,200.");
+        assert_eq!(read[2], "Row 2. Region: South. Note: Up on last year. Sales: 980.");
+    }
+
+    /// A whole deck, end to end, with a table on one of its slides.
+    #[test]
+    fn a_pptx_with_a_table_reads_it_under_its_headings() {
+        let out = read(&pptx_with_table());
+        assert!(out.contains("Slide 1.\n\nQuarterly review"), "{out:?}");
+        assert!(
+            out.contains("Slide 2.\n\nA table of 2 rows and 2 columns: Region, Sales."),
+            "{out:?}"
+        );
+        assert!(out.contains("Row 2. Region: South. Sales: 980."), "{out:?}");
+    }
+
+    /// `<a:tbl>` wrapped in the shapes a real slide puts around it.
+    fn table_xml(rows: &[&[&str]]) -> String {
+        let mut xml = String::from("<a:graphicFrame><a:graphic><a:graphicData><a:tbl>");
+        xml.push_str("<a:tblGrid><a:gridCol w=\"3000\"/><a:gridCol w=\"3000\"/></a:tblGrid>");
+        for row in rows {
+            xml.push_str("<a:tr h=\"370\">");
+            for cell in *row {
+                xml.push_str(&format!(
+                    "<a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-GB\"/>\
+                     <a:t>{cell}</a:t></a:r></a:p></a:txBody></a:tc>"
+                ));
+            }
+            xml.push_str("</a:tr>");
+        }
+        xml.push_str("</a:tbl></a:graphicData></a:graphic></a:graphicFrame>");
+        xml
+    }
+
+    /// A two-slide deck: a title, then a table.
+    fn pptx_with_table() -> Vec<u8> {
+        use std::io::Write as _;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("ppt/slides/slide1.xml", options).unwrap();
+        zip.write_all(b"<p:sld><a:p><a:r><a:t>Quarterly review</a:t></a:r></a:p></p:sld>")
+            .unwrap();
+        zip.start_file("ppt/slides/slide2.xml", options).unwrap();
+        let table = table_xml(&[&["Region", "Sales"], &["North", "1,200"], &["South", "980"]]);
+        zip.write_all(format!("<p:sld><p:cSld><p:spTree>{table}</p:spTree></p:cSld></p:sld>").as_bytes())
+            .unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
     #[test]
     fn an_empty_slide_is_counted_rather_than_skipped() {
-        let out = lay_out(&[
+        let out = crate::i18n::with_language("en", || lay_out(&[
             vec!["First.".to_string()],
             Vec::new(),
             vec!["Third.".to_string()],
-        ]);
+        ]));
         assert_eq!(
             out,
             "Slide 1.\n\nFirst.\n\nSlide 2. No text on this slide.\n\nSlide 3.\n\nThird."
@@ -672,7 +882,7 @@ mod tests {
 
     #[test]
     fn something_that_is_not_a_presentation_says_so() {
-        let refusal = text_from_bytes(b"Just some text").unwrap_err().to_string();
+        let refusal = refuse(b"Just some text");
         assert!(refusal.contains("not a PowerPoint"), "{refusal}");
     }
 
@@ -710,7 +920,7 @@ mod tests {
         // show up here.
         let slides: Vec<String> = (1..=10).map(|n| format!("Slide {n} title|Its body")).collect();
         let names: Vec<&str> = slides.iter().map(String::as_str).collect();
-        let out = text_from_bytes(&pptx(&names)).expect("reads");
+        let out = read(&pptx(&names));
 
         for n in 1..=10 {
             assert!(
@@ -724,8 +934,7 @@ mod tests {
 
     #[test]
     fn a_zip_with_no_slides_in_it_is_not_a_presentation() {
-        let empty = pptx(&[]);
-        let refusal = text_from_bytes(&empty).unwrap_err().to_string();
+        let refusal = refuse(&pptx(&[]));
         assert!(refusal.contains("no slides"), "{refusal}");
     }
 
@@ -866,7 +1075,7 @@ mod tests {
         ));
 
         let file = compound_file("PowerPoint Document", &stream);
-        let out = text_from_bytes(&file).expect("reads");
+        let out = read(&file);
         assert_eq!(
             out,
             "Slide 1.\n\nFirst slide\n\nIts body\n\nSlide 2.\n\nDeuxi\u{e8}me\n\nCaf\u{e9}"
@@ -889,24 +1098,21 @@ mod tests {
         assert!(stream.len() > 4096);
 
         let file = compound_file("PowerPoint Document", &stream);
-        assert_eq!(
-            text_from_bytes(&file).expect("reads"),
-            "Slide 1.\n\nThe only slide"
-        );
+        assert_eq!(read(&file), "Slide 1.\n\nThe only slide");
     }
 
     #[test]
     fn a_password_protected_presentation_says_so_rather_than_reading_noise() {
         let stream = container(CRYPT_SESSION_CONTAINER, &[0u8; 16]);
         let file = compound_file("PowerPoint Document", &stream);
-        let refusal = text_from_bytes(&file).unwrap_err().to_string();
+        let refusal = refuse(&file);
         assert!(refusal.contains("password-protected"), "{refusal}");
     }
 
     #[test]
     fn a_compound_file_that_is_not_a_presentation_says_so() {
         let file = compound_file("WordDocument", b"not a deck");
-        let refusal = text_from_bytes(&file).unwrap_err().to_string();
+        let refusal = refuse(&file);
         assert!(refusal.contains("PowerPoint Document stream"), "{refusal}");
     }
 
@@ -933,7 +1139,7 @@ mod tests {
         let archive = zip.finish().unwrap().into_inner();
         assert!(archive.len() < 1024 * 1024, "the archive itself is small");
 
-        let refusal = text_from_bytes(&archive).unwrap_err().to_string();
+        let refusal = refuse(&archive);
         assert!(refusal.contains("64 MB"), "{refusal}");
     }
 
@@ -949,7 +1155,7 @@ mod tests {
         file[fat..fat + 4].copy_from_slice(&3u32.to_le_bytes());
 
         let started = std::time::Instant::now();
-        let refusal = text_from_bytes(&file).unwrap_err().to_string();
+        let refusal = refuse(&file);
         assert!(refusal.contains("never ends"), "{refusal}");
         // The loop is cut at the file's own length, so this is a few dozen
         // sectors rather than the quarter of a million the constant allows.

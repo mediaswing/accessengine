@@ -405,6 +405,35 @@ pick.filter_wordlists       = "Wordlists"
 pick.log_folder_title       = "Where should the logs be written?"
 
 
+# ----------------------------------------------------------------- tables
+#
+# A table — in a spreadsheet file, or on a slide — is not read out as lines of
+# text. Every value is spoken under the name of its column, because by the
+# fourth row nobody is still holding the header line in their head. These are
+# the app's own words, inserted into somebody's document and then spoken, so
+# they are the one set of messages here that a listener hears rather than reads.
+
+# A presentation is read slide by slide, each announced by its number, so that
+# following along by ear keeps the same count as the person at the front of the
+# room. A slide with nothing on it says so rather than being skipped.
+slide.heading = "Slide {number}."
+slide.empty   = "Slide {number}. No text on this slide."
+
+table.rows.one      = "{n} row"
+table.rows.other    = "{n} rows"
+table.columns.one   = "{n} column"
+table.columns.other = "{n} columns"
+table.summary          = "A table of {rows} and {columns}"
+table.summary_headings = "A table of {rows} and {columns}: {headings}"
+table.row     = "Row {number}"
+table.cell    = "{heading}: {value}"
+# The name given to a column the table never named — an unlabelled heading, a
+# row with more cells in it than the header had columns.
+table.column  = "Column {number}"
+table.cut_short = "This table is too large to read in full. It was cut short "
+                  "after row {row}, of {total}"
+
+
 # ------------------------------------------------------- the document pane
 
 doc.empty = "Open a file to read it aloud.\n\nCtrl/Cmd + O, or the button on the General "

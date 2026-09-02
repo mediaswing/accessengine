@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::t;
+use crate::{t, tn};
 
 /// How finely to cut the document up. Smaller chunks give tighter progress
 /// tracking and faster response to skip/stop; larger chunks sound more natural
@@ -495,6 +495,12 @@ fn parse_records(text: &str, delimiter: char) -> Vec<Vec<String>> {
     records
 }
 
+/// Read a delimited file out the way a person reads a table aloud.
+fn table_to_prose(text: &str) -> String {
+    let delimiter = sniff_delimiter(text);
+    records_to_prose(parse_records(text, delimiter))
+}
+
 /// Read a table out the way a person reads one aloud: which row, then each
 /// column's name with the cell under it.
 ///
@@ -508,9 +514,12 @@ fn parse_records(text: &str, delimiter: char) -> Vec<Vec<String>> {
 /// An empty cell is left out rather than announced. The document pane shows
 /// exactly what will be spoken, so a cell that says nothing is visibly absent
 /// rather than silently dropped.
-fn table_to_prose(text: &str) -> String {
-    let delimiter = sniff_delimiter(text);
-    let mut records = parse_records(text, delimiter);
+///
+/// Takes records rather than a file, because a table is not only a `.csv`: a
+/// slide in a presentation can hold one too, and it would be a strange reader
+/// that named the columns of a spreadsheet and then read the same four values
+/// off a slide as four unrelated words. See [`crate::powerpoint`].
+pub fn records_to_prose(mut records: Vec<Vec<String>>) -> String {
     if records.is_empty() {
         return String::new();
     }
@@ -527,20 +536,22 @@ fn table_to_prose(text: &str) -> String {
         column_names(&records.remove(0))
     } else {
         let width = records.iter().map(Vec::len).max().unwrap_or(0);
-        (1..=width).map(|n| format!("Column {n}")).collect()
+        (1..=width).map(|n| t!("table.column", number = n)).collect()
     };
 
+    let rows = tn!("table.rows", records.len());
+    let columns = tn!("table.columns", headings.len());
     let mut out = String::new();
-    out.push_str(&sentence(&format!(
-        "A table of {} rows and {} columns{}",
-        records.len(),
-        headings.len(),
-        if has_header {
-            format!(": {}", headings.join(", "))
-        } else {
-            String::new()
-        }
-    )));
+    out.push_str(&sentence(&if has_header {
+        t!(
+            "table.summary_headings",
+            rows = rows,
+            columns = columns,
+            headings = headings.join(", ")
+        )
+    } else {
+        t!("table.summary", rows = rows, columns = columns)
+    }));
 
     for (index, record) in records.iter().enumerate() {
         // Naming the column beside every value is the point of this, and it is
@@ -550,15 +561,15 @@ fn table_to_prose(text: &str) -> String {
         // makes of one is held to the same figure, and says where it stopped.
         if out.len() as u64 >= MAX_BYTES {
             out.push_str("\n\n");
-            out.push_str(&sentence(&format!(
-                "This table is too large to read in full. It was cut short after row {index}, \
-                 of {}",
-                records.len()
+            out.push_str(&sentence(&t!(
+                "table.cut_short",
+                row = index,
+                total = records.len()
             )));
             break;
         }
         out.push_str("\n\n");
-        out.push_str(&sentence(&format!("Row {}", index + 1)));
+        out.push_str(&sentence(&t!("table.row", number = index + 1)));
         for (column, cell) in record.iter().enumerate() {
             if cell.is_empty() {
                 continue;
@@ -568,9 +579,13 @@ fn table_to_prose(text: &str) -> String {
                 .cloned()
                 // A row with more cells than the header has columns still says
                 // where each one sits.
-                .unwrap_or_else(|| format!("Column {}", column + 1));
+                .unwrap_or_else(|| t!("table.column", number = column + 1));
             out.push(' ');
-            out.push_str(&sentence(&format!("{heading}: {cell}")));
+            out.push_str(&sentence(&t!(
+                "table.cell",
+                heading = heading,
+                value = cell
+            )));
         }
     }
     out
@@ -584,7 +599,7 @@ fn column_names(first: &[String]) -> Vec<String> {
         .map(|(index, name)| {
             let name = name.trim().trim_end_matches(':').trim();
             if name.is_empty() {
-                format!("Column {}", index + 1)
+                t!("table.column", number = index + 1)
             } else {
                 name.to_string()
             }
@@ -740,6 +755,15 @@ fn parse_link(chars: &[char], open: usize) -> Option<(String, usize)> {
 mod tests {
     use super::*;
 
+    /// The prose a table is read as, in English.
+    ///
+    /// Pinned, because the words are the language's now: another test
+    /// switching it while this one runs would otherwise fail this one, once
+    /// every few dozen runs.
+    fn prose(csv: &str) -> String {
+        crate::i18n::with_language("en", || table_to_prose(csv))
+    }
+
     fn sentences(text: &str) -> Vec<String> {
         split_chunks(text, ChunkMode::Sentence)
             .into_iter()
@@ -861,7 +885,7 @@ mod tests {
 
     #[test]
     fn a_table_reads_each_cell_under_its_column() {
-        let out = table_to_prose("Name,Age,City\nAlice,30,Leeds\nBo,41,Hull\n");
+        let out = prose("Name,Age,City\nAlice,30,Leeds\nBo,41,Hull\n");
         assert_eq!(
             out,
             "A table of 2 rows and 3 columns: Name, Age, City.\n\n\
@@ -875,7 +899,7 @@ mod tests {
     /// that was read out four rows ago.
     #[test]
     fn no_value_is_spoken_without_its_column() {
-        let out = table_to_prose("Name,Age\nAlice,30\nBo,41\n");
+        let out = prose("Name,Age\nAlice,30\nBo,41\n");
         for (heading, value) in [("Name", "Alice"), ("Age", "30"), ("Name", "Bo"), ("Age", "41")] {
             assert!(out.contains(&format!("{heading}: {value}")), "{out:?}");
         }
@@ -885,7 +909,7 @@ mod tests {
     /// none of which may reach the listener as structure.
     #[test]
     fn quoted_fields_keep_what_is_inside_them() {
-        let out = table_to_prose(
+        let out = prose(
             "Name,Note\n\
              Alice,\"Leeds, then York\"\n\
              Bo,\"She said \"\"no\"\"\"\n\
@@ -906,14 +930,14 @@ mod tests {
             ("Name\tCost\nAlice\t150\nBo\t275\n", "Cost: 150"),
             ("Name|Cost\nAlice|150\nBo|275\n", "Cost: 150"),
         ] {
-            assert!(table_to_prose(text).contains(cell), "{text:?}");
+            assert!(prose(text).contains(cell), "{text:?}");
         }
     }
 
     /// One prose column full of commas must not be mistaken for the separator.
     #[test]
     fn commas_inside_a_column_do_not_outvote_the_real_delimiter() {
-        let out = table_to_prose(
+        let out = prose(
             "Name;Note\n\
              Alice;one, two, three, four\n\
              Bo;five, six, seven, eight\n",
@@ -925,7 +949,7 @@ mod tests {
     /// must not end up with a column called "42".
     #[test]
     fn a_numeric_first_row_is_data_rather_than_a_header() {
-        let out = table_to_prose("1,2\n3,4\n");
+        let out = prose("1,2\n3,4\n");
         assert!(out.starts_with("A table of 2 rows and 2 columns."), "{out:?}");
         assert!(out.contains("Row 1. Column 1: 1. Column 2: 2."), "{out:?}");
     }
@@ -935,7 +959,7 @@ mod tests {
     /// the header has columns still says where the extras sit.
     #[test]
     fn blank_cells_are_left_out_and_extra_ones_are_placed() {
-        let out = table_to_prose("Name,Age,City\nAlice,,Leeds\nBo,41,Hull,spare\n");
+        let out = prose("Name,Age,City\nAlice,,Leeds\nBo,41,Hull,spare\n");
         assert!(out.contains("Row 1. Name: Alice. City: Leeds."), "{out:?}");
         assert!(out.contains("Column 4: spare."), "{out:?}");
     }
@@ -945,7 +969,7 @@ mod tests {
     /// cells.
     #[test]
     fn a_cell_that_ends_in_a_stop_does_not_gain_another() {
-        let out = table_to_prose("Name,Note\nAlice,Ready.\nBo,Waiting?\n");
+        let out = prose("Name,Note\nAlice,Ready.\nBo,Waiting?\n");
         assert!(out.contains("Note: Ready."), "{out:?}");
         assert!(!out.contains("Ready.."), "{out:?}");
         assert!(!out.contains("Waiting?."), "{out:?}");
@@ -954,15 +978,15 @@ mod tests {
     /// One line is a list, not a table, and reads as one.
     #[test]
     fn a_single_line_is_read_as_the_list_it_is() {
-        assert_eq!(table_to_prose("Alice,30,Leeds\n"), "Alice, 30, Leeds.");
-        assert_eq!(table_to_prose(""), "");
+        assert_eq!(prose("Alice,30,Leeds\n"), "Alice, 30, Leeds.");
+        assert_eq!(prose(""), "");
     }
 
     /// Each row is its own paragraph, so the reader can be sent from row to
     /// row, and every cell is its own sentence within it.
     #[test]
     fn rows_are_paragraphs_and_cells_are_sentences() {
-        let prose = table_to_prose("Name,Age\nAlice,30\nBo,41\n");
+        let prose = prose("Name,Age\nAlice,30\nBo,41\n");
         let rows = split_chunks(&prose, ChunkMode::Paragraph);
         assert_eq!(rows.len(), 3, "summary and two rows: {rows:?}");
         let cells = sentences(&prose);

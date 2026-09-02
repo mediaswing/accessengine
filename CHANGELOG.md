@@ -45,6 +45,21 @@ page.
   refused rather than allowed to fill memory.
 
 ### Changed
+
+- A table on a PowerPoint slide is read as a table rather than as a handful of
+  unrelated words. `Region · Sales · North · 1,200` used to arrive as four
+  separate paragraphs; it now reads "A table of 1 row and 2 columns: Region,
+  Sales. Row 1. Region: North. Sales: 1,200." — the same sentence a `.csv`
+  produces, from literally the same code, so the two formats cannot drift
+  apart. A cell holding several paragraphs stays one cell, and an empty cell is
+  left out without shifting the values after it into the wrong column.
+
+  The words around a table and around a slide — "Row", "Column", "Slide 3. No
+  text on this slide." — have moved into the language file with the rest of the
+  interface. They are spoken aloud into somebody's document, so leaving them in
+  English while the app was in French made no sense; and putting them there
+  fixed the grammar of "A table of 1 rows", which a two-row slide table hit
+  every time.
 - A CSV is read as a table rather than as lines of text. Each row is announced
   by number, and every value is spoken under the name of its column — the way
   a screen reader reads a table, and for the same reason: by the fourth row
