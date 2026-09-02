@@ -2523,17 +2523,14 @@ impl AccessEngine {
                 self.model_picker(ui, "openai-model", openai::MODELS, |draft| {
                     &mut draft.openai_model
                 });
-                wide_slider(
+                slider_with(
                     ui,
                     &t!("settings.speed"),
                     &mut self.draft.openai_speed,
                     openai::SPEED_RANGE.0..=openai::SPEED_RANGE.1,
+                    multiplier,
                 );
-                ui.label(
-                    RichText::new(t!("settings.openai_speed_hint"))
-                        .weak()
-                        .small(),
-                );
+                ui.label(RichText::new(t!("settings.rate_hint")).weak().small());
 
                 let label = field_label(ui, &t!("settings.openai_instructions"));
                 ui.add(
@@ -2558,28 +2555,23 @@ impl AccessEngine {
                 self.cloud_volume_and_test(ui);
             }
             EngineKind::Google => {
-                wide_slider(
+                slider_with(
                     ui,
                     &t!("settings.speed"),
                     &mut self.draft.google_speaking_rate,
                     google::RATE_RANGE.0..=google::RATE_RANGE.1,
+                    multiplier,
                 );
-                let label = field_label(ui, &t!("settings.pitch"));
-                let width = ui.available_width();
-                ui.scope(|ui| {
-                    ui.spacing_mut().slider_width = (width - 72.0).max(80.0);
-                    ui.add(
-                        egui::Slider::new(
-                            &mut self.draft.google_pitch,
-                            google::PITCH_RANGE.0..=google::PITCH_RANGE.1,
-                        )
-                        // Semitones, not a percentage: this is the one slider
-                        // in the app whose unit is a real one.
-                        .custom_formatter(|v, _| format!("{v:+.0}")),
-                    )
-                })
-                .inner
-                .labelled_by(label);
+                ui.label(RichText::new(t!("settings.rate_hint")).weak().small());
+                slider_with(
+                    ui,
+                    &t!("settings.pitch"),
+                    &mut self.draft.google_pitch,
+                    google::PITCH_RANGE.0..=google::PITCH_RANGE.1,
+                    // Semitones, and signed: the number means nothing without
+                    // knowing which side of the voice's own pitch it is.
+                    |v| format!("{v:+.0}"),
+                );
                 ui.label(
                     RichText::new(t!("settings.google_pitch_hint"))
                         .weak()
@@ -3453,25 +3445,59 @@ fn labelled_options<T: Copy>(all: &[T], label: impl Fn(T) -> String) -> Vec<(T, 
     all.iter().map(|value| (*value, label(*value))).collect()
 }
 
-/// A slider filling the pane, under its own caption. egui sizes sliders from a
-/// fixed width in the style, which otherwise leaves them short of the edge.
+/// A slider filling the pane, under its own caption, reading as a percentage.
+///
+/// Right for everything that really is a proportion — volume, stability, the
+/// interface scale — and wrong for anything else, which is what
+/// [`slider_with`] is for.
 fn wide_slider(
     ui: &mut egui::Ui,
     caption_text: &str,
     value: &mut f32,
     range: std::ops::RangeInclusive<f32>,
 ) -> egui::Response {
+    slider_with(ui, caption_text, value, range, |v| {
+        format!("{:.0}%", v * 100.0)
+    })
+}
+
+/// The same slider, reading in whatever unit the number is actually in.
+///
+/// egui sizes sliders from a fixed width in the style, which otherwise leaves
+/// them short of the edge.
+fn slider_with(
+    ui: &mut egui::Ui,
+    caption_text: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    format: impl Fn(f64) -> String + 'static,
+) -> egui::Response {
     let label = field_label(ui, caption_text);
     let width = ui.available_width();
     ui.scope(|ui| {
         // Leave room for the value egui draws after the track.
         ui.spacing_mut().slider_width = (width - 72.0).max(80.0);
-        ui.add(
-            egui::Slider::new(value, range).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-        )
+        ui.add(egui::Slider::new(value, range).custom_formatter(move |v, _| format(v)))
     })
     .inner
     .labelled_by(label)
+}
+
+/// A speaking rate, as a multiple of the voice as recorded.
+///
+/// A percentage would be the obvious thing and is the wrong thing: these
+/// ranges run from 0.25 to 4.0, so "100%" would sit a fifth of the way along
+/// its own track and read as though the slider were nearly at its minimum.
+/// A multiple is also how every media player in the world writes this.
+///
+/// Two decimals with a trailing zero trimmed: enough to keep 0.25× honest, and
+/// still "1.0×" rather than "1.00×" at the value most people leave it at.
+fn multiplier(value: f64) -> String {
+    let mut text = format!("{value:.2}");
+    if text.ends_with('0') {
+        text.pop();
+    }
+    format!("{text}×")
 }
 
 /// Mark a label as somewhere a screen reader should read out of its own accord
@@ -3651,6 +3677,22 @@ mod tests {
             // becoming a button with no name at all.
             assert_eq!(spoken("»"), "»");
         });
+    }
+
+    /// A speaking rate reads as a multiple, because these ranges do not start
+    /// at zero and a percentage of one would put "100%" a fifth of the way
+    /// along its own track.
+    #[test]
+    fn a_speaking_rate_reads_as_a_multiple_of_the_recorded_voice() {
+        // The value most people leave it at, and the one the hint names.
+        assert_eq!(multiplier(1.0), "1.0×");
+        // The ends of both providers' ranges. 0.25 must not round to 0.2×.
+        assert_eq!(multiplier(0.25), "0.25×");
+        assert_eq!(multiplier(4.0), "4.0×");
+        // And somewhere in between, dragged to an arbitrary spot.
+        assert_eq!(multiplier(1.35), "1.35×");
+        assert_eq!(multiplier(1.2), "1.2×");
+        assert_eq!(multiplier(0.5), "0.5×");
     }
 
     /// Re-implements the relevant slice of `egui_extras`'s

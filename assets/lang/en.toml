@@ -289,7 +289,7 @@ settings.test_voice       = "🔊  Test this voice"
 settings.test_voice_hint  = "Speaks a sample with the settings as they are here"
 settings.test_note        = "A test uses the settings above, applied or not."
 
-settings.openai_speed_hint         = "1.0 is the voice as recorded."
+settings.rate_hint                 = "1.0× is the voice as recorded."
 settings.openai_instructions       = "How to read it:"
 settings.openai_instructions_hint  = "for example: read slowly and clearly, as if to a class"
 settings.openai_instructions_note  = "Only the GPT-4o mini TTS model listens to this; the "
