@@ -25,6 +25,14 @@ impl ChunkMode {
     }
 }
 
+/// The largest file the reader will open, and the largest amount of prose it
+/// will make out of one. Refusing absurd files is what keeps the UI thread from
+/// freezing on a read, and the second use is the same promise kept on the way
+/// out: a format that expands as it is read — a table, whose every cell gains
+/// the name of its column — must not turn a file the reader accepted into
+/// several gigabytes of text.
+pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Hard cap on chunk size. Keeps individual ElevenLabs requests small and
 /// stops one runaway paragraph from blocking stop/skip for a minute.
 const MAX_CHUNK_CHARS: usize = 600;
@@ -64,8 +72,6 @@ impl Document {
     pub fn from_path(path: &Path, mode: ChunkMode) -> Result<Self> {
         let meta = std::fs::metadata(path)
             .with_context(|| format!("opening {}", path.display()))?;
-        // Refuse absurd files rather than freezing the UI thread on read.
-        const MAX_BYTES: u64 = 64 * 1024 * 1024;
         if meta.len() > MAX_BYTES {
             bail!(t!(
                 "error.file_too_large",
@@ -537,6 +543,20 @@ fn table_to_prose(text: &str) -> String {
     )));
 
     for (index, record) in records.iter().enumerate() {
+        // Naming the column beside every value is the point of this, and it is
+        // also what makes the prose several times the size of the file it came
+        // from — twenty times over, for a table of one-character cells under
+        // long headings. The reader accepts files up to [`MAX_BYTES`]; what it
+        // makes of one is held to the same figure, and says where it stopped.
+        if out.len() as u64 >= MAX_BYTES {
+            out.push_str("\n\n");
+            out.push_str(&sentence(&format!(
+                "This table is too large to read in full. It was cut short after row {index}, \
+                 of {}",
+                records.len()
+            )));
+            break;
+        }
         out.push_str("\n\n");
         out.push_str(&sentence(&format!("Row {}", index + 1)));
         for (column, cell) in record.iter().enumerate() {
@@ -978,3 +998,4 @@ mod tests {
         assert!(decode_text(&[0xFF, 0xFE, 0x41, 0x00]).is_err());
     }
 }
+

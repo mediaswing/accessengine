@@ -180,6 +180,11 @@ changes.total.one     = "{n} substitution in total."
 changes.total.other   = "{n} substitutions in total."
 changes.explanation = "{kind} rule, from {origin}"
 changes.nothing     = "(nothing)"
+# Read in place of the two symbols in that list, which a screen reader would
+# otherwise announce by the name of the character rather than by what it means.
+changes.becomes     = "becomes"
+changes.times.one   = "once"
+changes.times.other = "{n} times"
 
 rule.blocked       = "blocked"
 rule.replaced      = "replaced"
@@ -408,6 +413,9 @@ doc.virtualised = "Large document: showing the text around sentence {position} o
 doc.description_of    = "Description of {name}"
 doc.image_description = "Image description"
 
+# What a screen reader is given where the picture is, until the model has
+# written something better.
+image.alt                 = "Preview of {name}"
 image.no_preview          = "No preview for HEIC, but it can still be described."
 image.waiting             = "Waiting for Ollama…"
 image.show                = "Show the description"

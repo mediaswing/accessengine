@@ -113,10 +113,6 @@ fn modern_slides(raw: &[u8]) -> Result<Vec<Vec<String>>> {
         let mut entry = archive
             .by_name(&name)
             .with_context(|| format!("reading {name}"))?;
-        total += entry.size().min(MAX_SLIDE_BYTES);
-        if total > MAX_TOTAL_BYTES {
-            bail!(t!("error.slides_too_large"));
-        }
         let mut xml = String::new();
         // Capped as it is read, not after: the size a zip entry claims is a
         // claim, and reading to the end of a lie is the whole attack.
@@ -125,6 +121,14 @@ fn modern_slides(raw: &[u8]) -> Result<Vec<Vec<String>>> {
             .take(MAX_SLIDE_BYTES)
             .read_to_string(&mut xml)
             .with_context(|| format!("{name} is not readable as text"))?;
+        // Counted from what was actually read, for the same reason: an archive
+        // that declares every slide as empty and then hands over eight
+        // megabytes of each would otherwise never reach this budget at all,
+        // and five thousand slides of it would still be held in memory.
+        total += xml.len() as u64;
+        if total > MAX_TOTAL_BYTES {
+            bail!(t!("error.slides_too_large"));
+        }
         slides.push(slide_paragraphs(&xml));
     }
     Ok(slides)
@@ -261,7 +265,7 @@ const CRYPT_SESSION_CONTAINER: u16 = 0x2F14;
 fn legacy_slides(raw: &[u8]) -> Result<Vec<Vec<String>>> {
     let file = cfb::CompoundFile::open(raw)?;
     let stream = file
-        .stream("PowerPoint Document")
+        .stream("PowerPoint Document")?
         .with_context(|| t!("error.no_powerpoint_stream"))?;
 
     let mut slides: Vec<Vec<String>> = Vec::new();
@@ -368,7 +372,10 @@ mod cfb {
     /// A ceiling on how many sectors one chain may be, so that a file whose
     /// allocation table points in a circle stops rather than spins. Enough for
     /// a 64 MB stream of 512-byte sectors, which is the largest file the reader
-    /// accepts at all.
+    /// accepts at all. A chain is held to the smaller of this and the number of
+    /// sectors the file actually has: a two-sector loop would otherwise be
+    /// followed a quarter of a million times, turning a kilobyte of malformed
+    /// input into a hundred megabytes of output.
     const MAX_CHAIN: usize = 256 * 1024;
 
     pub struct CompoundFile<'a> {
@@ -476,19 +483,24 @@ mod cfb {
         /// One sector's bytes, by number. Sector zero starts immediately after
         /// the 512-byte header, whatever the sector size is.
         fn sector(&self, number: u32) -> Result<&'a [u8]> {
-            let at = (number as usize + 1) * self.sector_size;
-            self.data
-                .get(at..at + self.sector_size)
+            // Checked rather than plain arithmetic: `number` comes out of the
+            // file, and on a 32-bit target a large one overflows — which is a
+            // panic in a debug build and a wrong slice in a release one.
+            (number as u64 + 1)
+                .checked_mul(self.sector_size as u64)
+                .and_then(|at| usize::try_from(at).ok())
+                .and_then(|at| self.data.get(at..at.checked_add(self.sector_size)?))
                 .context("this compound file points past its own end")
         }
 
         /// Follow a chain through the allocation table, concatenating it.
         fn chain(&self, start: u32, size: Option<u64>) -> Result<Vec<u8>> {
+            let limit = MAX_CHAIN.min(self.data.len() / self.sector_size + 1);
             let mut out = Vec::new();
             let mut next = start;
             let mut visited = 0usize;
             while next < FIRST_MARKER {
-                if visited >= MAX_CHAIN {
+                if visited >= limit {
                     bail!("a chain in this compound file never ends");
                 }
                 out.extend_from_slice(self.sector(next)?);
@@ -508,17 +520,17 @@ mod cfb {
         /// that live inside the mini stream rather than in sectors of their own.
         fn mini_chain(&self, start: u32, size: u64) -> Result<Vec<u8>> {
             let mini_size = 64usize;
+            let limit = MAX_CHAIN.min(self.mini_stream.len() / mini_size + 1);
             let mut out = Vec::new();
             let mut next = start;
             let mut visited = 0usize;
             while next < FIRST_MARKER && (out.len() as u64) < size {
-                if visited >= MAX_CHAIN {
+                if visited >= limit {
                     bail!("a chain in this compound file never ends");
                 }
-                let at = next as usize * mini_size;
+                let at = usize::try_from(next as u64 * mini_size as u64).ok();
                 out.extend_from_slice(
-                    self.mini_stream
-                        .get(at..at + mini_size)
+                    at.and_then(|at| self.mini_stream.get(at..at.checked_add(mini_size)?))
                         .context("this compound file points past its own mini stream")?,
                 );
                 next = *self
@@ -551,16 +563,25 @@ mod cfb {
             })
         }
 
-        /// The contents of the named stream, if the file has one.
-        pub fn stream(&self, wanted: &str) -> Option<Vec<u8>> {
+        /// The contents of the named stream, or `None` if the file has no such
+        /// stream.
+        ///
+        /// The two are told apart deliberately: a stream that is there and
+        /// cannot be read is a different thing from one that was never there,
+        /// and reporting the first as the second sends whoever reads the
+        /// message looking for the wrong problem.
+        pub fn stream(&self, wanted: &str) -> Result<Option<Vec<u8>>> {
             let count = self.directory.len() / DIRECTORY_ENTRY_BYTES;
-            let entry = (0..count)
+            let Some(entry) = (0..count)
                 .filter_map(|index| self.entry(index))
-                .find(|entry| entry.kind == 2 && entry.name == wanted)?;
+                .find(|entry| entry.kind == 2 && entry.name == wanted)
+            else {
+                return Ok(None);
+            };
             if entry.size < self.mini_cutoff as u64 {
-                self.mini_chain(entry.start, entry.size).ok()
+                self.mini_chain(entry.start, entry.size).map(Some)
             } else {
-                self.chain(entry.start, Some(entry.size)).ok()
+                self.chain(entry.start, Some(entry.size)).map(Some)
             }
         }
     }
@@ -891,6 +912,54 @@ mod tests {
 
     /// Half a file, at every boundary that matters, must come back as an error
     /// rather than as a panic: this one arrives from outside.
+    /// A zip may declare every slide empty and then hand over megabytes of
+    /// each. The budget counts what was read, not what was claimed, or five
+    /// thousand slides of that would be held in memory at once.
+    #[test]
+    fn an_archive_that_lies_about_its_sizes_still_meets_the_budget() {
+        use std::io::Write as _;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        // Highly compressible, so the archive stays small while what it expands
+        // to does not.
+        let padding = " ".repeat(4 * 1024 * 1024);
+        for number in 1..=40 {
+            zip.start_file(format!("ppt/slides/slide{number}.xml"), options)
+                .unwrap();
+            zip.write_all(format!("<a:p><a:t>Slide {number}</a:t></a:p><!--{padding}-->").as_bytes())
+                .unwrap();
+        }
+        let archive = zip.finish().unwrap().into_inner();
+        assert!(archive.len() < 1024 * 1024, "the archive itself is small");
+
+        let refusal = text_from_bytes(&archive).unwrap_err().to_string();
+        assert!(refusal.contains("64 MB"), "{refusal}");
+    }
+
+    /// An allocation table pointing in a circle must stop at the size of the
+    /// file, not at a constant: two sectors followed a quarter of a million
+    /// times is a hundred megabytes out of a kilobyte in.
+    #[test]
+    fn a_chain_that_loops_stops_at_the_size_of_the_file() {
+        const SECTOR: usize = 512;
+        let mut file = compound_file("PowerPoint Document", &vec![0u8; 8 * 1024]);
+        // Point the stream's first sector back at itself.
+        let fat = SECTOR + 3 * 4;
+        file[fat..fat + 4].copy_from_slice(&3u32.to_le_bytes());
+
+        let started = std::time::Instant::now();
+        let refusal = text_from_bytes(&file).unwrap_err().to_string();
+        assert!(refusal.contains("never ends"), "{refusal}");
+        // The loop is cut at the file's own length, so this is a few dozen
+        // sectors rather than the quarter of a million the constant allows.
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn a_truncated_file_does_not_panic() {
         let file = compound_file("PowerPoint Document", &container(SLIDE_CONTAINER, b""));

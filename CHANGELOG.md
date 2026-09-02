@@ -61,6 +61,35 @@ page.
   is taken as data rather than as column names. Empty cells are left out.
 
 ### Fixed
+
+- **Accessibility.** Every primary button in the app is drawn with a symbol in
+  front of its words — "📂  Open a file…" — and a screen reader was announcing
+  the symbol first: "open file folder Open a file". The symbol is now left out
+  of the spoken name, so a listener hears the sentence a sighted user reads.
+  The two symbols in the wordlist changes panel are read as what they mean
+  ("becomes", "3 times") rather than as the names of their characters, and the
+  image preview carries the model's own description as its alternative text
+  once there is one.
+- **Accessibility.** The status line at the foot of the window is now a live
+  region. Everything the app has to say about what just happened arrives there,
+  and nothing takes focus to say it, so for anyone reading the window by ear it
+  was previously only read when they went looking for it.
+- **Security.** A CSV expands as it is read — every value gains the name of its
+  column — by as much as twenty times. A 64 MB file, which the reader accepts,
+  could therefore turn into well over a gigabyte of text and freeze the window.
+  What a table expands to is now held to the same 64 MB ceiling as the file it
+  came from, and says which row it stopped at.
+- **Security.** A `.pptx` counted its slides against its memory budget by the
+  size each one *claimed* in the zip directory. An archive declaring every
+  slide empty and then handing over eight megabytes of each would never reach
+  the budget at all. The budget now counts what was actually read.
+- **Security.** A `.ppt` whose sector table pointed in a circle was followed a
+  quarter of a million times, turning a kilobyte of malformed input into a
+  hundred megabytes of output. A chain is now cut at the number of sectors the
+  file actually has. Sector arithmetic is checked rather than plain, so a
+  32-bit build cannot be made to panic on a large sector number; and a stream
+  that is present but unreadable now says so, rather than reporting itself as
+  a stream that was never there.
 - Three characters in the interface had no glyph in any bundled font and were
   drawn as empty boxes: the arrows in the keyboard shortcuts table, and the
   full-width plus on "Install a wordlist". The arrows now read as words, which

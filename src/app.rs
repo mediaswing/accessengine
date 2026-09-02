@@ -1107,7 +1107,7 @@ impl AccessEngine {
 
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if ui.button(t!("dialog.update.open")).clicked() {
+                if button(ui, &t!("dialog.update.open")).clicked() {
                     logging::open_url(&info.url);
                     open = false;
                 }
@@ -1226,10 +1226,10 @@ impl AccessEngine {
 
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if ui.button(t!("dialog.description.read")).clicked() {
+                if button(ui, &t!("dialog.description.read")).clicked() {
                     read = true;
                 }
-                if ui.button(t!("dialog.description.save")).clicked() {
+                if button(ui, &t!("dialog.description.save")).clicked() {
                     save = true;
                 }
                 if ui.button(t!("common.close")).clicked() {
@@ -1290,7 +1290,7 @@ impl AccessEngine {
                             t!("status.error_prefix", message = status.text),
                         ),
                     };
-                    ui.label(RichText::new(text).color(colour));
+                    announce(ui.label(RichText::new(text).color(colour)));
                 }
                 None => {
                     ui.label(RichText::new(t!("status.ready", app = APP_NAME)).weak());
@@ -1952,7 +1952,9 @@ impl AccessEngine {
                         };
                         ui.label(RichText::new(&change.original).strikethrough().color(colour))
                             .on_hover_text(&explanation);
-                        ui.label("»");
+                        // "»" is announced as "right-pointing double angle
+                        // quotation mark", which is not what it means here.
+                        named_label(ui.label("»"), &t!("changes.becomes"));
                         let shown = if change.replacement.is_empty() {
                             RichText::new(t!("changes.nothing")).italics()
                         } else {
@@ -1960,7 +1962,10 @@ impl AccessEngine {
                         };
                         ui.label(shown).on_hover_text(&explanation);
                         if change.count > 1 {
-                            ui.label(RichText::new(format!("×{}", change.count)).weak().small());
+                            named_label(
+                                ui.label(RichText::new(format!("×{}", change.count)).weak().small()),
+                                &tn!("changes.times", change.count),
+                            );
                         }
                     });
                 }
@@ -1996,11 +2001,25 @@ impl AccessEngine {
         if heif {
             ui.label(RichText::new(t!("image.no_preview")).weak().small());
         } else {
-            ui.add(
+            let picture = ui.add(
                 egui::Image::new(file_preview_uri(path))
                     .max_height(420.0)
                     .corner_radius(4.0),
             );
+            // The picture's own words, once there are some: the description is
+            // what this app exists to produce, and it is the right thing for a
+            // screen reader to read where the image is.
+            let alt = if self.description.is_empty() {
+                t!(
+                    "image.alt",
+                    name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()
+                )
+            } else {
+                self.description.clone()
+            };
+            picture.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &alt)
+            });
         }
 
         ui.add_space(8.0);
@@ -2990,10 +3009,36 @@ fn wide_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 
 fn wide_button_enabled(ui: &mut egui::Ui, enabled: bool, text: &str) -> egui::Response {
     let width = ui.available_width();
-    ui.add_enabled(
+    let response = ui.add_enabled(
         enabled,
         egui::Button::new(centred(text)).min_size(egui::vec2(width, 30.0)),
-    )
+    );
+    named(response, spoken(text))
+}
+
+/// A button whose label may carry a symbol in front of it.
+fn button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    named(ui.button(text), spoken(text))
+}
+
+/// The words of a label, without the symbol drawn in front of them.
+///
+/// "📂  Open a file…" announces itself to a screen reader as "open file folder
+/// Open a file": the emoji is decoration, and it is read out first, ahead of
+/// the words that say what the button does. Everything before the first letter
+/// or digit is left out of the spoken name, so a listener hears the sentence a
+/// sighted user reads and nothing else.
+///
+/// A label that is *only* a symbol keeps it, since dropping it would leave a
+/// button with no name at all — those are the ones [`named`] exists for, and
+/// they are given a sentence of their own at the call site.
+fn spoken(text: &str) -> &str {
+    let words = text.trim_start_matches(|c: char| !c.is_alphanumeric());
+    if words.is_empty() {
+        text
+    } else {
+        words
+    }
 }
 
 /// Buttons sharing one line: equal widths, labels centred, so the row reads as
@@ -3005,8 +3050,8 @@ fn button_row(ui: &mut egui::Ui, labels: &[String]) -> Option<usize> {
         let gaps = ui.spacing().item_spacing.x * labels.len().saturating_sub(1) as f32;
         let width = ((ui.available_width() - gaps) / labels.len().max(1) as f32).max(48.0);
         for (index, label) in labels.iter().enumerate() {
-            let button = egui::Button::new(centred(label)).min_size(egui::vec2(width, 30.0));
-            if ui.add(button).clicked() {
+            let widget = egui::Button::new(centred(label)).min_size(egui::vec2(width, 30.0));
+            if named(ui.add(widget), spoken(label)).clicked() {
                 pressed = Some(index);
             }
         }
@@ -3069,6 +3114,36 @@ fn wide_slider(
     })
     .inner
     .labelled_by(label)
+}
+
+/// Mark a label as somewhere a screen reader should read out of its own accord
+/// when the words in it change.
+///
+/// Everything the app has to say about what just happened — a file opened, a
+/// reading finished, a key refused — arrives in one line at the foot of the
+/// window, and nothing takes focus to say it. For anyone reading the window by
+/// ear that line is the whole feedback channel, and without this it is only
+/// read when somebody goes looking for it.
+///
+/// `Polite` rather than `Assertive`: these are progress and outcomes, not
+/// warnings that should cut across a sentence already being spoken.
+///
+/// Does nothing when no assistive technology is attached, which is when
+/// `accesskit_node_builder` returns `None`.
+fn announce(response: egui::Response) -> egui::Response {
+    response.ctx.accesskit_node_builder(response.id, |node| {
+        node.set_live(egui::accesskit::Live::Polite);
+    });
+    response
+}
+
+/// The same for a label, whose face is a symbol that means something other
+/// than the name of the character it is.
+fn named_label(response: egui::Response, name: &str) -> egui::Response {
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Label, response.enabled(), name)
+    });
+    response
 }
 
 /// Give a control an accessible name of its own, without changing what is on
@@ -3135,6 +3210,25 @@ fn file_preview_uri(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The words a screen reader is given for a button whose face begins with
+    /// a symbol. Announcing "open file folder Open a file" reads the
+    /// decoration out before the instruction.
+    #[test]
+    fn a_symbol_in_front_of_a_label_is_not_part_of_its_name() {
+        crate::i18n::with_language("en", || {
+            assert_eq!(spoken(&t!("general.open")), "Open a file…");
+            assert_eq!(spoken(&t!("key.button")), "Enter your ElevenLabs API key…");
+            assert_eq!(spoken(&t!("voice.fetch")), "Fetch my voices");
+            assert_eq!(spoken(&t!("wordlists.install")), "Install a wordlist…");
+            assert_eq!(spoken(&t!("dialog.description.save")), "Save as a text file…");
+            // A label with no symbol is left exactly as it is.
+            assert_eq!(spoken(&t!("common.cancel")), "Cancel");
+            // And one that is nothing but a symbol keeps it, rather than
+            // becoming a button with no name at all.
+            assert_eq!(spoken("»"), "»");
+        });
+    }
 
     /// Re-implements the relevant slice of `egui_extras`'s
     /// `file_loader::convert_uri_to_path` (as of egui 0.36) to check our URIs
