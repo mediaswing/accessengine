@@ -25,7 +25,7 @@ use anyhow::{bail, Context, Result};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::powerpoint::decode_entities;
+use crate::xml::decode_entities;
 use crate::t;
 
 /// A zip begins `PK\x03\x04`. Checked rather than trusting the extension, the

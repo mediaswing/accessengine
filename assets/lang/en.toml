@@ -502,7 +502,7 @@ dialog.description.save = "💾  Save as a text file…"
 
 pick.open_title             = "Choose a file to read aloud or an image to describe"
 pick.filter_everything      = "Documents and images"
-pick.filter_documents       = "Documents and presentations"
+pick.filter_documents       = "Documents, presentations and PDFs"
 pick.filter_images          = "Images"
 pick.open_audio_title    = "Open an audio file"
 pick.open_playlist_title = "Open a playlist"
@@ -648,6 +648,32 @@ error.no_powerpoint_stream = "this file has no PowerPoint Document stream, so it
 error.records_too_deep     = "the records in this presentation nest too deeply to be read"
 error.presentation_locked  = "this presentation is password-protected, so its text cannot "
                              "be read"
+
+# Word documents. `error.unreadable_zip` above is shared with presentations.
+error.not_a_document       = "this is not a Word document"
+error.document_empty       = "there is no text in this document"
+error.no_document_part     = "this zip has no word/document.xml in it, so it is not a "
+                             "Word document"
+error.document_not_text    = "this document's XML is not readable as text"
+error.no_document_stream   = "this file has no Word Document stream, so it is not a Word "
+                             "document"
+error.no_table_stream      = "this document's table stream is missing, so its text cannot "
+                             "be put back in order"
+error.no_piece_table       = "this document has no piece table, so its text cannot be put "
+                             "back in order"
+error.document_malformed   = "this document's header ends sooner than it says it does"
+error.document_locked      = "this document is password-protected, so its text cannot be read"
+error.document_too_old     = "this document was written by Word 95 or earlier, which stores "
+                             "its text differently. Open it in Word and save it again."
+error.document_too_large   = "this document's text expands to more than 64 MB"
+
+# PDFs.
+error.not_a_pdf            = "this is not a PDF"
+error.pdf_unreadable       = "this PDF could not be read: {why}"
+error.pdf_malformed        = "this PDF is damaged in a way the reader could not work through"
+error.pdf_has_no_text      = "there is no text in this PDF. It is most likely a scan — a "
+                             "picture of a page rather than the words on it. Describe the "
+                             "pages as images instead, or run it through OCR first."
 
 error.could_not_speak     = "Could not speak: {reason}"
 # The Audio Player and playlists.

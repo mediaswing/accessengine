@@ -57,7 +57,7 @@ pub struct Document {
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "txt", "text", "md", "markdown", "csv", "log", "json", "rst", "org", "ppt", "pptx", "pptm",
-    "pps", "ppsx",
+    "pps", "ppsx", "doc", "docx", "docm", "dot", "dotx", "dotm", "pdf",
 ];
 
 /// Markup this reader used to strip and no longer does.
@@ -92,11 +92,16 @@ impl Document {
             ));
         }
 
-        // A presentation is a container of one sort or another rather than
-        // text, so it is opened by the module that understands the container
-        // rather than decoded as characters first.
+        // A presentation, a word processor document and a PDF are containers of
+        // one sort or another rather than text, so each is opened by the module
+        // that understands the container rather than decoded as characters
+        // first.
         let text = if crate::powerpoint::handles(&ext) {
             crate::powerpoint::text_from_file(path)?
+        } else if crate::word::handles(&ext) {
+            crate::word::text_from_file(path)?
+        } else if crate::pdf::handles(&ext) {
+            crate::pdf::text_from_file(path)?
         } else {
             let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
             let text = normalise_line_endings(&decode_text(&raw)?);
@@ -496,6 +501,27 @@ fn parse_records(text: &str, delimiter: char) -> Vec<Vec<String>> {
 }
 
 /// Read a delimited file out the way a person reads a table aloud.
+/// End whatever came before without ending the paragraph — a line break, or
+/// the join between two paragraphs sharing one table cell.
+///
+/// Here rather than with any one reader because every format that arrives as
+/// something other than plain text builds its paragraphs this way: see
+/// [`crate::powerpoint`], [`crate::word`] and [`crate::pdf`].
+pub fn separate(current: &mut String) {
+    if !current.is_empty() && !current.ends_with(' ') {
+        current.push(' ');
+    }
+}
+
+/// End the paragraph, keeping it only if it had words in it.
+pub fn flush(current: &mut String, paragraphs: &mut Vec<String>) {
+    let text = current.trim().to_string();
+    if !text.is_empty() {
+        paragraphs.push(text);
+    }
+    current.clear();
+}
+
 fn table_to_prose(text: &str) -> String {
     let delimiter = sniff_delimiter(text);
     records_to_prose(parse_records(text, delimiter))

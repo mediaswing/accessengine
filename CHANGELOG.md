@@ -7,6 +7,67 @@ Each released version needs a section here: the release workflow refuses to
 build a tag that has none, and copies the matching section onto the release
 page.
 
+## [2.0.0] - 2026-09-04
+
+### Added
+
+- **Word documents.** `.docx` and the `.doc` that came before it open, along
+  with `.docm` and the `.dot`, `.dotx` and `.dotm` templates. A table in a
+  document is read as a table, every figure under the name of its column, the
+  same way one on a slide already was.
+
+  Two things are deliberately not read. Text someone deleted with track changes
+  on was not on the page the author saw, and neither was the instruction behind
+  a field: you hear "our site", not `HYPERLINK "http://example.com"`. Headers,
+  footers, footnotes and comments are left out for the reason master slides
+  are — a header repeats on every page, and "Confidential — page 3 of 40"
+  between every paragraph would be worse than nothing.
+
+  A `.doc` is not stored in reading order. Word wrote an edit by appending it
+  and adjusting a table that says what order the pieces go back in, so a
+  heavily edited document is thoroughly out of sequence in the file itself.
+  That table is followed rather than guessed at, which is the difference
+  between a document that reads correctly and one that reads in the order it
+  was typed. Its eight-bit text is decoded as Windows-1252 rather than
+  Latin-1, which is where Word's autocorrect keeps its curly quotes, its
+  ellipsis and its em dash.
+
+  A document saved with a password says so instead of reading out the
+  ciphertext. One from Word 95 or earlier says so too, and asks to be re-saved,
+  rather than reading noise out of a header it does not understand.
+
+- **PDFs.** The words come out in reading order, and the lines of a paragraph
+  are joined back into one so the pause falls at the end of a sentence rather
+  than at the end of every line of type. A word hyphenated across two lines is
+  put back together.
+
+  A PDF with no text layer — a scan, which is a picture of a page rather than
+  the words on it — says so, and points at describing the pages as images or
+  running the file through OCR first. "This PDF is empty" would send somebody
+  looking for a fault in a file that is exactly as its author left it.
+
+  This is the one format the app does not read itself, and
+  [`pdf-extract`](https://crates.io/crates/pdf-extract) is the first dependency
+  here taken on for something this app could have written. It could not have
+  written it well: an object parser, cross reference streams, compression
+  filters, and every font's own private mapping from byte to character through
+  `ToUnicode` maps and `Differences` arrays. Written partially that does not
+  give partial output, it gives confident nonsense — and confident nonsense
+  read aloud to somebody who cannot see the page is the worst thing this app
+  could do. It costs nineteen crates and brings no async runtime and no second
+  HTTP stack, which is what ruled out `aws-sdk-polly` back when Polly was
+  written by hand. A damaged PDF is refused rather than taking the application
+  down with it.
+
+### Changed
+
+- The reader that understands legacy Office containers moved out of
+  `powerpoint` into `cfb`, since a `.doc` and a `.ppt` differ entirely in what
+  their streams hold and not at all in how those streams are found. The XML
+  entity decoder and the table builder moved likewise, out of `powerpoint` and
+  into `xml` and `document`, where the presentation, document and playlist
+  readers can all reach them. No behaviour changed with them.
+
 ## [1.9.0] - 2026-09-03
 
 ### Added

@@ -23,12 +23,14 @@
 
 mod app;
 mod audio;
+mod cfb;
 mod cli;
 mod config;
 mod document;
 mod export;
 mod i18n;
 mod logging;
+mod pdf;
 mod player;
 mod playlist;
 mod powerpoint;
@@ -37,7 +39,9 @@ mod speech;
 mod theme;
 mod update;
 mod vision;
+mod word;
 mod wordlist;
+mod xml;
 
 /// The name shown to users, in the title bar and the docs.
 pub const APP_NAME: &str = "The Accessibility Engine";

@@ -16,9 +16,10 @@ Windows and Linux. The binary is `accessengine`.
 ## What it does
 
 **Reads files aloud.** Open a `.txt`, `.md`, `.csv`, `.json`, `.log`, `.rst`,
-`.org`, `.ppt` or `.pptx` file. Markdown is stripped down to prose first, so you
-hear the words rather than the asterisks — code blocks are skipped, links read
-as their text, and images are announced by their alt text. A CSV is read as a
+`.org`, `.doc`, `.docx`, `.ppt`, `.pptx` or `.pdf` file. Markdown is stripped
+down to prose first, so you hear the words rather than the asterisks — code
+blocks are skipped, links read as their text, and images are announced by their
+alt text. A CSV is read as a
 table: each value arrives under the name of its column, so nothing depends on
 remembering a header line from four rows back. A presentation is read slide by
 slide, each announced by number, and a table on a slide is read the same way as
@@ -74,6 +75,37 @@ The file is identified by what is inside it rather than by its name, so a
 `.pptx` that arrived renamed to `.ppt` still opens. A presentation saved with a
 password says so instead of reading out the ciphertext. Speaker notes are not
 read.
+
+**Reads Word documents.** Both formats open: `.docx` and the `.doc` that came
+before it, along with `.docm` and the `.dot`, `.dotx` and `.dotm` templates. A
+table in a document is read as a table, the same way one on a slide is. Text
+someone deleted with track changes on is not read, and neither is the machinery
+behind a field — you hear "our site", not `HYPERLINK "http://…"`. Headers,
+footers, footnotes and comments are left out, for the same reason master slides
+are: a header repeats on every page, and "Confidential — page 3 of 40" between
+every paragraph would be worse than nothing.
+
+A `.doc` is not stored in reading order — Word wrote edits by appending them
+and adjusting a table that says what order to put the pieces back in — so a
+heavily edited document reads correctly here rather than in the order it was
+typed. One saved with a password says so instead of reading out the ciphertext.
+A document from Word 95 or earlier says so too, and asks to be re-saved.
+
+**Reads PDFs.** The words come out in reading order, and the lines of a
+paragraph are joined back into one so that the pause falls at the end of a
+sentence rather than at the end of every line of type. A word hyphenated across
+two lines is put back together. A PDF with no text layer — a scan, which is a
+picture of a page rather than the words on it — says so rather than reading
+nothing, and points you at describing the pages as images or running the file
+through OCR first.
+
+This is the one format the app does not read itself. Everything else here is a
+few hundred lines against a published specification; getting words out of a PDF
+means an object parser, cross reference streams, compression filters and every
+font's own private mapping from byte to character. Written partially that does
+not give partial output, it gives confident nonsense — so
+[`pdf-extract`](https://crates.io/crates/pdf-extract) does the reading. A
+damaged PDF is refused rather than taking the application down with it.
 
 **Speaks your language.** The interface is looked up by key rather than
 written in place, so adding a language is a plain text file dropped in a folder

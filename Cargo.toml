@@ -1,6 +1,6 @@
 [package]
 name = "accessengine"
-version = "1.9.0"
+version = "2.0.0"
 edition = "2021"
 description = "Cross-platform graphical text-to-speech reader with system voices, five cloud voice services, an audio player, local vision models, and safety/pronunciation wordlists"
 license = "GPL-3.0-or-later"
@@ -28,10 +28,25 @@ reqwest = { version = "0.13.4", default-features = false, features = [
     "rustls",
 ] }
 
-# PowerPoint. A `.pptx` is a zip of XML: `deflate` is the only method Office
-# has ever written one with, and the rest of the crate's formats would be dead
-# weight. The legacy `.ppt` container is read by `src/powerpoint.rs` itself.
+# PowerPoint and Word. A `.pptx` and a `.docx` are both zips of XML: `deflate`
+# is the only method Office has ever written one with, and the rest of the
+# crate's formats would be dead weight. The legacy `.ppt` and `.doc` containers
+# are read by `src/cfb.rs` and the two readers above it.
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+# PDF. The one format here not read by this app, and the comment at the top of
+# `src/pdf.rs` says why at length: getting words out of a PDF is an object
+# parser, cross reference streams, compression filters, and then every font's
+# private byte-to-character mapping. Written partially it does not produce
+# partial output, it produces confident nonsense — which, read aloud to
+# somebody who cannot see the page, is the worst thing this app could do.
+#
+# It costs nineteen crates that were not already here, and every one of them is
+# that problem: CFF and Type 1 font parsing, Adobe CMaps, PostScript, and the
+# AES and MD5 that open the "protected" PDFs half of officialdom sends out. It
+# brings no async runtime and no second HTTP stack, which is what ruled out
+# `aws-sdk-polly` for Polly — see `speech/polly.rs`.
+pdf-extract = "0.12.0"
 
 # Amazon Polly signs its requests with AWS Signature Version 4, which is a
 # chain of HMAC-SHA256 over strings this app builds itself — about eighty lines
