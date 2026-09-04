@@ -61,6 +61,19 @@ page.
 
 ### Changed
 
+- **The right-click entry now offers itself on the new file types.** *Save as
+  MP3 with AccessEngine* is registered per extension, against the list of what
+  this app can read, so that it appears on the documents it can actually open
+  and nowhere else — and that list has just grown by seven. On Windows it is a
+  registry key under `SystemFileAssociations` for each one; on macOS a Finder
+  Quick Action; on Linux a desktop entry.
+
+  This is the one change here that reaches outside the application, and it does
+  not apply itself: the keys are written when the entry is switched on in
+  Settings, and nothing rewrites them on launch or on upgrade. Anyone who
+  already had the entry before this release keeps the old list until they turn
+  it off and on again.
+
 - The reader that understands legacy Office containers moved out of
   `powerpoint` into `cfb`, since a `.doc` and a `.ppt` differ entirely in what
   their streams hold and not at all in how those streams are found. The XML
