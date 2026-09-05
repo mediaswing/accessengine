@@ -7,6 +7,26 @@ Each released version needs a section here: the release workflow refuses to
 build a tag that has none, and copies the matching section onto the release
 page.
 
+## [2.0.1] - 2026-09-05
+
+### Fixed
+
+- The last word of one page of a PDF and the first word of the next could
+  arrive as a single word — "the agreement.The parties" — and be read out as
+  one. Nothing whatever is written between two pages by the text extractor:
+  where one page stops and the next starts is left to be worked out from where
+  the characters sit, and two pages whose text happens to sit at the same
+  height ran straight together. The page ending is now written between them.
+- A paragraph that ended a page ran into the one beginning the next, so the
+  reading carried on through the page turn without a pause. The page ending
+  the reader was already looking for was never in what it was given; now that
+  it is, a page ends a paragraph as it was always meant to.
+- A PDF whose header is not its first byte — a file that has been concatenated,
+  or passed through something that prepended a line of its own — was refused as
+  "this is not a PDF", although the reader behind it opens such a file without
+  complaint. The header is now looked for anywhere in the first kilobyte, which
+  is the distance Acrobat looks through.
+
 ## [2.0.0] - 2026-09-04
 
 ### Added
@@ -511,6 +531,7 @@ text to speech. Every one of them receives the text of whatever is being read.
 - Release workflow building Linux, macOS and Windows binaries, publishing them
   with checksums, and submitting them to VirusTotal.
 
+[2.0.1]: https://github.com/mediaswing/accessengine/releases/tag/v2.0.1
 [1.9.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.9.0
 [1.6.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.6.0
 [1.5.0]: https://github.com/mediaswing/accessengine/releases/tag/v1.5.0
